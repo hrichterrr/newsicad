@@ -1,6 +1,7 @@
 """Canvas 2D estilo AutoCAD: fundo escuro, grid adaptativo, crosshair cobrindo
 a viewport, zoom no scroll, pan no botão do meio, preview ao vivo dos
-comandos de desenho e dynamic input (distância/ângulo) perto do cursor."""
+comandos de desenho, dynamic input (distância/ângulo) perto do cursor, e
+seleção de objetos (clique único + janela/crossing) para os comandos MODIFY."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ import math
 from typing import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
 
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.core.document import Document
-from newsicad.core.entities import Arc, Circle, Line, LWPolyline, Point
+from newsicad.core.entities import Arc, Circle, Ellipse, Entity, Line, LWPolyline, Point
 
 BACKGROUND_COLOR = "#1e1e1e"
 GRID_MINOR_COLOR = "#3a3a3a"
@@ -30,8 +31,12 @@ CROSSHAIR_COLOR = "#d0d0d0"
 ENTITY_COLOR = "#e8e8e8"
 PREVIEW_COLOR = "#4da3ff"
 DYNAMIC_INPUT_COLOR = "#ffd479"
+SELECTION_COLOR = "#ff9f1c"
+WINDOW_SELECT_COLOR = "#4da3ff"
+CROSSING_SELECT_COLOR = "#4caf50"
 
 _GRID_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
+_HIT_TOLERANCE_PX = 6.0
 
 
 def cad_to_scene(point: Point) -> QPointF:
@@ -54,6 +59,41 @@ def _entity_pen() -> QPen:
     pen = QPen(QColor(ENTITY_COLOR))
     pen.setWidth(0)
     return pen
+
+
+def _selected_pen() -> QPen:
+    pen = QPen(QColor(SELECTION_COLOR))
+    pen.setWidth(0)
+    pen.setStyle(Qt.PenStyle.DashLine)
+    return pen
+
+
+def _rect_contains(outer: QRectF, inner: QRectF) -> bool:
+    """Substitui QRectF.contains(QRectF): a versão do Qt retorna False para
+    um retângulo interno com largura OU altura zero (ex.: a bounding box de
+    uma linha perfeitamente horizontal/vertical) mesmo quando ele está
+    geometricamente dentro — comum demais em CAD pra deixar passar."""
+    return (
+        inner.left() >= outer.left()
+        and inner.right() <= outer.right()
+        and inner.top() >= outer.top()
+        and inner.bottom() <= outer.bottom()
+    )
+
+
+def _rect_intersects(a: QRectF, b: QRectF) -> bool:
+    """Substitui QRectF.intersects(QRectF) pelo mesmo motivo de _rect_contains."""
+    return not (a.right() < b.left() or a.left() > b.right() or a.bottom() < b.top() or a.top() > b.bottom())
+
+
+def _point_segment_distance(p: Point, a: Point, b: Point) -> float:
+    dx, dy = b.x - a.x, b.y - a.y
+    length_sq = dx * dx + dy * dy
+    if length_sq < 1e-12:
+        return p.distance_to(a)
+    t = max(0.0, min(1.0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length_sq))
+    proj = Point(a.x + t * dx, a.y + t * dy)
+    return p.distance_to(proj)
 
 
 class CanvasView(QGraphicsView):
@@ -79,9 +119,13 @@ class CanvasView(QGraphicsView):
         self._panning = False
         self._pan_start = QPointF()
 
+        self._selection_drag_start_scene: QPointF | None = None
+        self._selection_drag_current_scene: QPointF | None = None
+
         self.grid_visible = True
         self.snap_enabled = False
         self.ortho_enabled = False
+        self.dynamic_input_enabled = True
         self.snap_spacing = 10.0
 
         self._dyn_text = QGraphicsSimpleTextItem()
@@ -96,6 +140,7 @@ class CanvasView(QGraphicsView):
         self.on_point: Callable[[Point], None] | None = None
         self.on_enter: Callable[[], None] | None = None
         self.on_cancel: Callable[[], None] | None = None
+        self.on_selection_changed: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------ #
     # sincronização com o Document
@@ -103,16 +148,33 @@ class CanvasView(QGraphicsView):
     def refresh_entities(self) -> None:
         doc_ids = set(self.document.entities.keys())
         existing_ids = set(self._entity_items.keys())
+
         for stale_id in existing_ids - doc_ids:
             item = self._entity_items.pop(stale_id)
             self._scene.removeItem(item)
-        for new_id in doc_ids - existing_ids:
-            entity = self.document.entities[new_id]
+
+        # Recria o item gráfico de toda entidade presente no documento.
+        # Necessário porque MOVE/ROTATE/SCALE mutam a entidade em memória
+        # sem trocar de id — não dá pra saber por diff de ids se a
+        # geometria mudou, então sempre reconstruímos a partir do estado
+        # atual (custo desprezível para o volume de entidades do NewSIcad).
+        for entity_id in doc_ids:
+            old_item = self._entity_items.pop(entity_id, None)
+            if old_item is not None:
+                self._scene.removeItem(old_item)
+            entity = self.document.entities[entity_id]
             item = self._create_item(entity)
             self._scene.addItem(item)
-            self._entity_items[new_id] = item
+            self._entity_items[entity_id] = item
 
-    def _create_item(self, entity) -> QGraphicsItem:
+        self.refresh_selection_highlight()
+
+    def refresh_selection_highlight(self) -> None:
+        selected_ids = self.interpreter.context.selection.ids
+        for entity_id, item in self._entity_items.items():
+            item.setPen(_selected_pen() if entity_id in selected_ids else _entity_pen())
+
+    def _create_item(self, entity: Entity) -> QGraphicsItem:
         if isinstance(entity, Line):
             p1 = cad_to_scene(entity.start)
             p2 = cad_to_scene(entity.end)
@@ -140,6 +202,17 @@ class CanvasView(QGraphicsView):
             item.setPen(_entity_pen())
             return item
 
+        if isinstance(entity, Ellipse):
+            c = cad_to_scene(entity.center)
+            path = QPainterPath()
+            path.addEllipse(QPointF(0, 0), entity.radius_major, entity.radius_minor)
+            transform = QTransform()
+            transform.translate(c.x(), c.y())
+            transform.rotate(-math.degrees(entity.rotation))
+            item = QGraphicsPathItem(transform.map(path))
+            item.setPen(_entity_pen())
+            return item
+
         if isinstance(entity, LWPolyline):
             path = QPainterPath()
             pts = [cad_to_scene(p) for p in entity.points]
@@ -154,6 +227,124 @@ class CanvasView(QGraphicsView):
             return item
 
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
+
+    # ------------------------------------------------------------------ #
+    # hit-testing / seleção
+    # ------------------------------------------------------------------ #
+    def _hit_tolerance_world(self) -> float:
+        scale = max(self.transform().m11(), 1e-6)
+        return _HIT_TOLERANCE_PX / scale
+
+    def _hit_test(self, cad_point: Point) -> str | None:
+        tolerance = self._hit_tolerance_world()
+        best_id: str | None = None
+        best_dist = tolerance
+        for entity_id, entity in self.document.entities.items():
+            dist = self._distance_to_entity(cad_point, entity)
+            if dist is not None and dist <= best_dist:
+                best_dist = dist
+                best_id = entity_id
+        return best_id
+
+    def _distance_to_entity(self, p: Point, entity: Entity) -> float | None:
+        if isinstance(entity, Line):
+            return _point_segment_distance(p, entity.start, entity.end)
+        if isinstance(entity, Circle):
+            return abs(p.distance_to(entity.center) - entity.radius)
+        if isinstance(entity, Arc):
+            radial = abs(p.distance_to(entity.center) - entity.radius)
+            angle = entity.center.angle_to(p) % (2 * math.pi)
+            sweep = (entity.end_angle - entity.start_angle) % (2 * math.pi)
+            within = ((angle - entity.start_angle) % (2 * math.pi)) <= sweep
+            return radial if within else None
+        if isinstance(entity, Ellipse):
+            dx, dy = p.x - entity.center.x, p.y - entity.center.y
+            cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
+            lx = dx * cos_a - dy * sin_a
+            ly = dx * sin_a + dy * cos_a
+            a, b = entity.radius_major, entity.radius_minor
+            if a <= 0 or b <= 0:
+                return None
+            normalized = math.hypot(lx / a, ly / b)
+            return abs(normalized - 1.0) * min(a, b)
+        if isinstance(entity, LWPolyline):
+            best: float | None = None
+            for seg_a, seg_b in entity.segments():
+                d = _point_segment_distance(p, seg_a, seg_b)
+                if best is None or d < best:
+                    best = d
+            return best
+        return None
+
+    def _entity_bbox_scene(self, entity: Entity) -> QRectF:
+        if isinstance(entity, Line):
+            p1, p2 = cad_to_scene(entity.start), cad_to_scene(entity.end)
+            return QRectF(
+                min(p1.x(), p2.x()), min(p1.y(), p2.y()),
+                abs(p2.x() - p1.x()), abs(p2.y() - p1.y()),
+            )
+        if isinstance(entity, (Circle, Arc)):
+            c = cad_to_scene(entity.center)
+            r = entity.radius
+            return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        if isinstance(entity, Ellipse):
+            c = cad_to_scene(entity.center)
+            r = max(entity.radius_major, entity.radius_minor)
+            return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        if isinstance(entity, LWPolyline) and entity.points:
+            pts = [cad_to_scene(p) for p in entity.points]
+            xs = [pt.x() for pt in pts]
+            ys = [pt.y() for pt in pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        return QRectF()
+
+    def _handle_selection_press(self, event) -> None:
+        scene_pos = self.mapToScene(self._event_pos(event))
+        cad_point = scene_to_cad(scene_pos)
+        hit_id = self._hit_test(cad_point)
+        selection = self.interpreter.context.selection
+
+        if hit_id is not None:
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if shift:
+                selection.toggle(hit_id)
+            else:
+                selection.add(hit_id)
+            self.refresh_selection_highlight()
+            self.viewport().update()
+            if self.on_selection_changed is not None:
+                self.on_selection_changed()
+        else:
+            self._selection_drag_start_scene = scene_pos
+            self._selection_drag_current_scene = scene_pos
+
+    def _finish_selection_drag(self, event) -> None:
+        start = self._selection_drag_start_scene
+        end = self.mapToScene(self._event_pos(event))
+        self._selection_drag_start_scene = None
+        self._selection_drag_current_scene = None
+        self.viewport().update()
+
+        if start is None:
+            return
+
+        drag_rect = QRectF(start, end).normalized()
+        if drag_rect.width() < 1e-9 and drag_rect.height() < 1e-9:
+            return
+
+        window_mode = start.x() <= end.x()
+        shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        selection = self.interpreter.context.selection
+
+        for entity_id, entity in self.document.entities.items():
+            bbox = self._entity_bbox_scene(entity)
+            matched = _rect_contains(drag_rect, bbox) if window_mode else _rect_intersects(drag_rect, bbox)
+            if matched:
+                selection.remove(entity_id) if shift else selection.add(entity_id)
+
+        self.refresh_selection_highlight()
+        if self.on_selection_changed is not None:
+            self.on_selection_changed()
 
     # ------------------------------------------------------------------ #
     # grid / crosshair / preview
@@ -204,6 +395,20 @@ class CanvasView(QGraphicsView):
             painter.setPen(pen)
             painter.drawPath(self._preview_path)
 
+        if self._selection_drag_start_scene is not None and self._selection_drag_current_scene is not None:
+            drag_rect = QRectF(self._selection_drag_start_scene, self._selection_drag_current_scene).normalized()
+            window_mode = self._selection_drag_start_scene.x() <= self._selection_drag_current_scene.x()
+            color = QColor(WINDOW_SELECT_COLOR if window_mode else CROSSING_SELECT_COLOR)
+            pen = QPen(color)
+            pen.setWidth(0)
+            pen.setStyle(Qt.PenStyle.SolidLine if window_mode else Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            fill = QColor(color)
+            fill.setAlpha(40)
+            painter.setBrush(QBrush(fill))
+            painter.drawRect(drag_rect)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
     def set_grid_visible(self, visible: bool) -> None:
         self.grid_visible = visible
         self.viewport().update()
@@ -213,6 +418,40 @@ class CanvasView(QGraphicsView):
 
     def set_ortho_enabled(self, enabled: bool) -> None:
         self.ortho_enabled = enabled
+
+    def clear_transient_overlays(self) -> None:
+        """Limpa preview/dynamic-input residuais quando um comando termina,
+        sem esperar o próximo movimento do mouse."""
+        self._preview_path = None
+        self._dyn_text.hide()
+        self.viewport().update()
+
+    def set_dynamic_input_enabled(self, enabled: bool) -> None:
+        self.dynamic_input_enabled = enabled
+        if not enabled:
+            self._dyn_text.hide()
+
+    # ------------------------------------------------------------------ #
+    # zoom (usado pelo menu View)
+    # ------------------------------------------------------------------ #
+    def zoom_in(self) -> None:
+        self.scale(1.25, 1.25)
+
+    def zoom_out(self) -> None:
+        self.scale(1 / 1.25, 1 / 1.25)
+
+    def zoom_extents(self) -> None:
+        if not self.document.entities:
+            return
+        rect: QRectF | None = None
+        for entity in self.document.entities.values():
+            bbox = self._entity_bbox_scene(entity)
+            rect = bbox if rect is None else rect.united(bbox)
+        if rect is None or rect.isEmpty():
+            return
+        margin = max(rect.width(), rect.height()) * 0.1 or 1.0
+        rect = rect.adjusted(-margin, -margin, margin, margin)
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     # ------------------------------------------------------------------ #
     # entrada do usuário
@@ -254,6 +493,11 @@ class CanvasView(QGraphicsView):
             return
 
         if event.button() == Qt.MouseButton.LeftButton:
+            prompt = self.interpreter.current_prompt
+            if self.interpreter.active and prompt is not None and prompt.kind == "selection":
+                self._handle_selection_press(event)
+                event.accept()
+                return
             if self.on_point is not None:
                 self.on_point(self._resolve_point(event))
             event.accept()
@@ -280,6 +524,13 @@ class CanvasView(QGraphicsView):
 
         scene_pos = self.mapToScene(pos)
         self._mouse_scene_pos = scene_pos
+
+        if self._selection_drag_start_scene is not None:
+            self._selection_drag_current_scene = scene_pos
+            self.viewport().update()
+            event.accept()
+            return
+
         cad_point = self._apply_constraints(scene_to_cad(scene_pos))
         self._update_dynamic_input(cad_point)
         self._update_preview(cad_point)
@@ -293,6 +544,10 @@ class CanvasView(QGraphicsView):
             self.setCursor(Qt.CursorShape.BlankCursor)
             event.accept()
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._selection_drag_start_scene is not None:
+            self._finish_selection_drag(event)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event) -> None:
@@ -304,6 +559,14 @@ class CanvasView(QGraphicsView):
         if event.key() == Qt.Key.Key_Escape:
             if self.on_cancel is not None:
                 self.on_cancel()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+            # Depois de selecionar objetos clicando no canvas, o foco do
+            # teclado fica no canvas (não na linha de comando) — Enter/Espaço
+            # precisa confirmar mesmo assim, igual clique direito.
+            if self.on_enter is not None:
+                self.on_enter()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -335,7 +598,7 @@ class CanvasView(QGraphicsView):
 
     def _update_dynamic_input(self, cursor_point: Point) -> None:
         interp = self.interpreter
-        if not interp.active or interp.last_point is None or self._mouse_scene_pos is None:
+        if not self.dynamic_input_enabled or not interp.active or interp.last_point is None or self._mouse_scene_pos is None:
             self._dyn_text.hide()
             return
 

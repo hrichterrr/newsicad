@@ -12,13 +12,13 @@ from dataclasses import dataclass, field
 from typing import Callable, Generator
 
 from newsicad.commands.coord_parser import CoordParseError, parse_coordinate
-from newsicad.core.document import Document
+from newsicad.commands.context import CommandContext
 from newsicad.core.entities import Point
 
 # Sentinela enviada ao generator quando o usuário aperta Enter/Espaço sem digitar nada.
 ENTER = object()
 
-PromptKind = str  # "point" | "distance" | "text" | "keyword"
+PromptKind = str  # "point" | "distance" | "text" | "keyword" | "selection" | "info"
 
 
 @dataclass
@@ -28,12 +28,17 @@ class Prompt:
     options: list[str] = field(default_factory=list)
 
 
-CommandFactory = Callable[[Document], Generator[Prompt, object, None]]
+CommandFactory = Callable[[CommandContext], Generator[Prompt, object, None]]
 
 
 class CommandInterpreter:
-    def __init__(self, document: Document, registry: dict[str, CommandFactory], aliases: dict[str, str]):
-        self.document = document
+    def __init__(
+        self,
+        context: CommandContext,
+        registry: dict[str, CommandFactory],
+        aliases: dict[str, str],
+    ):
+        self.context = context
         self.registry = registry
         self.aliases = aliases
         self.log: list[str] = []
@@ -58,9 +63,14 @@ class CommandInterpreter:
         if name is None:
             self.log.append(f"Comando desconhecido: \"{command_text}\"")
             return None
+        if name not in self.registry:
+            self.log.append(
+                f"{name}: comando reconhecido, ainda não implementado nesta versão do NewSIcad."
+            )
+            return None
         self.log.append(f"Command: {command_text.strip().upper()}")
         factory = self.registry[name]
-        self._generator = factory(self.document)
+        self._generator = factory(self.context)
         self.last_command_name = name
         return self._advance(None)
 
@@ -138,4 +148,7 @@ class CommandInterpreter:
             return None
         self._current_prompt = prompt
         self.log.append(prompt.message)
+        if prompt.kind == "info":
+            # mensagem informativa: loga e segue pro próximo yield sem esperar input
+            return self._advance(None)
         return prompt

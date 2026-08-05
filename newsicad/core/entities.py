@@ -72,6 +72,14 @@ class Arc(Entity):
 
 
 @dataclass
+class Ellipse(Entity):
+    center: Point = field(default_factory=lambda: Point(0, 0))
+    radius_major: float = 0.0
+    radius_minor: float = 0.0
+    rotation: float = 0.0  # radianos, ângulo do eixo maior
+
+
+@dataclass
 class LWPolyline(Entity):
     points: list[Point] = field(default_factory=list)
     closed: bool = False
