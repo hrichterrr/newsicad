@@ -27,21 +27,59 @@ Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFE
 
 ## Instalação
 
-> **Importante (macOS):** o PySide6 tem um bug conhecido ao carregar plugins do Qt quando o caminho de instalação contém espaços. Como esta pasta do projeto fica dentro de `Cloude CODE` (que tem espaço no nome), crie o venv **fora** dela, em um caminho sem espaços — por exemplo `~/.venvs/newsicad`. (No Windows/Linux esse problema não existe.)
+### Windows (rodando sem instalar nada)
+
+Não quer mexer com Python? Baixe o `.exe` já pronto (gerado com PyInstaller,
+testado numa VM Windows 11 — Python 3.12, 56/56 testes passando): descompacte
+o `.zip` e rode `NewSIcad.exe`. É preciso manter a pasta inteira junto (o exe
+depende dos arquivos da subpasta `_internal`), não copiar só o `.exe` sozinho.
+
+### Windows (a partir do código-fonte)
+
+```powershell
+py -3.12 -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python -m newsicad.main
+```
+
+Se `py -3.12` não for reconhecido, instale primeiro com `py install 3.12`
+(o instalador do Python vem da própria Microsoft Store / python.org).
+
+### macOS
+
+> **Importante:** o PySide6 tem um bug conhecido ao carregar plugins do Qt quando o caminho de instalação contém espaços. Como esta pasta do projeto fica dentro de `Cloude CODE` (que tem espaço no nome), crie o venv **fora** dela, em um caminho sem espaços — por exemplo `~/.venvs/newsicad`. (No Windows/Linux esse problema não existe.)
 
 ```bash
 python3 -m venv ~/.venvs/newsicad
 ~/.venvs/newsicad/bin/pip install -r requirements.txt
 ```
 
+### Arquivos `.dwg`
+
 Para abrir/salvar arquivos `.dwg` (quando essa funcionalidade for implementada), será necessário instalar separadamente o **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** (gratuito) — o NewSIcad o usa como ponte para converter `.dwg` ↔ `.dxf`. Internamente o NewSIcad sempre trabalha em DXF.
 
 ## Executando
 
+**Windows:**
+```powershell
+.venv\Scripts\python -m newsicad.main
+```
+
+**macOS:**
 ```bash
 cd newsicad  # esta pasta (contém o pacote newsicad/)
 ~/.venvs/newsicad/bin/python3 -m newsicad.main
 ```
+
+## Gerando o `.exe` (Windows)
+
+```powershell
+.venv\Scripts\pip install -r requirements-build.txt
+.venv\Scripts\pyinstaller build_windows.spec
+```
+
+O executável final fica em `dist\NewSIcad\NewSIcad.exe` — para distribuir,
+zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 
 ## Comandos disponíveis
 
@@ -78,8 +116,14 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 ## Testes
 
 ```bash
+# macOS
 ~/.venvs/newsicad/bin/python3 -m pytest
+
+# Windows
+.venv\Scripts\python -m pytest
 ```
+
+Validado em ambas as plataformas (macOS e Windows 11 / Python 3.12) — 56/56 testes passando nos dois.
 
 ---
 
