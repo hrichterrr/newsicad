@@ -1,0 +1,23 @@
+[project]
+name = "newsicad"
+version = "0.1.0"
+description = "CAD 2D desktop com interface e comandos estilo AutoCAD"
+authors = [{ name = "HRichter" }]
+requires-python = ">=3.9"
+dependencies = [
+    "PySide6>=6.10",
+    "ezdxf>=1.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+newsicad = "newsicad.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["newsicad*"]
