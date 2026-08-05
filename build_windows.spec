@@ -18,6 +18,12 @@ for pkg in ("PySide6", "ezdxf"):
     binaries += pkg_binaries
     hiddenimports += pkg_hiddenimports
 
+# Binários do LibreDWG (dwg2dxf.exe + DLLs) usados por newsicad/io/dwg_bridge.py
+# para abrir .dwg. O destino "resources/libredwg/windows" (relativo à raiz do
+# bundle, ou seja sys._MEIPASS) precisa bater com o que
+# dwg_bridge._bundled_bin_dir() resolve em modo "frozen".
+datas += [("newsicad/resources/libredwg/windows", "resources/libredwg/windows")]
+
 a = Analysis(
     ["newsicad/main.py"],
     pathex=[],
