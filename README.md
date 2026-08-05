@@ -56,7 +56,10 @@ python3 -m venv ~/.venvs/newsicad
 
 ### Arquivos `.dwg`
 
-Para abrir/salvar arquivos `.dwg` (quando essa funcionalidade for implementada), será necessário instalar separadamente o **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** (gratuito) — o NewSIcad o usa como ponte para converter `.dwg` ↔ `.dxf`. Internamente o NewSIcad sempre trabalha em DXF.
+Para abrir/salvar arquivos `.dwg` (quando essa funcionalidade for implementada), o NewSIcad vai usar uma ponte externa para converter `.dwg` ↔ `.dxf` — internamente ele sempre trabalha em DXF. Duas opções, dependendo do seu caso de uso:
+
+- **[LibreDWG](https://www.gnu.org/software/libredwg/)** (padrão/recomendado) — projeto GNU, licença GPL, **sem restrição de uso comercial**. Suporte a versões mais novas/recursos complexos do `.dwg` pode ser incompleto em alguns arquivos.
+- **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** — mais completo e confiável na conversão, mas **gratuito só para uso não-comercial**; uso comercial exige associação paga à Open Design Alliance. Opção alternativa para quem já é membro ODA ou usa só para fins não-comerciais.
 
 ## Executando
 
