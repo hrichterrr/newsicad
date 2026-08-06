@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 
 import ezdxf
+import ezdxf.recover
 
 from newsicad.core.document import Document
 from newsicad.core.entities import (
@@ -48,8 +49,21 @@ def load_dxf(path: str | Path) -> tuple[Document, int]:
         dxf_doc = ezdxf.readfile(str(path))
     except OSError as exc:
         raise DxfIoError(f"Não foi possível abrir '{path}': {exc}") from exc
-    except ezdxf.DXFStructureError as exc:
-        raise DxfIoError(f"Arquivo DXF inválido ou corrompido: '{path}': {exc}") from exc
+    except ezdxf.DXFStructureError as strict_exc:
+        # A leitura estrita rejeita o arquivo inteiro por qualquer
+        # inconsistência estrutural — comum em .dxf gerados por conversores
+        # de terceiros (ex.: dwg2dxf do LibreDWG em arquivos .dwg
+        # complexos/antigos), mesmo quando a maior parte do desenho está
+        # intacta. `ezdxf.recover` é tolerante a isso: reconstrói o quanto
+        # for possível e reporta os problemas via `auditor.errors` em vez de
+        # recusar o arquivo inteiro — melhor-esforço explícito, não fingimos
+        # que o arquivo estava perfeito.
+        try:
+            dxf_doc, _auditor = ezdxf.recover.readfile(str(path))
+        except Exception as recover_exc:
+            raise DxfIoError(
+                f"Arquivo DXF inválido ou corrompido: '{path}': {strict_exc}"
+            ) from recover_exc
 
     document = Document()
     for layer in dxf_doc.layers:

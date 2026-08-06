@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from newsicad.io.dwg_bridge import DwgBridgeError, _tool_path, dwg_to_document
+from newsicad.io.dwg_bridge import DwgBridgeError, _tool_path, dwg_to_document, sanitize_dxf_text
 
 
 def _require_dwg2dxf() -> str:
@@ -56,3 +56,38 @@ def test_dwg_to_document_raises_for_missing_file():
         missing = Path(tmp_dir) / "does_not_exist.dwg"
         with pytest.raises(DwgBridgeError):
             dwg_to_document(missing)
+
+
+# ---------------------------------------------------------------------- #
+# sanitize_dxf_text: função pura, roda em qualquer ambiente (não depende
+# do binário dwg2dxf) — cobre a corrupção real encontrada em .dwg reais de
+# clientes, onde o dwg2dxf quebra uma string de MTEXT longa (com códigos de
+# formatação embutidos) no meio de uma palavra em vez de encadear várias
+# linhas de código 3 como o formato DXF exige.
+# ---------------------------------------------------------------------- #
+def test_sanitize_dxf_text_rejoins_word_broken_by_stray_newline():
+    # Reprodução mínima do padrão real: o valor do código 1 (texto do MTEXT)
+    # tem uma quebra de linha crua bem no meio de "ISOCPEUR".
+    broken = "  0\nMTEXT\n  1\n\\fISOC\nPEUR|b0;texto\n  7\nGENERATED_STYLE_1\n"
+    fixed, merged = sanitize_dxf_text(broken)
+
+    assert merged == 1
+    assert "\\fISOCPEUR|b0;texto" in fixed
+    assert "ISOC\nPEUR" not in fixed
+
+
+def test_sanitize_dxf_text_is_noop_for_well_formed_dxf():
+    well_formed = "  0\nLINE\n  8\n0\n 10\n0.0\n 20\n0.0\n"
+    fixed, merged = sanitize_dxf_text(well_formed)
+
+    assert merged == 0
+    assert fixed == well_formed
+
+
+def test_sanitize_dxf_text_handles_multiple_consecutive_wraps():
+    # Uma string tão longa que quebra em 3 linhas físicas, não só 2.
+    broken = "  1\nAAA\nBBB\nCCC\n  0\nENDSEC\n"
+    fixed, merged = sanitize_dxf_text(broken)
+
+    assert merged == 2
+    assert "AAABBBCCC" in fixed

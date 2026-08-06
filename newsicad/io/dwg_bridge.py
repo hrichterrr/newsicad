@@ -83,11 +83,69 @@ def _tool_path(name: str) -> str:
 
 def _run(args: list[str]) -> None:
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        # errors="replace": o dwg2dxf às vezes escreve avisos no stderr com
+        # bytes que não são UTF-8 válido (texto/nomes de camada do próprio
+        # .dwg em latin-1/cp1252) — sem isso, subprocess.run derruba com
+        # UnicodeDecodeError antes mesmo de chegarmos a olhar o resultado.
+        result = subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=120)
     except OSError as exc:
         raise DwgBridgeError(f"Falha ao executar '{args[0]}': {exc}") from exc
     if result.returncode != 0:
         raise DwgBridgeError((result.stderr or result.stdout or "erro desconhecido").strip())
+
+
+def _read_text_flexible(path: Path) -> str:
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def sanitize_dxf_text(text: str) -> tuple[str, int]:
+    """Corrige uma corrupção específica e recorrente do `dwg2dxf` em textos
+    MTEXT longos com muita formatação embutida (`\\fFONTE|b0|i0|c0|p0;...`):
+    em vez de quebrar o valor em várias linhas de código 3 (como o formato
+    DXF exige para strings compridas), o `dwg2dxf` às vezes insere uma quebra
+    de linha crua NO MEIO da string de um único código de grupo — quebrando
+    literalmente no meio de uma palavra (ex.: "...ISOC\nPEUR..." em vez de
+    "...ISOCPEUR..."). Isso desalinha os pares código/valor do DXF a partir
+    dali, e todo o resto do arquivo passa a ser lido errado (o típico erro é
+    "Invalid group code" bem à frente no arquivo, sem relação óbvia com a
+    causa real).
+
+    Como todo código de grupo DXF válido é um inteiro não-negativo puro,
+    detectamos a corrupção reaplicando a leitura em pares (código, valor): ao
+    ler uma linha onde um código era esperado, se ela não for um inteiro,
+    ela só pode ser a continuação quebrada do valor anterior — colamos de
+    volta (sem separador, já que a quebra caiu no meio de uma palavra) e
+    tentamos de novo a próxima linha como código."""
+    lines = text.splitlines()
+    out: list[str] = []
+    merged = 0
+    i, n = 0, len(lines)
+    while i < n:
+        code_line = lines[i]
+        if not code_line.strip().isdigit():
+            if out:
+                out[-1] += code_line
+                merged += 1
+            i += 1
+            continue
+        out.append(code_line)
+        i += 1
+        if i < n:
+            out.append(lines[i])
+            i += 1
+    return "\n".join(out) + "\n", merged
+
+
+def _sanitize_dxf_file(path: Path) -> int:
+    text = _read_text_flexible(path)
+    sanitized, merged = sanitize_dxf_text(text)
+    if merged:
+        path.write_text(sanitized, encoding="utf-8")
+    return merged
 
 
 def dwg_to_document(path: str | Path) -> tuple[Document, int]:
@@ -98,4 +156,10 @@ def dwg_to_document(path: str | Path) -> tuple[Document, int]:
         _run([tool, "-o", str(dxf_path), "-y", str(path)])
         if not dxf_path.exists():
             raise DwgBridgeError(f"dwg2dxf não gerou o arquivo DXF esperado para '{path}'.")
-        return load_dxf(dxf_path)
+        _sanitize_dxf_file(dxf_path)
+        try:
+            return load_dxf(dxf_path)
+        except Exception as exc:
+            raise DwgBridgeError(
+                f"O .dwg foi convertido, mas o DXF resultante não pôde ser lido: {exc}"
+            ) from exc

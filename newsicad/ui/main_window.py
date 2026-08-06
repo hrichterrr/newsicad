@@ -437,6 +437,21 @@ class MainWindow(QMainWindow):
             )
             self._refresh_prompt()
 
+        if not self.document.all_entities():
+            # Sem isso, um arquivo que "abriu" mas ficou vazio (ex.: .dwg
+            # complexo onde só a recuperação tolerante a erros funcionou, e
+            # mesmo essa não conseguiu colocar nenhuma entidade no desenho —
+            # às vezes sobram só definições de bloco órfãs, sem nenhuma
+            # referência que as posicione) só mostraria uma tela em branco,
+            # sem indicar que algo deu errado — o usuário pensaria que o
+            # desenho original é mesmo vazio.
+            self.interpreter.log.append(
+                "Aviso: nenhuma entidade foi carregada deste arquivo — o desenho está vazio. "
+                "Se o arquivo original tinha conteúdo, a conversão/leitura pode ter falhado "
+                "em reconstruir a geometria (comum em .dwg complexos ou danificados)."
+            )
+            self._refresh_prompt()
+
     def _open_file(self) -> None:
         path_str, _ = QFileDialog.getOpenFileName(
             self,
