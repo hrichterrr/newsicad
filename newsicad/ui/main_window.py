@@ -34,6 +34,7 @@ from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 from newsicad.ui.canvas import CanvasView
 from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.menu_bar import build_menu_bar
+from newsicad.ui.ribbon import build_ribbon
 
 APP_TITLE = "NewSIcad — Developed by HRichter"
 
@@ -83,11 +84,11 @@ class MainWindow(QMainWindow):
         self.canvas.on_cancel = self._handle_cancel
         self.canvas.on_selection_changed = self._refresh_properties_panel
         self.canvas.mouse_moved.connect(self._handle_mouse_moved)
-        self.setCentralWidget(self.canvas)
 
         self._build_command_dock()
         self._build_status_bar()
         self._build_properties_dock()
+        self._build_central_widget()
         self.setMenuBar(build_menu_bar(self))
 
         self._refresh_prompt()
@@ -97,6 +98,19 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     # construção da UI
     # ------------------------------------------------------------------ #
+    def _build_central_widget(self) -> None:
+        """Ribbon estilo AutoCAD (acima) + canvas (abaixo). O ribbon convive
+        com o menu clássico (File/Edit/View/...), não o substitui."""
+        self.ribbon = build_ribbon(self)
+
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self.ribbon)
+        layout.addWidget(self.canvas, stretch=1)
+        self.setCentralWidget(central)
+
     def _build_command_dock(self) -> None:
         self.command_line = CommandLineWidget()
         self.command_line.text_submitted.connect(self._handle_text_submitted)

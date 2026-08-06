@@ -12,6 +12,7 @@ Implementado:
 - Canvas escuro com grid adaptativo, crosshair, zoom (scroll) e pan (botão do meio)
 - Linha de comando ancorada embaixo, com histórico, prompts estilo AutoCAD e navegação por ↑/↓
 - Menu superior estilo AutoCAD (File, Edit, View, Insert, Draw, Dimension, Modify, Help) — itens ainda não implementados aparecem desabilitados com tooltip, não somem da interface
+- Ribbon estilo AutoCAD (abas File/Home/Insert/Annotate/View, painéis com botões grandes de ícone geométrico desenhado programaticamente) logo abaixo do menu — dispara exatamente os mesmos comandos que digitar na linha de comando; os toggles GRID/ORTHO/SNAP do ribbon ficam sincronizados com os da barra de status
 - File > Open... (Ctrl+O): abre `.dxf` ou `.dwg` existente, substituindo o desenho atual (zoom extents automático ao carregar; entidades de tipo não suportado são ignoradas com aviso, em vez de travar a abertura)
 - File > Save (Ctrl+S) / Save As... (Ctrl+Shift+S): grava o desenho atual como `.dxf`. Gravação de `.dwg` ainda não está disponível — ver seção "Arquivos `.dwg`" abaixo
 - Comandos de desenho: `LINE`(L), `CIRCLE`(C), `ARC`(A), `RECTANG`(REC), `PLINE`(PL), `ELLIPSE`(EL) — com preview ao vivo e dynamic input (distância/ângulo perto do cursor)
