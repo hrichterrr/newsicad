@@ -295,6 +295,12 @@ class CanvasView(QGraphicsView):
             if old_item is not None:
                 self._scene.removeItem(old_item)
             entity = self.document.entities[entity_id]
+            if not self.document.is_layer_visible(entity):
+                # Camada desligada no painel de camadas: a entidade some do
+                # canvas (não só fica "acinzentada") e também fica de fora
+                # de hit-test/seleção/zoom-extents — ver os outros métodos
+                # que checam `is_layer_visible`.
+                continue
             item = self._create_item(entity)
             self._scene.addItem(item)
             self._entity_items[entity_id] = item
@@ -491,6 +497,8 @@ class CanvasView(QGraphicsView):
         best_id: str | None = None
         best_dist = tolerance
         for entity_id, entity in self.document.entities.items():
+            if not self.document.is_layer_visible(entity) or self.document.is_layer_locked(entity):
+                continue
             dist = self._distance_to_entity(cad_point, entity)
             if dist is not None and dist <= best_dist:
                 best_dist = dist
@@ -711,6 +719,8 @@ class CanvasView(QGraphicsView):
         selection = self.interpreter.context.selection
 
         for entity_id, entity in self.document.entities.items():
+            if not self.document.is_layer_visible(entity) or self.document.is_layer_locked(entity):
+                continue
             bbox = self._entity_bbox_scene(entity)
             matched = _rect_contains(drag_rect, bbox) if window_mode else _rect_intersects(drag_rect, bbox)
             if matched:
@@ -860,6 +870,8 @@ class CanvasView(QGraphicsView):
             return None
         rect: QRectF | None = None
         for entity in self.document.entities.values():
+            if not self.document.is_layer_visible(entity):
+                continue
             bbox = self._entity_bbox_scene(entity)
             rect = bbox if rect is None else rect.united(bbox)
         if rect is None or rect.isEmpty():
@@ -1028,6 +1040,8 @@ class CanvasView(QGraphicsView):
         entidades do documento a cada movimento do mouse."""
         result = []
         for entity in self.document.entities.values():
+            if not self.document.is_layer_visible(entity):
+                continue
             bbox = self._entity_bbox_scene(entity).adjusted(-radius_world, -radius_world, radius_world, radius_world)
             if bbox.contains(cursor_scene):
                 result.append(entity)

@@ -157,6 +157,14 @@ def _icon_hatch(p: QPainter, r: QRectF) -> None:
         x += step
 
 
+def _icon_layers(p: QPainter, r: QRectF) -> None:
+    step = r.height() * 0.28
+    height = r.height() * 0.5
+    for i in range(3):
+        y = r.top() + i * step
+        p.drawRect(QRectF(r.left(), y, r.width(), height))
+
+
 def _icon_block(p: QPainter, r: QRectF) -> None:
     p.drawRect(r)
     p.drawLine(r.topLeft(), r.center())
@@ -677,7 +685,14 @@ def _build_view_tab(window: "MainWindow") -> QWidget:
 
     visibility_panel = _panel("Visibility", [grid_btn, ortho_btn, snap_btn])
 
-    return _row([navigate_panel, visibility_panel])
+    panels_panel = _panel(
+        "Panels",
+        [
+            _button("Layers", _icon_layers, lambda: window._start_command("LAYER")),
+        ],
+    )
+
+    return _row([navigate_panel, visibility_panel, panels_panel])
 
 
 def _build_file_tab(window: "MainWindow") -> QWidget:

@@ -21,14 +21,14 @@ def line_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             return
         if nxt == "UNDO":
             continue
-        ctx.document.add_entity(Line(start=prev, end=nxt))
+        ctx.document.add_entity(Line(start=prev, end=nxt, layer=ctx.document.current_layer))
         prev = nxt
 
 
 def circle_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     center = yield Prompt("Specify center point for circle:", kind="point")
     radius = yield Prompt("Specify radius of circle:", kind="distance")
-    ctx.document.add_entity(Circle(center=center, radius=radius))
+    ctx.document.add_entity(Circle(center=center, radius=radius, layer=ctx.document.current_layer))
 
 
 def arc_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -36,14 +36,22 @@ def arc_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p2 = yield Prompt("Specify second point of arc:", kind="point")
     p3 = yield Prompt("Specify end point of arc:", kind="point")
     center, radius, start_angle, end_angle = arc_from_3_points(p1, p2, p3)
-    ctx.document.add_entity(Arc(center=center, radius=radius, start_angle=start_angle, end_angle=end_angle))
+    ctx.document.add_entity(
+        Arc(
+            center=center,
+            radius=radius,
+            start_angle=start_angle,
+            end_angle=end_angle,
+            layer=ctx.document.current_layer,
+        )
+    )
 
 
 def rectangle_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p1 = yield Prompt("Specify first corner point:", kind="point")
     p2 = yield Prompt("Specify other corner point:", kind="point")
     points = [Point(p1.x, p1.y), Point(p2.x, p1.y), Point(p2.x, p2.y), Point(p1.x, p2.y)]
-    ctx.document.add_entity(LWPolyline(points=points, closed=True))
+    ctx.document.add_entity(LWPolyline(points=points, closed=True, layer=ctx.document.current_layer))
 
 
 def pline_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -59,7 +67,7 @@ def pline_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             continue
         points.append(nxt)
     if len(points) >= 2:
-        ctx.document.add_entity(LWPolyline(points=points, closed=False))
+        ctx.document.add_entity(LWPolyline(points=points, closed=False, layer=ctx.document.current_layer))
 
 
 def ellipse_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -70,7 +78,13 @@ def ellipse_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     major_radius = center.distance_to(axis_end)
     rotation = center.angle_to(axis_end)
     ctx.document.add_entity(
-        Ellipse(center=center, radius_major=major_radius, radius_minor=minor_radius, rotation=rotation)
+        Ellipse(
+            center=center,
+            radius_major=major_radius,
+            radius_minor=minor_radius,
+            rotation=rotation,
+            layer=ctx.document.current_layer,
+        )
     )
 
 

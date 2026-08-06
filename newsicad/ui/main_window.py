@@ -40,6 +40,7 @@ from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 from newsicad.ui.block_editor_dialog import BlockEditorDialog
 from newsicad.ui.canvas import PDF_PAGE_SIZES, CanvasView
 from newsicad.ui.command_line import CommandLineWidget
+from newsicad.ui.layer_panel import LayerPanel
 from newsicad.ui.menu_bar import build_menu_bar
 from newsicad.ui.ribbon import build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
@@ -97,6 +98,7 @@ class MainWindow(QMainWindow):
         self._build_command_dock()
         self._build_status_bar()
         self._build_properties_dock()
+        self._build_layer_dock()
         self._build_central_widget()
         self.setMenuBar(build_menu_bar(self))
 
@@ -179,6 +181,12 @@ class MainWindow(QMainWindow):
         self.properties_dock.setWidget(self.properties_view)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.properties_dock)
 
+    def _build_layer_dock(self) -> None:
+        self.layer_dock = LayerPanel(self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_dock)
+        self.tabifyDockWidget(self.properties_dock, self.layer_dock)
+        self.properties_dock.raise_()
+
     def _make_toggle(self, label, shortcut, handler, checked=False, tooltip=None) -> QPushButton:
         button = QPushButton(label)
         button.setCheckable(True)
@@ -258,6 +266,12 @@ class MainWindow(QMainWindow):
             return
         if name == "EXTERNALREFERENCES":
             XrefPanel(self).exec()
+            self._after_interpreter_step()
+            return
+        if name == "LAYER":
+            self.layer_dock.refresh()
+            self.layer_dock.setVisible(True)
+            self.layer_dock.raise_()
             self._after_interpreter_step()
             return
         if name == "IMAGEATTACH":
@@ -442,6 +456,7 @@ class MainWindow(QMainWindow):
         self.canvas.refresh_entities()
         self._refresh_prompt()
         self._refresh_properties_panel()
+        self.layer_dock.refresh()
 
     def _update_window_title(self) -> None:
         if self.current_path is None:
@@ -468,6 +483,7 @@ class MainWindow(QMainWindow):
         self.canvas.zoom_extents()
         self._refresh_prompt()
         self._refresh_properties_panel()
+        self.layer_dock.refresh()
         self.command_line.focus_input()
 
         if skipped > 0:

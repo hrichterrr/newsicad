@@ -167,6 +167,10 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     properties_action.toggled.connect(window.properties_dock.setVisible)
     menu.addAction(properties_action)
 
+    layers_action = QAction("Layers...", window)
+    layers_action.triggered.connect(lambda: window._start_command("LAYER"))
+    menu.addAction(layers_action)
+
 
 def _build_insert_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Insert")

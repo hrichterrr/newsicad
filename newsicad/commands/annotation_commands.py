@@ -23,7 +23,13 @@ def mtext_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     if text == "":
         return
     ctx.document.add_entity(
-        Text(insertion_point=insertion, content=text, height=DEFAULT_TEXT_HEIGHT, rotation=0.0)
+        Text(
+            insertion_point=insertion,
+            content=text,
+            height=DEFAULT_TEXT_HEIGHT,
+            rotation=0.0,
+            layer=ctx.document.current_layer,
+        )
     )
 
 
@@ -31,7 +37,7 @@ def dimlinear_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p1 = yield Prompt("Specify first extension line origin:", kind="point")
     p2 = yield Prompt("Specify second extension line origin:", kind="point")
     dim_line = yield Prompt("Specify dimension line location:", kind="point")
-    dim = Dimension(kind="linear", point1=p1, point2=p2, dim_line_point=dim_line)
+    dim = Dimension(kind="linear", point1=p1, point2=p2, dim_line_point=dim_line, layer=ctx.document.current_layer)
     ctx.document.add_entity(dim)
     yield Prompt(f"Dimension text = {dim.measurement_text()}", kind="info")
 
@@ -40,7 +46,7 @@ def dimaligned_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p1 = yield Prompt("Specify first extension line origin:", kind="point")
     p2 = yield Prompt("Specify second extension line origin:", kind="point")
     dim_line = yield Prompt("Specify dimension line location:", kind="point")
-    dim = Dimension(kind="aligned", point1=p1, point2=p2, dim_line_point=dim_line)
+    dim = Dimension(kind="aligned", point1=p1, point2=p2, dim_line_point=dim_line, layer=ctx.document.current_layer)
     ctx.document.add_entity(dim)
     yield Prompt(f"Dimension text = {dim.measurement_text()}", kind="info")
 
@@ -50,7 +56,14 @@ def dimangular_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p1 = yield Prompt("Specify first angle endpoint:", kind="point")
     p2 = yield Prompt("Specify second angle endpoint:", kind="point")
     arc_location = yield Prompt("Specify dimension arc line location:", kind="point")
-    dim = Dimension(kind="angular", center=vertex, point1=p1, point2=p2, dim_line_point=arc_location)
+    dim = Dimension(
+        kind="angular",
+        center=vertex,
+        point1=p1,
+        point2=p2,
+        dim_line_point=arc_location,
+        layer=ctx.document.current_layer,
+    )
     ctx.document.add_entity(dim)
     yield Prompt(f"Angle = {dim.measurement_text()}", kind="info")
 
@@ -69,7 +82,13 @@ def dimradius_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         yield Prompt("Nenhum círculo/arco selecionado.", kind="info")
         return
     leader = yield Prompt("Specify dimension line location:", kind="point")
-    dim = Dimension(kind="radius", center=target.center, radius=target.radius, leader_point=leader)
+    dim = Dimension(
+        kind="radius",
+        center=target.center,
+        radius=target.radius,
+        leader_point=leader,
+        layer=ctx.document.current_layer,
+    )
     ctx.document.add_entity(dim)
     yield Prompt(f"Dimension text = {dim.measurement_text()}", kind="info")
 
@@ -80,7 +99,13 @@ def dimdiameter_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         yield Prompt("Nenhum círculo/arco selecionado.", kind="info")
         return
     leader = yield Prompt("Specify dimension line location:", kind="point")
-    dim = Dimension(kind="diameter", center=target.center, radius=target.radius, leader_point=leader)
+    dim = Dimension(
+        kind="diameter",
+        center=target.center,
+        radius=target.radius,
+        leader_point=leader,
+        layer=ctx.document.current_layer,
+    )
     ctx.document.add_entity(dim)
     yield Prompt(f"Dimension text = {dim.measurement_text()}", kind="info")
 
@@ -126,7 +151,7 @@ def leader_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         points.append(nxt)
     if len(points) < 2:
         return
-    ctx.document.add_entity(LWPolyline(points=points, closed=False))
+    ctx.document.add_entity(LWPolyline(points=points, closed=False, layer=ctx.document.current_layer))
 
     content = yield Prompt("Enter leader annotation text:", kind="text")
     if content is ENTER:
@@ -135,5 +160,11 @@ def leader_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     if text == "":
         return
     ctx.document.add_entity(
-        Text(insertion_point=points[-1], content=text, height=DEFAULT_TEXT_HEIGHT, rotation=0.0)
+        Text(
+            insertion_point=points[-1],
+            content=text,
+            height=DEFAULT_TEXT_HEIGHT,
+            rotation=0.0,
+            layer=ctx.document.current_layer,
+        )
     )

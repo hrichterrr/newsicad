@@ -43,6 +43,14 @@ class Document:
             raise ValueError(f"Camada '{name}' não existe")
         self.current_layer = name
 
+    def is_layer_visible(self, entity: Entity) -> bool:
+        layer = self.layers.get(entity.layer)
+        return layer is None or layer.visible
+
+    def is_layer_locked(self, entity: Entity) -> bool:
+        layer = self.layers.get(entity.layer)
+        return layer is not None and layer.locked
+
     def add_entity(self, entity: Entity) -> Entity:
         if not entity.layer:
             entity.layer = self.current_layer

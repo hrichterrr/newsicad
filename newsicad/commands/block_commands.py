@@ -51,7 +51,9 @@ def block_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         ctx.document.remove_entity(entity.id)
     ctx.selection.clear()
 
-    ctx.document.add_entity(BlockReference(block_name=name, insertion_point=base_point))
+    ctx.document.add_entity(
+        BlockReference(block_name=name, insertion_point=base_point, layer=ctx.document.current_layer)
+    )
 
     if redefining:
         yield Prompt(f'Bloco "{name}" redefinido.', kind="info")
@@ -85,6 +87,7 @@ def insert_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             insertion_point=insertion_point,
             scale=scale,
             rotation=math.radians(rotation_deg),
+            layer=ctx.document.current_layer,
         )
     )
 
@@ -105,6 +108,7 @@ def place_reference_command(
             insertion_point=point,
             is_xref=is_xref,
             xref_path=xref_path,
+            layer=ctx.document.current_layer,
         )
     )
 
@@ -121,5 +125,7 @@ def place_image_command(ctx: CommandContext, path: Path) -> Generator[Prompt, ob
     height = 100.0 if height_raw is ENTER else float(height_raw)
 
     ctx.document.add_entity(
-        ImageReference(path=path, insertion_point=point, width=width, height=height)
+        ImageReference(
+            path=path, insertion_point=point, width=width, height=height, layer=ctx.document.current_layer
+        )
     )

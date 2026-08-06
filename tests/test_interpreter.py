@@ -489,3 +489,40 @@ def test_measure_line_by_fixed_length():
     assert len(markers) == 3  # em x=3,6,9 (10//3=3 marcadores)
     xs = sorted(c.center.x for c in markers)
     assert xs == [pytest.approx(3), pytest.approx(6), pytest.approx(9)]
+
+
+# ---------------------------------------------------------------------- #
+# comandos de desenho respeitam a camada atual (document.current_layer) —
+# regressão: até pouco tempo atrás, LINE/CIRCLE/ARC/etc. sempre criavam a
+# entidade sem passar `layer=`, e como o default do dataclass Entity.layer
+# é "0" (não vazio), o fallback de Document.add_entity pro current_layer
+# nunca disparava — toda entidade nova ia parar em "0" mesmo com uma outra
+# camada selecionada como atual.
+# ---------------------------------------------------------------------- #
+def test_line_command_lands_on_current_layer():
+    interp, doc = make_interpreter()
+    doc.add_layer("ELETRICA")
+    doc.set_current_layer("ELETRICA")
+
+    interp.start("LINE")
+    interp.submit_point(Point(0, 0))
+    interp.submit_point(Point(10, 0))
+    interp.submit_text("")
+
+    lines = [e for e in doc.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 1
+    assert lines[0].layer == "ELETRICA"
+
+
+def test_circle_command_lands_on_current_layer():
+    interp, doc = make_interpreter()
+    doc.add_layer("ELETRICA")
+    doc.set_current_layer("ELETRICA")
+
+    interp.start("CIRCLE")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("5")
+
+    circles = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    assert len(circles) == 1
+    assert circles[0].layer == "ELETRICA"

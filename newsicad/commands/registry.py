@@ -86,12 +86,13 @@ PLANNED_COMMANDS = {
     "DVIEW",
 }
 
-# BEDIT, REFEDIT, XREF, EXTERNALREFERENCES, IMAGEATTACH, PLOT e PUBLISH estão
-# implementados, mas — assim como UNITS/REGEN — não passam pelo sistema de
-# Prompt (point/distance/text/keyword/selection): precisam de um QDialog ou
-# QFileDialog, então a MainWindow os intercepta antes de chamar
-# CommandInterpreter.start() (ver MainWindow._start_command em
-# newsicad/ui/main_window.py). Por isso não aparecem em COMMAND_REGISTRY.
+# BEDIT, REFEDIT, XREF, EXTERNALREFERENCES, IMAGEATTACH, PLOT, PUBLISH e
+# LAYER estão implementados, mas — assim como UNITS/REGEN — não passam pelo
+# sistema de Prompt (point/distance/text/keyword/selection): precisam de um
+# QDialog, QFileDialog ou QDockWidget (LAYER), então a MainWindow os
+# intercepta antes de chamar CommandInterpreter.start() (ver
+# MainWindow._start_command em newsicad/ui/main_window.py). Por isso não
+# aparecem em COMMAND_REGISTRY.
 
 ALIASES = {
     # --- desenho (DRAW) ---
@@ -159,6 +160,7 @@ ALIASES = {
     "REGEN": "REGEN", "RE": "REGEN", "REA": "REGEN",
     "DVIEW": "DVIEW",
     # --- configuração / saída ---
+    "LAYER": "LAYER", "LA": "LAYER",
     "OPTIONS": "OPTIONS", "OP": "OPTIONS",
     "UNITS": "UNITS",
     "GEOMCONSTRAINT": "GEOMCONSTRAINT", "GCON": "GEOMCONSTRAINT",
