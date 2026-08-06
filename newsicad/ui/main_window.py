@@ -4,13 +4,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
+    QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QStatusBar,
     QTextEdit,
@@ -25,6 +29,8 @@ from newsicad.core.document import Document
 from newsicad.core.entities import Point
 from newsicad.core.selection import Selection
 from newsicad.core.undo import UndoStack
+from newsicad.io.dwg_bridge import DwgBridgeError, dwg_to_document
+from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 from newsicad.ui.canvas import CanvasView
 from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.menu_bar import build_menu_bar
@@ -63,6 +69,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
 
         self._last_cursor_point: Point | None = None
+        self.current_path: Path | None = None
 
         self.document = Document()
         self.selection = Selection()
@@ -235,6 +242,99 @@ class MainWindow(QMainWindow):
         self.canvas.refresh_entities()
         self._refresh_prompt()
         self._refresh_properties_panel()
+
+    def _update_window_title(self) -> None:
+        if self.current_path is None:
+            self.setWindowTitle(APP_TITLE)
+        else:
+            self.setWindowTitle(f"NewSIcad — {self.current_path.name} — Developed by HRichter")
+
+    def _load_document(self, loaded: Document, path: Path, skipped: int) -> None:
+        """Substitui o documento atual pelo `loaded` (vindo de load_dxf/dwg_to_document)."""
+        if self.interpreter.active:
+            self.interpreter.cancel()
+        self.document.clear()
+        for layer in loaded.layers.values():
+            self.document.add_layer(layer.name, layer.color)
+        for entity in loaded.all_entities():
+            self.document.add_entity(entity)
+        self.selection.clear()
+        self.undo_stack = UndoStack(self.document)
+        self.current_path = path
+        self._update_window_title()
+        self.canvas.refresh_entities()
+        self.canvas.zoom_extents()
+        self._refresh_prompt()
+        self._refresh_properties_panel()
+        self.command_line.focus_input()
+
+        if skipped > 0:
+            self.interpreter.log.append(
+                f"Aviso: {skipped} entidade(s) do arquivo não são suportadas e foram ignoradas."
+            )
+            self._refresh_prompt()
+
+    def _open_file(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "Abrir desenho",
+            "",
+            "Desenhos (*.dxf *.dwg);;DXF (*.dxf);;DWG (*.dwg)",
+        )
+        if not path_str:
+            return
+
+        path = Path(path_str)
+        try:
+            if path.suffix.lower() == ".dwg":
+                loaded, skipped = dwg_to_document(path)
+            else:
+                loaded, skipped = load_dxf(path)
+        except (DxfIoError, DwgBridgeError) as exc:
+            QMessageBox.critical(self, "Erro ao abrir arquivo", str(exc))
+            return
+
+        self._load_document(loaded, path, skipped)
+
+    def _save_file(self) -> None:
+        if self.current_path is None:
+            self._save_file_as()
+            return
+
+        if self.current_path.suffix.lower() == ".dwg":
+            QMessageBox.warning(
+                self,
+                "Gravação de .dwg indisponível",
+                "NewSIcad ainda não grava arquivos .dwg (o gravador do LibreDWG não é "
+                "confiável). Escolha um local para salvar como .dxf.",
+            )
+            self._save_file_as()
+            return
+
+        try:
+            save_dxf(self.document, self.current_path)
+        except DxfIoError as exc:
+            QMessageBox.critical(self, "Erro ao salvar arquivo", str(exc))
+
+    def _save_file_as(self) -> None:
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Salvar desenho como", "", "DXF (*.dxf)"
+        )
+        if not path_str:
+            return
+
+        path = Path(path_str)
+        if path.suffix.lower() != ".dxf":
+            path = path.with_suffix(".dxf")
+
+        try:
+            save_dxf(self.document, path)
+        except DxfIoError as exc:
+            QMessageBox.critical(self, "Erro ao salvar arquivo", str(exc))
+            return
+
+        self.current_path = path
+        self._update_window_title()
 
     def _show_command_history(self) -> None:
         dialog = QDialog(self)

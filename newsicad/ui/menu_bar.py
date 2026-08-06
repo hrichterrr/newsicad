@@ -58,9 +58,20 @@ def _build_file_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     new_action.triggered.connect(window._new_document)
     menu.addAction(new_action)
 
-    _add_disabled(menu, "Open...")
-    _add_disabled(menu, "Save")
-    _add_disabled(menu, "Save As...")
+    open_action = QAction("Open...", window)
+    open_action.setShortcut(QKeySequence("Ctrl+O"))
+    open_action.triggered.connect(window._open_file)
+    menu.addAction(open_action)
+
+    save_action = QAction("Save", window)
+    save_action.setShortcut(QKeySequence("Ctrl+S"))
+    save_action.triggered.connect(window._save_file)
+    menu.addAction(save_action)
+
+    save_as_action = QAction("Save As...", window)
+    save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
+    save_as_action.triggered.connect(window._save_file_as)
+    menu.addAction(save_as_action)
 
     menu.addSeparator()
     exit_action = QAction("Exit", window)

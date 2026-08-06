@@ -1,6 +1,6 @@
 # NewSIcad
 
-CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha de comando, aliases, entrada de coordenadas `x,y` / `@dx,dy` / `@dist<ang`, seleção de objetos, undo/redo), com suporte planejado a leitura/gravação de `.dxf` e `.dwg`.
+CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha de comando, aliases, entrada de coordenadas `x,y` / `@dx,dy` / `@dist<ang`, seleção de objetos, undo/redo), com File > Open/Save lendo `.dxf`/`.dwg` e gravando `.dxf`.
 
 **Developed by HRichter**
 
@@ -12,6 +12,8 @@ Implementado:
 - Canvas escuro com grid adaptativo, crosshair, zoom (scroll) e pan (botão do meio)
 - Linha de comando ancorada embaixo, com histórico, prompts estilo AutoCAD e navegação por ↑/↓
 - Menu superior estilo AutoCAD (File, Edit, View, Insert, Draw, Dimension, Modify, Help) — itens ainda não implementados aparecem desabilitados com tooltip, não somem da interface
+- File > Open... (Ctrl+O): abre `.dxf` ou `.dwg` existente, substituindo o desenho atual (zoom extents automático ao carregar; entidades de tipo não suportado são ignoradas com aviso, em vez de travar a abertura)
+- File > Save (Ctrl+S) / Save As... (Ctrl+Shift+S): grava o desenho atual como `.dxf`. Gravação de `.dwg` ainda não está disponível — ver seção "Arquivos `.dwg`" abaixo
 - Comandos de desenho: `LINE`(L), `CIRCLE`(C), `ARC`(A), `RECTANG`(REC), `PLINE`(PL), `ELLIPSE`(EL) — com preview ao vivo e dynamic input (distância/ângulo perto do cursor)
 - Medição: `DIST`(DI)
 - Seleção de objetos: clique único, Shift+clique (alterna), e arrasto por janela (esquerda→direita, seleciona só o que está totalmente dentro) ou crossing (direita→esquerda, seleciona qualquer coisa que a janela toque) — igual ao AutoCAD
@@ -23,7 +25,7 @@ Implementado:
 - Toggles GRID / SNAP / ORTHO / DYN funcionais na barra de status (F7 / F9 / F8 / F12); POLAR / OSNAP / OTRACK já aparecem na UI mas ainda não afetam a captura de pontos
 - Todos os atalhos do guia rápido do AutoCAD são reconhecidos como comandos (mesmo os ainda não implementados, que respondem com uma mensagem clara em vez de "comando desconhecido")
 
-Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, BLOCK/INSERT/REGION (sistema de blocos), MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, leitura/gravação de `.dxf` e a ponte para `.dwg`.
+Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, BLOCK/INSERT/REGION (sistema de blocos), MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, gravação de `.dwg` (ver nota abaixo).
 
 ## Instalação
 
@@ -56,10 +58,13 @@ python3 -m venv ~/.venvs/newsicad
 
 ### Arquivos `.dwg`
 
-Para abrir/salvar arquivos `.dwg` (quando essa funcionalidade for implementada), o NewSIcad vai usar uma ponte externa para converter `.dwg` ↔ `.dxf` — internamente ele sempre trabalha em DXF. Duas opções, dependendo do seu caso de uso:
+O NewSIcad abre arquivos `.dwg` via [LibreDWG](https://www.gnu.org/software/libredwg/) (projeto GNU, licença GPL, **sem restrição de uso comercial**), convertendo internamente para `.dxf` de forma transparente — o usuário só usa File > Open normalmente, sem rodar nada manualmente. Os binários do LibreDWG (`dwg2dxf`) já vêm empacotados para macOS e Windows em `newsicad/resources/libredwg/`; se não encontrados, o NewSIcad procura no PATH do sistema (`brew install libredwg` no macOS).
 
-- **[LibreDWG](https://www.gnu.org/software/libredwg/)** (padrão/recomendado) — projeto GNU, licença GPL, **sem restrição de uso comercial**. Suporte a versões mais novas/recursos complexos do `.dwg` pode ser incompleto em alguns arquivos.
-- **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** — mais completo e confiável na conversão, mas **gratuito só para uso não-comercial**; uso comercial exige associação paga à Open Design Alliance. Opção alternativa para quem já é membro ODA ou usa só para fins não-comerciais.
+**Gravação de `.dwg` ainda não está disponível.** O gravador do LibreDWG (`dxf2dwg`, testado na versão 0.13.3) se mostrou não confiável mesmo para conteúdo mínimo — produz arquivos `.dwg` com handles de entidade duplicados/inválidos que nem o próprio LibreDWG consegue reler direito (os mantenedores do projeto confirmam que o `dxf2dwg` "ainda é altamente experimental": [libredwg#195](https://github.com/LibreDWG/libredwg/issues/195)). Por isso File > Save/Save As só grava `.dxf` por enquanto — arquivos `.dwg` abertos no NewSIcad devem ser salvos como `.dxf`, que qualquer versão do AutoCAD abre sem problema.
+
+Alternativa mais completa (não usada por padrão, por causa da licença):
+
+- **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** — mais completo e confiável na conversão (leitura e gravação), mas **gratuito só para uso não-comercial**; uso comercial exige associação paga à Open Design Alliance. Opção para quem já é membro ODA ou usa só para fins não-comerciais e precisa de gravação `.dwg` real.
 
 ## Executando
 
@@ -105,6 +110,14 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 
 Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, roda do mouse dá zoom, botão do meio faz pan, clique direito equivale a Enter. Nos comandos de modificação, clique seleciona um objeto (Shift+clique alterna), e arrastar numa área vazia seleciona por janela/crossing.
 
+### Arquivo
+
+| Atalho | Ação |
+|---|---|
+| Ctrl+O | Abre um desenho `.dxf` ou `.dwg` (File > Open...) |
+| Ctrl+S | Salva no arquivo atual (`.dxf`; pede um caminho se ainda não houver um) |
+| Ctrl+Shift+S | Salva como... (`.dxf`) |
+
 ## Estrutura
 
 ```
@@ -112,7 +125,7 @@ newsicad/
   core/        modelo de documento, entidades, seleção, geometria (translate/rotate/mirror/scale), undo
   commands/    interpretador de comandos, parser de coordenadas, comandos de desenho e modificação
   ui/          canvas Qt, linha de comando, menu superior, janela principal
-  io/          leitura/gravação DXF e ponte DWG (planejado)
+  io/          leitura/gravação DXF (dxf_io.py) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
 tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto e undo/redo
 ```
 
@@ -126,7 +139,9 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-Validado em ambas as plataformas (macOS e Windows 11 / Python 3.12) — 56/56 testes passando nos dois.
+69/69 testes passando (validado no macOS nesta versão, incluindo os testes novos de DXF/DWG/menu File). A versão anterior — sem File Open/Save — foi validada também no Windows 11/Python 3.12 com 56/56; essa validação específica no Windows ainda não foi refeita com os 13 testes novos.
+
+Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 
 ---
 
