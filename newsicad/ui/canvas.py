@@ -39,7 +39,7 @@ from newsicad.core.entities import (
     Point,
     Text,
 )
-from newsicad.core.geometry_ops import dimension_geometry
+from newsicad.core.geometry_ops import as_intersectable_pieces, dimension_geometry, entity_intersections
 
 # Limite de profundidade para blocos aninhados (bloco cujo conteúdo referencia
 # outro bloco) — evita recursão infinita se um desenho malformado tiver um
@@ -56,11 +56,16 @@ DYNAMIC_INPUT_COLOR = "#ffd479"
 SELECTION_COLOR = "#ff9f1c"
 WINDOW_SELECT_COLOR = "#4da3ff"
 CROSSING_SELECT_COLOR = "#4caf50"
+OSNAP_MARKER_COLOR = "#39ff14"
 
 _GRID_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 _HIT_TOLERANCE_PX = 6.0
 DIM_TEXT_HEIGHT = 2.0
 HATCH_LINE_COLOR = "#5a7fa8"
+_OSNAP_TOLERANCE_PX = 10.0
+_OSNAP_MARKER_SIZE_PX = 9.0
+_POLAR_STEP_DEG = 15.0
+_POLAR_TOLERANCE_DEG = 3.0
 
 
 def cad_to_scene(point: Point) -> QPointF:
@@ -240,6 +245,9 @@ class CanvasView(QGraphicsView):
         self.ortho_enabled = False
         self.dynamic_input_enabled = True
         self.snap_spacing = 10.0
+        self.osnap_enabled = False
+        self.polar_enabled = False
+        self._osnap_marker: tuple[Point, str] | None = None
 
         self._dyn_text = QGraphicsSimpleTextItem()
         self._dyn_text.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
@@ -750,6 +758,9 @@ class CanvasView(QGraphicsView):
             painter.setPen(pen)
             painter.drawPath(self._preview_path)
 
+        if self._osnap_marker is not None:
+            self._draw_osnap_marker(painter)
+
         if self._selection_drag_start_scene is not None and self._selection_drag_current_scene is not None:
             drag_rect = QRectF(self._selection_drag_start_scene, self._selection_drag_current_scene).normalized()
             window_mode = self._selection_drag_start_scene.x() <= self._selection_drag_current_scene.x()
@@ -764,6 +775,32 @@ class CanvasView(QGraphicsView):
             painter.drawRect(drag_rect)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
+    def _draw_osnap_marker(self, painter: QPainter) -> None:
+        pt, kind = self._osnap_marker
+        scale = max(self.transform().m11(), 1e-6)
+        size = _OSNAP_MARKER_SIZE_PX / scale
+        half = size / 2
+        center = cad_to_scene(pt)
+
+        pen = QPen(QColor(OSNAP_MARKER_COLOR))
+        pen.setWidth(0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if kind == "endpoint":
+            painter.drawRect(QRectF(center.x() - half, center.y() - half, size, size))
+        elif kind == "midpoint":
+            path = QPainterPath(QPointF(center.x(), center.y() - half))
+            path.lineTo(center.x() - half, center.y() + half)
+            path.lineTo(center.x() + half, center.y() + half)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif kind == "center":
+            painter.drawEllipse(center, half, half)
+        elif kind == "intersection":
+            painter.drawLine(QPointF(center.x() - half, center.y() - half), QPointF(center.x() + half, center.y() + half))
+            painter.drawLine(QPointF(center.x() - half, center.y() + half), QPointF(center.x() + half, center.y() - half))
+
     def set_grid_visible(self, visible: bool) -> None:
         self.grid_visible = visible
         self.viewport().update()
@@ -774,11 +811,21 @@ class CanvasView(QGraphicsView):
     def set_ortho_enabled(self, enabled: bool) -> None:
         self.ortho_enabled = enabled
 
+    def set_osnap_enabled(self, enabled: bool) -> None:
+        self.osnap_enabled = enabled
+        if not enabled:
+            self._osnap_marker = None
+            self.viewport().update()
+
+    def set_polar_enabled(self, enabled: bool) -> None:
+        self.polar_enabled = enabled
+
     def clear_transient_overlays(self) -> None:
         """Limpa preview/dynamic-input residuais quando um comando termina,
         sem esperar o próximo movimento do mouse."""
         self._preview_path = None
         self._dyn_text.hide()
+        self._osnap_marker = None
         self.viewport().update()
 
     def set_dynamic_input_enabled(self, enabled: bool) -> None:
@@ -861,25 +908,133 @@ class CanvasView(QGraphicsView):
         return event.position().toPoint() if hasattr(event, "position") else event.pos()
 
     def _apply_constraints(self, point: Point) -> Point:
-        result = point
         prompt = self.interpreter.current_prompt
+        active_point_prompt = (
+            self.interpreter.active and prompt is not None and prompt.kind == "point"
+        )
+
+        # OSNAP tem prioridade sobre ORTHO/POLAR/SNAP — igual ao AutoCAD, o
+        # cursor "gruda" no ponto de snap de objeto mesmo que isso quebre a
+        # restrição ortogonal/polar.
+        if self.osnap_enabled and active_point_prompt:
+            snap = self._find_osnap_point(point)
+            if snap is not None:
+                self._osnap_marker = snap
+                return snap[0]
+        self._osnap_marker = None
+
+        result = point
+
         if (
             self.ortho_enabled
-            and self.interpreter.active
-            and prompt is not None
-            and prompt.kind == "point"
+            and active_point_prompt
             and self.interpreter.last_point is not None
         ):
             base = self.interpreter.last_point
             dx = result.x - base.x
             dy = result.y - base.y
             result = Point(result.x, base.y) if abs(dx) >= abs(dy) else Point(base.x, result.y)
+        elif (
+            self.polar_enabled
+            and active_point_prompt
+            and self.interpreter.last_point is not None
+        ):
+            result = self._apply_polar(result)
 
         if self.snap_enabled:
             step = self.snap_spacing
             result = Point(round(result.x / step) * step, round(result.y / step) * step)
 
         return result
+
+    def _apply_polar(self, point: Point) -> Point:
+        """Gruda o cursor no múltiplo de 15° mais próximo do ângulo formado
+        com `interpreter.last_point`, dentro de uma tolerância angular
+        pequena — mesmo princípio do ORTHO acima, mas com 24 direções em vez
+        de só 2."""
+        base = self.interpreter.last_point
+        if base is None:
+            return point
+        distance = base.distance_to(point)
+        if distance < 1e-9:
+            return point
+        angle = base.angle_to(point)
+        step = math.radians(_POLAR_STEP_DEG)
+        snapped_angle = round(angle / step) * step
+        tolerance = math.radians(_POLAR_TOLERANCE_DEG)
+        diff = (angle - snapped_angle + math.pi) % (2 * math.pi) - math.pi
+        if abs(diff) > tolerance:
+            return point
+        return Point(base.x + distance * math.cos(snapped_angle), base.y + distance * math.sin(snapped_angle))
+
+    # ------------------------------------------------------------------ #
+    # OSNAP — Endpoint / Midpoint / Center / Intersection
+    # ------------------------------------------------------------------ #
+    def _osnap_tolerance_world(self) -> float:
+        scale = max(self.transform().m11(), 1e-6)
+        return _OSNAP_TOLERANCE_PX / scale
+
+    @staticmethod
+    def _entity_snap_points(entity: Entity) -> list[tuple[Point, str]]:
+        pts: list[tuple[Point, str]] = []
+        if isinstance(entity, Line):
+            pts.append((entity.start, "endpoint"))
+            pts.append((entity.end, "endpoint"))
+            pts.append((entity.midpoint(), "midpoint"))
+        elif isinstance(entity, Arc):
+            pts.append((entity.start_point(), "endpoint"))
+            pts.append((entity.end_point(), "endpoint"))
+            pts.append((entity.center, "center"))
+        elif isinstance(entity, (Circle, Ellipse)):
+            pts.append((entity.center, "center"))
+        elif isinstance(entity, LWPolyline):
+            for a, b in entity.segments():
+                pts.append((a, "endpoint"))
+                pts.append((b, "endpoint"))
+                pts.append((Point((a.x + b.x) / 2, (a.y + b.y) / 2), "midpoint"))
+        return pts
+
+    def _nearby_entities(self, cursor_scene: QPointF, radius_world: float) -> list[Entity]:
+        """Pré-filtro barato (reusa `_entity_bbox_scene`, já usado pela
+        seleção por janela) pra não recalcular interseções entre todo par de
+        entidades do documento a cada movimento do mouse."""
+        result = []
+        for entity in self.document.entities.values():
+            bbox = self._entity_bbox_scene(entity).adjusted(-radius_world, -radius_world, radius_world, radius_world)
+            if bbox.contains(cursor_scene):
+                result.append(entity)
+        return result
+
+    def _find_osnap_point(self, cursor: Point) -> tuple[Point, str] | None:
+        tolerance = self._osnap_tolerance_world()
+        cursor_scene = cad_to_scene(cursor)
+        nearby = self._nearby_entities(cursor_scene, tolerance)
+        if not nearby:
+            return None
+
+        candidates: list[tuple[float, Point, str]] = []
+        for entity in nearby:
+            for pt, kind in self._entity_snap_points(entity):
+                d = cursor.distance_to(pt)
+                if d <= tolerance:
+                    candidates.append((d, pt, kind))
+
+        for i in range(len(nearby)):
+            pieces_a = as_intersectable_pieces(nearby[i])
+            for j in range(i + 1, len(nearby)):
+                pieces_b = as_intersectable_pieces(nearby[j])
+                for pa in pieces_a:
+                    for pb in pieces_b:
+                        for pt in entity_intersections(pa, pb):
+                            d = cursor.distance_to(pt)
+                            if d <= tolerance:
+                                candidates.append((d, pt, "intersection"))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: c[0])
+        _, pt, kind = candidates[0]
+        return pt, kind
 
     def _resolve_point(self, event) -> Point:
         scene_pos = self.mapToScene(self._event_pos(event))

@@ -144,11 +144,11 @@ class MainWindow(QMainWindow):
         self.ortho_button = self._make_toggle("ORTHO", "F8", self._toggle_ortho)
         self.polar_button = self._make_toggle(
             "POLAR", "F10", self._toggle_polar,
-            tooltip="Rastreamento polar (em desenvolvimento)",
+            tooltip="Rastreamento polar — gruda em múltiplos de 15° a partir do último ponto",
         )
         self.osnap_button = self._make_toggle(
             "OSNAP", "F3", self._toggle_osnap,
-            tooltip="Snap a objetos (em desenvolvimento)",
+            tooltip="Snap a objetos (Endpoint/Midpoint/Center/Intersection)",
         )
         self.osnap_tracking_button = self._make_toggle(
             "OTRACK", "F11", self._toggle_osnap_tracking,
@@ -207,10 +207,10 @@ class MainWindow(QMainWindow):
         self.canvas.set_ortho_enabled(checked)
 
     def _toggle_polar(self, checked: bool) -> None:
-        pass  # reservado: rastreamento polar entra num próximo marco
+        self.canvas.set_polar_enabled(checked)
 
     def _toggle_osnap(self, checked: bool) -> None:
-        pass  # reservado: snap a objetos (endpoint/midpoint/center) entra no marco de TRIM/EXTEND
+        self.canvas.set_osnap_enabled(checked)
 
     def _toggle_osnap_tracking(self, checked: bool) -> None:
         pass  # reservado: par do OSNAP, mesmo marco futuro

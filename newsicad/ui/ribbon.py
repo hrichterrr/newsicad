@@ -221,6 +221,101 @@ def _icon_match_props(p: QPainter, r: QRectF) -> None:
 
 
 # ---------------------------------------------------------------------- #
+# edição geométrica (TRIM/EXTEND/OFFSET/FILLET/CHAMFER/EXPLODE/JOIN/STRETCH)
+# ---------------------------------------------------------------------- #
+def _icon_trim(p: QPainter, r: QRectF) -> None:
+    p.drawLine(QPointF(r.left(), r.center().y()), QPointF(r.right(), r.center().y()))
+    p.drawLine(QPointF(r.center().x(), r.top()), QPointF(r.center().x(), r.bottom()))
+    cx = r.center().x() + (r.right() - r.center().x()) * 0.55
+    cy = r.center().y()
+    d = 3
+    p.drawLine(QPointF(cx - d, cy - d), QPointF(cx + d, cy + d))
+    p.drawLine(QPointF(cx - d, cy + d), QPointF(cx + d, cy - d))
+
+
+def _icon_extend(p: QPainter, r: QRectF) -> None:
+    y = r.center().y()
+    solid = QPen(p.pen())
+    p.drawLine(QPointF(r.left(), y), QPointF(r.left() + r.width() * 0.5, y))
+    dashed = QPen(solid)
+    dashed.setStyle(Qt.PenStyle.DashLine)
+    p.setPen(dashed)
+    p.drawLine(QPointF(r.left() + r.width() * 0.5, y), QPointF(r.right(), y))
+    p.setPen(solid)
+    p.drawLine(QPointF(r.right(), y), QPointF(r.right() - 6, y - 5))
+    p.drawLine(QPointF(r.right(), y), QPointF(r.right() - 6, y + 5))
+
+
+def _icon_offset(p: QPainter, r: QRectF) -> None:
+    solid = QPen(p.pen())
+    p.drawRect(r)
+    dashed = QPen(solid)
+    dashed.setStyle(Qt.PenStyle.DashLine)
+    p.setPen(dashed)
+    p.drawRect(r.adjusted(5, 5, -5, -5))
+    p.setPen(solid)
+
+
+def _icon_fillet(p: QPainter, r: QRectF) -> None:
+    p.drawLine(QPointF(r.left(), r.top()), QPointF(r.left(), r.bottom() - 8))
+    p.drawLine(QPointF(r.left() + 8, r.bottom()), QPointF(r.right(), r.bottom()))
+    corner_rect = QRectF(r.left(), r.bottom() - 16, 16, 16)
+    path = QPainterPath()
+    path.arcMoveTo(corner_rect, 180)
+    path.arcTo(corner_rect, 180, -90)
+    p.drawPath(path)
+
+
+def _icon_chamfer(p: QPainter, r: QRectF) -> None:
+    p.drawLine(QPointF(r.left(), r.top()), QPointF(r.left(), r.bottom() - 8))
+    p.drawLine(QPointF(r.left() + 8, r.bottom()), QPointF(r.right(), r.bottom()))
+    p.drawLine(QPointF(r.left(), r.bottom() - 8), QPointF(r.left() + 8, r.bottom()))
+
+
+def _icon_explode(p: QPainter, r: QRectF) -> None:
+    c = r.center()
+    for angle_deg in (20, 90, 160, 230, 300, 340):
+        angle = math.radians(angle_deg)
+        inner = QPointF(c.x() + 3 * math.cos(angle), c.y() - 3 * math.sin(angle))
+        outer = QPointF(c.x() + (r.width() / 2) * math.cos(angle), c.y() - (r.width() / 2) * math.sin(angle))
+        p.drawLine(inner, outer)
+
+
+def _icon_join(p: QPainter, r: QRectF) -> None:
+    y = r.center().y()
+    p.drawLine(QPointF(r.left(), y), QPointF(r.left() + r.width() * 0.4, y))
+    p.drawLine(QPointF(r.left() + r.width() * 0.6, y), QPointF(r.right(), y))
+    p.drawEllipse(QPointF(r.center().x(), y), 2.5, 2.5)
+
+
+def _icon_stretch(p: QPainter, r: QRectF) -> None:
+    p.drawRect(QRectF(r.left(), r.top(), r.width() * 0.55, r.height()))
+    y = r.center().y()
+    p.drawLine(QPointF(r.left() + r.width() * 0.55, y), QPointF(r.right(), y))
+    p.drawLine(QPointF(r.right(), y), QPointF(r.right() - 6, y - 5))
+    p.drawLine(QPointF(r.right(), y), QPointF(r.right() - 6, y + 5))
+
+
+def _icon_divide(p: QPainter, r: QRectF) -> None:
+    y = r.center().y()
+    p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
+    step = r.width() / 4
+    x = r.left()
+    while x <= r.right() + 0.01:
+        p.drawLine(QPointF(x, y - 4), QPointF(x, y + 4))
+        x += step
+
+
+def _icon_measure(p: QPainter, r: QRectF) -> None:
+    p.drawRect(r)
+    step = r.width() / 4
+    x = r.left() + step
+    while x < r.right():
+        p.drawLine(QPointF(x, r.top()), QPointF(x, r.top() + r.height() * 0.3))
+        x += step
+
+
+# ---------------------------------------------------------------------- #
 # arquivo / utilidades / navegação
 # ---------------------------------------------------------------------- #
 def _icon_new(p: QPainter, r: QRectF) -> None:
@@ -441,6 +536,28 @@ def _build_home_tab(window: "MainWindow") -> QWidget:
         ],
     )
 
+    edit_panel = _panel(
+        "Edit Geometry",
+        [
+            _button("Trim", _icon_trim, lambda: window._start_command("TRIM")),
+            _button("Extend", _icon_extend, lambda: window._start_command("EXTEND")),
+            _button("Offset", _icon_offset, lambda: window._start_command("OFFSET")),
+            _button("Fillet", _icon_fillet, lambda: window._start_command("FILLET")),
+            _button("Chamfer", _icon_chamfer, lambda: window._start_command("CHAMFER")),
+            _button("Explode", _icon_explode, lambda: window._start_command("EXPLODE")),
+            _button("Join", _icon_join, lambda: window._start_command("JOIN")),
+            _button("Stretch", _icon_stretch, lambda: window._start_command("STRETCH")),
+        ],
+    )
+
+    points_panel = _panel(
+        "Points",
+        [
+            _button("Divide", _icon_divide, lambda: window._start_command("DIVIDE")),
+            _button("Measure", _icon_measure, lambda: window._start_command("MEASURE")),
+        ],
+    )
+
     utilities_panel = _panel(
         "Utilities",
         [
@@ -450,7 +567,7 @@ def _build_home_tab(window: "MainWindow") -> QWidget:
         ],
     )
 
-    return _row([draw_panel, modify_panel, utilities_panel])
+    return _row([draw_panel, modify_panel, edit_panel, points_panel, utilities_panel])
 
 
 def _build_insert_tab(window: "MainWindow") -> QWidget:

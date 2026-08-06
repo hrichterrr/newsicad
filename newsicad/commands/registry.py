@@ -38,6 +38,17 @@ COMMAND_REGISTRY = {
     # blocos
     "BLOCK": bc.block_command,
     "INSERT": bc.insert_command,
+    # edição geométrica
+    "TRIM": mc.trim_command,
+    "EXTEND": mc.extend_command,
+    "OFFSET": mc.offset_command,
+    "FILLET": mc.fillet_command,
+    "CHAMFER": mc.chamfer_command,
+    "JOIN": mc.join_command,
+    "EXPLODE": mc.explode_command,
+    "STRETCH": mc.stretch_command,
+    "DIVIDE": mc.divide_command,
+    "MEASURE": mc.measure_command,
     # navegação
     "ZOOM": vc.zoom_command,
     "PAN": vc.pan_command,
@@ -62,9 +73,8 @@ PLANNED_COMMANDS = {
     "TABLE",
     "DIM", "DIMEDIT", "DIMREASSOCIATE",
     "MATCHPROP",
-    "TRIM", "EXTEND", "OFFSET", "FILLET", "CHAMFER", "EXPLODE", "JOIN",
-    "STRETCH", "DIVIDE", "PEDIT", "HATCHEDIT", "ALIGN", "ARRAY", "BOUNDARY",
-    "MEASURE", "INTERSECT",
+    "PEDIT", "HATCHEDIT", "ALIGN", "ARRAY", "BOUNDARY",
+    "INTERSECT",
     "POLYGON", "SPLINE",
     # VIEWPORTS fica planejado de propósito: um viewport de verdade vive numa
     # layout de paper space, conceito que o NewSIcad não tem (só um espaço de

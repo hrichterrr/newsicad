@@ -111,7 +111,10 @@ def test_units_command_opens_and_applies_via_direct_call():
 
 
 def test_planned_command_from_new_list_gives_friendly_message():
+    # TRIM/EXTEND/OFFSET/FILLET/CHAMFER/JOIN/EXPLODE/STRETCH/DIVIDE/MEASURE
+    # foram implementados (feature/geometry-editing) — ALIGN continua
+    # reconhecido-mas-não-implementado, então serve pra este teste genérico.
     _app()
     window = MainWindow()
-    window._start_command("TRIM")
-    assert any("reconhecido" in line and "TRIM" in line for line in window.interpreter.log)
+    window._start_command("ALIGN")
+    assert any("reconhecido" in line and "ALIGN" in line for line in window.interpreter.log)

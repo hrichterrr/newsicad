@@ -141,11 +141,14 @@ def test_dist_command_logs_result_and_ends_without_waiting():
 
 
 def test_planned_command_gives_friendly_message():
+    # ALIGN continua reconhecido-mas-não-implementado nesta versão (ver
+    # newsicad/commands/registry.py PLANNED_COMMANDS) — TRIM foi
+    # implementado em feature/geometry-editing, ver test_trim_* abaixo.
     interp, doc = make_interpreter()
-    result = interp.start("TR")  # TRIM: reconhecido, ainda não implementado
+    result = interp.start("AL")  # ALIGN: reconhecido, ainda não implementado
     assert result is None
     assert not interp.active
-    assert any("reconhecido" in line and "TRIM" in line for line in interp.log)
+    assert any("reconhecido" in line and "ALIGN" in line for line in interp.log)
 
 
 def test_erase_command_removes_selected_entities():
@@ -249,3 +252,240 @@ def test_mirror_command_yes_deletes_source():
     lines = [e for e in doc.all_entities() if isinstance(e, Line)]
     assert len(lines) == 1
     assert doc.get_entity(line.id) is None
+
+
+# ---------------------------------------------------------------------- #
+# TRIM
+# ---------------------------------------------------------------------- #
+def test_trim_line_against_cutting_edge_shortens_it():
+    interp, doc = make_interpreter()
+    target = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    cutter = doc.add_entity(Line(start=Point(5, -5), end=Point(5, 5)))
+    interp.start("TR")
+    interp.context.selection.add(cutter.id)
+    interp.submit_text("")  # confirma seleção das cutting edges
+    interp.submit_point(Point(8, 0))  # clica no lado direito do alvo
+    interp.submit_text("")  # Enter termina o TRIM
+    assert not interp.active
+    assert target.start.as_tuple() == (0, 0)
+    assert target.end.as_tuple() == pytest.approx((5, 0))
+
+
+def test_trim_line_between_two_cutters_splits_into_two():
+    interp, doc = make_interpreter()
+    target = doc.add_entity(Line(start=Point(0, 0), end=Point(20, 0)))
+    left_cutter = doc.add_entity(Line(start=Point(5, -5), end=Point(5, 5)))
+    right_cutter = doc.add_entity(Line(start=Point(15, -5), end=Point(15, 5)))
+    interp.start("TR")
+    interp.context.selection.set({left_cutter.id, right_cutter.id})
+    interp.submit_text("")
+    interp.submit_point(Point(10, 0))  # clica entre os dois cutters
+    interp.submit_text("")
+    assert not interp.active
+    lines = [e for e in doc.all_entities() if isinstance(e, Line) and e.id not in (left_cutter.id, right_cutter.id)]
+    assert len(lines) == 2
+    ends = sorted(l.end.x if l.start.x < l.end.x else l.start.x for l in lines)
+    assert ends == [pytest.approx(5), pytest.approx(20)]
+
+
+def test_trim_no_intersection_logs_message_without_crashing():
+    interp, doc = make_interpreter()
+    target = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    cutter = doc.add_entity(Line(start=Point(50, -5), end=Point(50, 5)))
+    interp.start("TR")
+    interp.context.selection.add(cutter.id)
+    interp.submit_text("")
+    interp.submit_point(Point(5, 0))
+    assert interp.active  # continua esperando outro clique, não crasha
+    assert any("Nenhuma interseção" in line for line in interp.log)
+    interp.submit_text("")
+
+
+# ---------------------------------------------------------------------- #
+# EXTEND
+# ---------------------------------------------------------------------- #
+def test_extend_line_to_boundary():
+    interp, doc = make_interpreter()
+    target = doc.add_entity(Line(start=Point(0, 0), end=Point(5, 0)))
+    boundary = doc.add_entity(Line(start=Point(10, -5), end=Point(10, 5)))
+    interp.start("EX")
+    interp.context.selection.add(boundary.id)
+    interp.submit_text("")
+    interp.submit_point(Point(4, 0))  # clica perto da ponta que deve se mover
+    interp.submit_text("")
+    assert not interp.active
+    assert target.end.as_tuple() == pytest.approx((10, 0))
+    assert target.start.as_tuple() == (0, 0)
+
+
+# ---------------------------------------------------------------------- #
+# OFFSET
+# ---------------------------------------------------------------------- #
+def test_offset_line_creates_parallel_copy():
+    interp, doc = make_interpreter()
+    line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    interp.start("O")
+    interp.submit_text("2")
+    interp.submit_point(Point(5, 0))
+    interp.submit_point(Point(5, 5))
+    interp.submit_text("")
+    assert not interp.active
+    lines = [e for e in doc.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 2
+    new_line = next(l for l in lines if l.id != line.id)
+    assert new_line.start.y == pytest.approx(2)
+
+
+def test_offset_circle_creates_larger_circle():
+    interp, doc = make_interpreter()
+    circle = doc.add_entity(Circle(center=Point(0, 0), radius=5))
+    interp.start("O")
+    interp.submit_text("2")
+    interp.submit_point(Point(5, 0))
+    interp.submit_point(Point(20, 0))
+    interp.submit_text("")
+    assert not interp.active
+    circles = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    assert len(circles) == 2
+    new_circle = next(c for c in circles if c.id != circle.id)
+    assert new_circle.radius == pytest.approx(7)
+
+
+# ---------------------------------------------------------------------- #
+# FILLET / CHAMFER
+# ---------------------------------------------------------------------- #
+def test_fillet_command_requires_radius_before_selecting():
+    interp, doc = make_interpreter()
+    line1 = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    line2 = doc.add_entity(Line(start=Point(10, 0), end=Point(10, 10)))
+    interp.start("F")
+    interp.submit_point(Point(5, 0))  # sem ter setado raio ainda
+    assert not interp.active
+    assert any("raio" in line.lower() for line in interp.log)
+    arcs = [e for e in doc.all_entities() if isinstance(e, Arc)]
+    assert len(arcs) == 0
+
+
+def test_fillet_command_full_flow_with_radius_option():
+    interp, doc = make_interpreter()
+    line1 = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    line2 = doc.add_entity(Line(start=Point(10, 0), end=Point(10, 10)))
+    interp.start("F")
+    interp.submit_text("radius")
+    interp.submit_text("2")
+    interp.submit_point(Point(5, 0))
+    interp.submit_point(Point(10, 5))
+    assert not interp.active
+    arcs = [e for e in doc.all_entities() if isinstance(e, Arc)]
+    assert len(arcs) == 1
+    assert arcs[0].radius == pytest.approx(2)
+    assert line1.end.x == pytest.approx(8)
+
+
+def test_chamfer_command_full_flow_with_distance_option():
+    interp, doc = make_interpreter()
+    line1 = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    line2 = doc.add_entity(Line(start=Point(10, 0), end=Point(10, 10)))
+    interp.start("CHA")
+    interp.submit_text("distance")
+    interp.submit_text("2")
+    interp.submit_text("3")
+    interp.submit_point(Point(5, 0))
+    interp.submit_point(Point(10, 5))
+    assert not interp.active
+    chamfer_lines_found = [e for e in doc.all_entities() if isinstance(e, Line) and e.id not in (line1.id, line2.id)]
+    assert len(chamfer_lines_found) == 1
+    assert line1.end.x == pytest.approx(8)
+    assert line2.start.y == pytest.approx(3)
+
+
+# ---------------------------------------------------------------------- #
+# JOIN
+# ---------------------------------------------------------------------- #
+def test_join_collinear_connected_lines():
+    interp, doc = make_interpreter()
+    a = doc.add_entity(Line(start=Point(0, 0), end=Point(5, 0)))
+    b = doc.add_entity(Line(start=Point(5, 0), end=Point(10, 0)))
+    interp.start("J")
+    interp.context.selection.set({a.id, b.id})
+    interp.submit_text("")
+    assert not interp.active
+    lines = [e for e in doc.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 1
+    survivor = lines[0]
+    ends = sorted([survivor.start.x, survivor.end.x])
+    assert ends == [pytest.approx(0), pytest.approx(10)]
+
+
+def test_join_non_collinear_lines_does_nothing():
+    interp, doc = make_interpreter()
+    a = doc.add_entity(Line(start=Point(0, 0), end=Point(5, 0)))
+    b = doc.add_entity(Line(start=Point(0, 0), end=Point(0, 5)))
+    interp.start("J")
+    interp.context.selection.set({a.id, b.id})
+    interp.submit_text("")
+    assert not interp.active
+    lines = [e for e in doc.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 2
+
+
+# ---------------------------------------------------------------------- #
+# EXPLODE
+# ---------------------------------------------------------------------- #
+def test_explode_polyline_creates_individual_lines():
+    interp, doc = make_interpreter()
+    poly = doc.add_entity(LWPolyline(points=[Point(0, 0), Point(10, 0), Point(10, 10)]))
+    interp.start("X")
+    interp.context.selection.add(poly.id)
+    interp.submit_text("")
+    assert not interp.active
+    assert doc.get_entity(poly.id) is None
+    lines = [e for e in doc.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 2
+
+
+# ---------------------------------------------------------------------- #
+# STRETCH
+# ---------------------------------------------------------------------- #
+def test_stretch_moves_only_vertex_inside_crossing_window():
+    interp, doc = make_interpreter()
+    line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    interp.start("S")
+    interp.submit_point(Point(-5, -5))  # primeiro canto da janela
+    interp.submit_point(Point(5, 5))  # segundo canto (só pega o start, x=0)
+    interp.submit_point(Point(0, 0))  # base point
+    interp.submit_point(Point(0, 10))  # second point (dx=0, dy=10)
+    assert not interp.active
+    assert line.start.as_tuple() == (0, 10)
+    assert line.end.as_tuple() == (10, 0)  # fora da janela, não se move
+
+
+# ---------------------------------------------------------------------- #
+# DIVIDE / MEASURE
+# ---------------------------------------------------------------------- #
+def test_divide_line_into_n_segments_creates_n_minus_1_markers():
+    interp, doc = make_interpreter()
+    line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    interp.start("DIV")
+    interp.context.selection.add(line.id)
+    interp.submit_text("")
+    interp.submit_text("4")
+    assert not interp.active
+    markers = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    assert len(markers) == 3
+    xs = sorted(c.center.x for c in markers)
+    assert xs == [pytest.approx(2.5), pytest.approx(5.0), pytest.approx(7.5)]
+
+
+def test_measure_line_by_fixed_length():
+    interp, doc = make_interpreter()
+    line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    interp.start("ME")
+    interp.context.selection.add(line.id)
+    interp.submit_text("")
+    interp.submit_text("3")
+    assert not interp.active
+    markers = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    assert len(markers) == 3  # em x=3,6,9 (10//3=3 marcadores)
+    xs = sorted(c.center.x for c in markers)
+    assert xs == [pytest.approx(3), pytest.approx(6), pytest.approx(9)]
