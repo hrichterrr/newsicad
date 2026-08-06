@@ -6,7 +6,7 @@ CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha 
 
 ## Status
 
-Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD + **blocos, referências externas e exportação PDF** (branch `feature/blocks-refs-plot`).
+Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD + **blocos, referências externas e exportação PDF** + **anotação (texto, cotas, hachura, leader)** + **edição geométrica avançada (TRIM/EXTEND/OFFSET/FILLET/CHAMFER/JOIN/EXPLODE/STRETCH) e OSNAP/POLAR reais**.
 
 Implementado:
 - Canvas escuro com grid adaptativo, crosshair, zoom (scroll) e pan (botão do meio)
@@ -17,6 +17,13 @@ Implementado:
 - File > Save (Ctrl+S) / Save As... (Ctrl+Shift+S): grava o desenho atual como `.dxf`. Gravação de `.dwg` ainda não está disponível — ver seção "Arquivos `.dwg`" abaixo
 - Comandos de desenho: `LINE`(L), `CIRCLE`(C), `ARC`(A), `RECTANG`(REC), `PLINE`(PL), `ELLIPSE`(EL) — com preview ao vivo e dynamic input (distância/ângulo perto do cursor)
 - Medição: `DIST`(DI)
+- **Anotação (novo):**
+  - `MTEXT`(T/MT) — texto simples/multilinha (entidade `Text`), inserido no ponto clicado e digitado na linha de comando; renderizado no canvas com a inversão de ângulo correta (não fica de cabeça pra baixo)
+  - `DIMLINEAR`(DLI) / `DIMALIGNED`(DAL) / `DIMANGULAR`(DAN) / `DIMRADIUS`(DRA) / `DIMDIAMETER`(DDI) — cotas (entidade única `Dimension` com campo `kind`), com linhas de extensão, linha de cota, marcas de seta simplificadas (dois traços em ângulo) e o texto da medida calculado automaticamente a partir da geometria
+  - `DIMSTYLE`(D/DS) — informativo por enquanto: confirma que só o estilo de cota padrão é suportado (sem estilos nomeados customizados)
+  - `HATCH`(H) — hachura (entidade `Hatch`) por linhas diagonais paralelas dentro de um contorno; nesta versão só aceita uma `LWPolyline` fechada pré-existente como contorno (selecionar com clique) — detecção automática de contorno a partir de várias entidades é o comando `BOUNDARY`, ainda não implementado
+  - `LEADER`(LE) — leader simplificado: reusa `LWPolyline` (linha poligonal) + `Text` (anotação na ponta) em vez de um tipo de entidade dedicado
+  - Todos os tipos novos (`Text`, `Dimension`, `Hatch`) entram na seleção (clique/janela/crossing), em MOVE/COPY/ROTATE/SCALE/MIRROR, e sobrevivem a salvar/reabrir `.dxf` (round-trip coberto por teste automatizado — ver `tests/test_dxf_io.py`)
 - Seleção de objetos: clique único, Shift+clique (alterna), e arrasto por janela (esquerda→direita, seleciona só o que está totalmente dentro) ou crossing (direita→esquerda, seleciona qualquer coisa que a janela toque) — igual ao AutoCAD
 - Comandos de modificação: `ERASE`(E), `MOVE`(M), `COPY`(CO/CP), `ROTATE`(RO), `SCALE`(SC), `MIRROR`(MI)
 - Painel de Propriedades (Ctrl+1) mostrando tipo/camada da seleção atual
@@ -31,7 +38,10 @@ Implementado:
 - **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. **Não é gravada em `.dxf`** — ver limitações
 - **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`
 
-Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, REGION, MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, `VIEWPORTS`/`VM` (decisão consciente de não implementar — ver abaixo), gravação de `.dwg` (ver nota abaixo).
+- **Edição geométrica (`TRIM`/TR, `EXTEND`/EX, `OFFSET`/O, `FILLET`/F, `CHAMFER`/CHA, `JOIN`/J, `EXPLODE`/X, `STRETCH`/S, `DIVIDE`/DIV, `MEASURE`/ME)**: geometria real de interseção/corte (segmento-segmento, segmento-círculo, círculo-círculo) — `FILLET`/`CHAMFER` cobrem Line-Line (com sub-opção `[Radius]`/`[Distance]`), `EXTEND` estende até um alvo do tipo Line, `OFFSET` cobre Line/Circle/Arc/LWPolyline (polilinha via aproximação por interseção de linhas de apoio), `STRETCH` usa uma janela crossing explícita. `DIVIDE`/`MEASURE` marcam os pontos com pequenos `Circle` (ainda não existe um tipo `POINT` dedicado)
+- **OSNAP e POLAR reais**: `OSNAP` calcula Endpoint/Midpoint/Center/Intersection de verdade a partir das entidades próximas ao cursor (com prioridade sobre ORTHO/POLAR/grid-snap), `POLAR` trava em incrementos de 15°; ambos com marcador visual no canvas e toggle funcional (F3/F10)
+
+Ainda não implementado (próximos marcos): `ALIGN`, `ARRAY`, `BOUNDARY`, `PEDIT` (edição de vértice de polilinha), `MATCHPROP`, `REGION`, `TABLE`, `STYLE`, `GEOMCONSTRAINT`, `DSETTINGS`, `DVIEW`, `DIM`/`DIMEDIT`/`DIMREASSOCIATE`, `OPTIONS`, `VIEWPORTS`/`VM` (decisão consciente de não implementar — ver abaixo), gravação de `.dwg` (ver nota abaixo). `TRIM` ainda não tem undo dentro do próprio comando (só o Ctrl+Z do desenho inteiro).
 
 ### Blocos e referências — simplificações documentadas
 
@@ -77,6 +87,22 @@ que é uma versão reduzida, propositalmente, dentro do orçamento deste marco:
   ângulo de rotação, mas não inverte o CONTEÚDO do bloco (isso exigiria
   escala negativa por eixo, que o modelo atual de `BlockReference` — escala
   uniforme única — não representa).
+
+### Nota técnica: gravação DXF de Dimension/Hatch
+
+O `DIMENSION` do formato DXF é, ele mesmo, geometria *derivada/renderizada*
+(um bloco anônimo calculado a partir dos pontos de origem) — não é
+suficiente pra reconstruir com 100% de fidelidade qual "kind" e quais pontos
+originais deram origem a ele (ex.: `aligned` e `linear` produzem o mesmo
+`dimtype` na biblioteca `ezdxf` usada aqui). Por isso `newsicad/io/dxf_io.py`
+grava tanto a geometria `DIMENSION`/`HATCH` padrão do DXF (pra abrir/visualizar
+corretamente em qualquer outro programa CAD) quanto os campos exatos do
+nosso modelo como *XDATA* (extended entity data) sob o AppID `NEWSICAD` — ao
+reabrir um arquivo salvo pelo próprio NewSIcad, o XDATA é usado e o
+round-trip é exato. Ao abrir um `.dxf` de outro programa (sem esse XDATA), o
+NewSIcad faz um melhor-esforço decodificando a geometria padrão do
+`DIMENSION` (cobre linear/aligned/radius/diameter; `angular` de arquivos
+externos é ignorado, contado como entidade "skipped" no aviso pós-abertura).
 
 ## Instalação
 
@@ -167,6 +193,15 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | PLOT | — | Exporta o desenho inteiro para PDF |
 | PUBLISH | — | Mesma coisa que PLOT nesta versão (sem layouts/paper space) |
 | UNDO | U | Desfaz o último comando |
+| MTEXT | T / MT | Texto simples/multilinha (ponto de inserção + texto digitado) |
+| DIMLINEAR | DLI | Cota linear (2 pontos de origem + posição da linha de cota) |
+| DIMALIGNED | DAL | Cota alinhada à direção entre os 2 pontos |
+| DIMANGULAR | DAN | Cota de ângulo (vértice + 2 pontos + posição do arco) |
+| DIMRADIUS | DRA | Cota de raio (seleciona círculo/arco + posição do texto) |
+| DIMDIAMETER | DDI | Cota de diâmetro (seleciona círculo/arco + posição do texto) |
+| DIMSTYLE | D / DS | Informa o estilo de cota atual (só o padrão, por enquanto) |
+| HATCH | H | Hachura dentro de uma LWPolyline fechada selecionada |
+| LEADER | LE | Linha poligonal + texto na ponta (leader simplificado) |
 
 Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, roda do mouse dá zoom, botão do meio faz pan, clique direito equivale a Enter. Nos comandos de modificação, clique seleciona um objeto (Shift+clique alterna), e arrastar numa área vazia seleciona por janela/crossing.
 
@@ -183,11 +218,11 @@ Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, r
 
 ```
 newsicad/
-  core/        modelo de documento (Document.block_definitions), entidades (inclui BlockReference/ImageReference), seleção, geometria (translate/rotate/mirror/scale), undo
-  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho/modificação/blocos (block_commands.py)
-  ui/          canvas Qt (renderiza BlockReference/ImageReference), linha de comando, menu superior, janela principal, Block Editor (block_editor_dialog.py), painel de xrefs (xref_panel.py)
-  io/          leitura/gravação DXF (dxf_io.py, com blocos/INSERT) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
-tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto, undo/redo, blocos/xref/imagem/PDF
+  core/        modelo de documento (Document.block_definitions), entidades (inclui BlockReference/ImageReference/Text/Dimension/Hatch), seleção, geometria (translate/rotate/mirror/scale/offset/fillet/chamfer/interseções + dimension_geometry), undo
+  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho/modificação (draw_commands.py/modify_commands.py), blocos (block_commands.py) e anotação (annotation_commands.py)
+  ui/          canvas Qt (renderiza todos os tipos de entidade, OSNAP/POLAR reais), linha de comando, menu superior, ribbon, janela principal, Block Editor (block_editor_dialog.py), painel de xrefs (xref_panel.py)
+  io/          leitura/gravação DXF (dxf_io.py, com blocos/INSERT/Text/Dimension/Hatch) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
+tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto, undo/redo, blocos/xref/imagem/PDF, anotação e OSNAP/POLAR
 ```
 
 ## Testes
@@ -200,7 +235,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-104/104 testes passando (validado no macOS nesta versão — 83 pré-existentes + 21 novos deste marco de blocos/referências/PDF: `test_block_commands.py`, `test_block_canvas.py`, `test_block_ui_flows.py`, e a extensão de `test_dxf_io.py` com round-trip de bloco/INSERT). Essa validação foi feita só no macOS; a versão anterior (sem blocos) tinha sido validada também no Windows 11/Python 3.12 — essa validação específica ainda não foi refeita com os testes novos.
+Validado no macOS nesta versão, combinando os três marcos mais recentes (blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR) — ver contagem exata de testes abaixo, gerada rodando a suíte completa após o merge. Essa validação específica ainda não foi refeita no Windows 11 com os testes novos (a última validação em Windows real foi antes desses três marcos).
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 

@@ -11,11 +11,14 @@ from newsicad.core.entities import (
     Arc,
     BlockReference,
     Circle,
+    Dimension,
     Entity,
+    Hatch,
     ImageReference,
     Line,
     LWPolyline,
     Point,
+    Text,
 )
 
 
@@ -113,6 +116,16 @@ def translate_entity(entity: Entity, dx: float, dy: float) -> None:
         entity.points = [translate_point(p, dx, dy) for p in entity.points]
     elif isinstance(entity, (BlockReference, ImageReference)):
         entity.insertion_point = translate_point(entity.insertion_point, dx, dy)
+    elif isinstance(entity, Text):
+        entity.insertion_point = translate_point(entity.insertion_point, dx, dy)
+    elif isinstance(entity, Dimension):
+        entity.point1 = translate_point(entity.point1, dx, dy)
+        entity.point2 = translate_point(entity.point2, dx, dy)
+        entity.dim_line_point = translate_point(entity.dim_line_point, dx, dy)
+        entity.center = translate_point(entity.center, dx, dy)
+        entity.leader_point = translate_point(entity.leader_point, dx, dy)
+    elif isinstance(entity, Hatch):
+        entity.boundary_points = [translate_point(p, dx, dy) for p in entity.boundary_points]
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -136,6 +149,18 @@ def rotate_entity(entity: Entity, base: Point, angle_rad: float) -> None:
         # Imagens não têm campo de rotação própria (ver ImageReference) —
         # só o ponto de inserção acompanha o giro do grupo selecionado.
         entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
+    elif isinstance(entity, Text):
+        entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
+        entity.rotation = (entity.rotation + angle_rad) % (2 * math.pi)
+    elif isinstance(entity, Dimension):
+        entity.point1 = rotate_point(entity.point1, base, angle_rad)
+        entity.point2 = rotate_point(entity.point2, base, angle_rad)
+        entity.dim_line_point = rotate_point(entity.dim_line_point, base, angle_rad)
+        entity.center = rotate_point(entity.center, base, angle_rad)
+        entity.leader_point = rotate_point(entity.leader_point, base, angle_rad)
+    elif isinstance(entity, Hatch):
+        entity.boundary_points = [rotate_point(p, base, angle_rad) for p in entity.boundary_points]
+        entity.angle = (entity.angle + angle_rad) % math.pi
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -159,6 +184,18 @@ def scale_entity(entity: Entity, base: Point, factor: float) -> None:
         entity.insertion_point = scale_point(entity.insertion_point, base, factor)
         entity.width *= factor
         entity.height *= factor
+    elif isinstance(entity, Text):
+        entity.insertion_point = scale_point(entity.insertion_point, base, factor)
+        entity.height *= factor
+    elif isinstance(entity, Dimension):
+        entity.point1 = scale_point(entity.point1, base, factor)
+        entity.point2 = scale_point(entity.point2, base, factor)
+        entity.dim_line_point = scale_point(entity.dim_line_point, base, factor)
+        entity.center = scale_point(entity.center, base, factor)
+        entity.leader_point = scale_point(entity.leader_point, base, factor)
+        entity.radius *= factor
+    elif isinstance(entity, Hatch):
+        entity.boundary_points = [scale_point(p, base, factor) for p in entity.boundary_points]
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -200,7 +237,104 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.rotation = (-entity.rotation) % (2 * math.pi)
     elif isinstance(mirrored, ImageReference):
         mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
+    elif isinstance(mirrored, Text):
+        mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
+        line_angle = p1.angle_to(p2)
+        mirrored.rotation = (2 * line_angle - entity.rotation) % (2 * math.pi)
+    elif isinstance(mirrored, Dimension):
+        mirrored.point1 = mirror_point(entity.point1, p1, p2)
+        mirrored.point2 = mirror_point(entity.point2, p1, p2)
+        mirrored.dim_line_point = mirror_point(entity.dim_line_point, p1, p2)
+        mirrored.center = mirror_point(entity.center, p1, p2)
+        mirrored.leader_point = mirror_point(entity.leader_point, p1, p2)
+    elif isinstance(mirrored, Hatch):
+        mirrored.boundary_points = [mirror_point(p, p1, p2) for p in entity.boundary_points]
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
     return mirrored
+
+
+# ---------------------------------------------------------------------- #
+# geometria de renderização de Dimension — usada tanto pelo canvas (desenho)
+# quanto pelo hit-test/bbox de seleção, pra garantir que "onde é desenhado" e
+# "onde clicar seleciona" nunca divirjam.
+# ---------------------------------------------------------------------- #
+def _unit_direction(a: Point, b: Point) -> tuple[float, float]:
+    dx, dy = b.x - a.x, b.y - a.y
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return 1.0, 0.0
+    return dx / length, dy / length
+
+
+def _arrow_ticks(a: Point, b: Point, size: float = 0.6) -> list[tuple[Point, Point]]:
+    """Duas marcas curtas em ângulo em cada ponta do segmento a-b, no lugar
+    de uma seta preenchida (suficiente pra indicar visualmente os limites da
+    linha de cota)."""
+    ux, uy = _unit_direction(a, b)
+    px, py = -uy, ux
+    ticks: list[tuple[Point, Point]] = []
+    for origin, sign in ((a, 1.0), (b, -1.0)):
+        back_x = origin.x + sign * ux * size
+        back_y = origin.y + sign * uy * size
+        ticks.append((origin, Point(back_x + px * size * 0.4, back_y + py * size * 0.4)))
+        ticks.append((origin, Point(back_x - px * size * 0.4, back_y - py * size * 0.4)))
+    return ticks
+
+
+def dimension_geometry(dim: Dimension) -> tuple[list[tuple[Point, Point]], Point]:
+    """Retorna (segmentos de linha, ponto de ancoragem do texto) em
+    coordenadas CAD, para desenhar/hit-testar uma Dimension sem duplicar a
+    geometria entre newsicad/ui/canvas.py e a seleção."""
+    if dim.kind == "linear":
+        p1, p2, dl = dim.point1, dim.point2, dim.dim_line_point
+        if dim.is_horizontal():
+            d1, d2 = Point(p1.x, dl.y), Point(p2.x, dl.y)
+        else:
+            d1, d2 = Point(dl.x, p1.y), Point(dl.x, p2.y)
+        segments = [(p1, d1), (p2, d2), (d1, d2), *_arrow_ticks(d1, d2)]
+        text_anchor = Point((d1.x + d2.x) / 2, (d1.y + d2.y) / 2)
+        return segments, text_anchor
+
+    if dim.kind == "aligned":
+        p1, p2, dl = dim.point1, dim.point2, dim.dim_line_point
+        ux, uy = _unit_direction(p1, p2)
+        nx, ny = -uy, ux
+        offset = (dl.x - p1.x) * nx + (dl.y - p1.y) * ny
+        d1 = Point(p1.x + nx * offset, p1.y + ny * offset)
+        d2 = Point(p2.x + nx * offset, p2.y + ny * offset)
+        segments = [(p1, d1), (p2, d2), (d1, d2), *_arrow_ticks(d1, d2)]
+        text_anchor = Point((d1.x + d2.x) / 2, (d1.y + d2.y) / 2)
+        return segments, text_anchor
+
+    if dim.kind in ("radius", "diameter"):
+        ux, uy = _unit_direction(dim.center, dim.leader_point)
+        edge = Point(dim.center.x + ux * dim.radius, dim.center.y + uy * dim.radius)
+        if dim.kind == "diameter":
+            far_edge = Point(dim.center.x - ux * dim.radius, dim.center.y - uy * dim.radius)
+            segments = [(far_edge, edge), (edge, dim.leader_point)]
+        else:
+            segments = [(dim.center, edge), (edge, dim.leader_point)]
+        return segments, dim.leader_point
+
+    if dim.kind == "angular":
+        vertex = dim.center
+        arc_radius = vertex.distance_to(dim.dim_line_point) or vertex.distance_to(dim.point1) or 1.0
+        a1 = math.atan2(dim.point1.y - vertex.y, dim.point1.x - vertex.x)
+        a2 = math.atan2(dim.point2.y - vertex.y, dim.point2.x - vertex.x)
+        sweep = (a2 - a1) % (2 * math.pi)
+        steps = 16
+        arc_points = [
+            Point(
+                vertex.x + arc_radius * math.cos(a1 + sweep * i / steps),
+                vertex.y + arc_radius * math.sin(a1 + sweep * i / steps),
+            )
+            for i in range(steps + 1)
+        ]
+        segments = [(vertex, dim.point1), (vertex, dim.point2)]
+        segments += list(zip(arc_points, arc_points[1:]))
+        mid = arc_points[len(arc_points) // 2]
+        return segments, mid
+
+    return [], dim.dim_line_point

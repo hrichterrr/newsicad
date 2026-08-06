@@ -14,15 +14,28 @@ from newsicad.core.entities import (
     Arc,
     BlockReference,
     Circle,
+    Dimension,
     Ellipse,
     Entity,
+    Hatch,
     ImageReference,
     Line,
     LWPolyline,
     Point,
+    Text,
 )
 
 DXF_VERSION = "R2000"
+
+# AppID sob o qual o NewSIcad grava os campos exatos de Dimension como XDATA
+# (extended entity data). O DIMENSION do DXF é, ele mesmo, uma geometria
+# derivada/renderizada (bloco anônimo) que não guarda "kind" nem os pontos
+# originais de forma direta e sem ambiguidade entre LINEAR e ALIGNED — então
+# gravamos os campos do nosso próprio modelo à parte, garantindo round-trip
+# exato pros arquivos salvos pelo NewSIcad. Ao abrir um .dxf de outro
+# programa (sem esse XDATA), fazemos um melhor-esforço a partir da geometria
+# padrão do DIMENSION (ver `_dimension_from_geometry`).
+NEWSICAD_APPID = "NEWSICAD"
 
 
 class DxfIoError(RuntimeError):
@@ -123,11 +136,128 @@ def _from_dxf_entity(e) -> Entity | None:
             rotation=rotation,
         )
 
+    if dxftype == "MTEXT":
+        return Text(
+            layer=layer,
+            insertion_point=_point(e.dxf.insert),
+            content=e.plain_text(),
+            height=e.dxf.char_height,
+            rotation=math.radians(e.dxf.get("rotation", 0.0)),
+        )
+
+    if dxftype == "TEXT":
+        return Text(
+            layer=layer,
+            insertion_point=_point(e.dxf.insert),
+            content=e.dxf.text,
+            height=e.dxf.height,
+            rotation=math.radians(e.dxf.get("rotation", 0.0)),
+        )
+
+    if dxftype == "DIMENSION":
+        return _from_dxf_dimension(e, layer)
+
+    if dxftype == "HATCH":
+        return _from_dxf_hatch(e, layer)
+
     return None
+
+
+def _from_dxf_dimension(e, layer: str) -> Entity | None:
+    try:
+        xdata = e.get_xdata(NEWSICAD_APPID)
+    except Exception:
+        xdata = None
+
+    if xdata:
+        values = [tag.value for tag in xdata]
+        kind = values[0]
+        floats = values[1:11]
+        radius = values[11]
+        point1, point2, dim_line_point, center, leader_point = (
+            Point(floats[i], floats[i + 1]) for i in range(0, 10, 2)
+        )
+        return Dimension(
+            layer=layer,
+            kind=kind,
+            point1=point1,
+            point2=point2,
+            dim_line_point=dim_line_point,
+            center=center,
+            radius=radius,
+            leader_point=leader_point,
+        )
+
+    return _dimension_from_geometry(e, layer)
+
+
+def _dimension_from_geometry(e, layer: str) -> Entity | None:
+    """Melhor-esforço pra DIMENSION vindas de outro programa (sem o XDATA do
+    NewSIcad): decodifica o tipo pelos 3 bits baixos de `dimtype` e os
+    defpoints padrão do DXF. Cobertura parcial (linear/aligned/radius/
+    diameter) — cotas angulares de arquivos externos são ignoradas (contadas
+    como "skipped"), reconstruir os 3 pontos originais a partir só da
+    geometria derivada do DIMENSION não é confiável o bastante."""
+    try:
+        base_type = e.dxf.get("dimtype", 0) & 7
+        if base_type in (0, 1):
+            dim_line_point = _point(e.dxf.defpoint)
+            point1 = _point(e.dxf.defpoint2)
+            point2 = _point(e.dxf.defpoint3)
+            kind = "aligned" if base_type == 1 else "linear"
+            return Dimension(layer=layer, kind=kind, point1=point1, point2=point2, dim_line_point=dim_line_point)
+        if base_type == 4:  # radius: defpoint=centro, defpoint4=ponto no círculo
+            center = _point(e.dxf.defpoint)
+            leader_point = _point(e.dxf.defpoint4)
+            radius = center.distance_to(leader_point)
+            return Dimension(layer=layer, kind="radius", center=center, radius=radius, leader_point=leader_point)
+        if base_type == 3:  # diameter: defpoint/defpoint4 são os 2 pontos opostos no círculo
+            edge1 = _point(e.dxf.defpoint)
+            edge2 = _point(e.dxf.defpoint4)
+            center = Point((edge1.x + edge2.x) / 2, (edge1.y + edge2.y) / 2)
+            radius = center.distance_to(edge1)
+            return Dimension(layer=layer, kind="diameter", center=center, radius=radius, leader_point=edge1)
+    except (AttributeError, KeyError):
+        return None
+    return None
+
+
+def _from_dxf_hatch(e, layer: str) -> Entity | None:
+    boundary_points: list[Point] = []
+    for path in e.paths:
+        vertices = getattr(path, "vertices", None)
+        if vertices:
+            boundary_points = [Point(float(v[0]), float(v[1])) for v in vertices]
+            break
+        edges = getattr(path, "edges", None)
+        if edges:
+            pts = []
+            for edge in edges:
+                start = getattr(edge, "start", None)
+                if start is not None:
+                    pts.append(Point(float(start[0]), float(start[1])))
+            if pts:
+                boundary_points = pts
+                break
+    if len(boundary_points) < 3:
+        return None
+
+    angle = 0.7853981633974483  # 45°, mesmo default do dataclass Hatch
+    spacing = 1.0
+    try:
+        xdata = e.get_xdata(NEWSICAD_APPID)
+        values = [tag.value for tag in xdata]
+        angle, spacing = float(values[0]), float(values[1])
+    except Exception:
+        pass  # HATCH de outro programa: fica no padrão (fidelidade visual, não exata)
+
+    return Hatch(layer=layer, boundary_points=boundary_points, angle=angle, spacing=spacing)
 
 
 def save_dxf(document: Document, path: str | Path) -> None:
     dxf_doc = ezdxf.new(DXF_VERSION)
+    if NEWSICAD_APPID not in dxf_doc.appids:
+        dxf_doc.appids.new(NEWSICAD_APPID)
     msp = dxf_doc.modelspace()
 
     for layer in document.layers.values():
@@ -219,4 +349,114 @@ def _to_dxf_entity(msp, entity: Entity) -> None:
         # do desenho.
         return
 
+    if isinstance(entity, Text):
+        msp.add_mtext(
+            entity.content,
+            dxfattribs={
+                **attribs,
+                "insert": (entity.insertion_point.x, entity.insertion_point.y),
+                "char_height": max(entity.height, 1e-3),
+                "rotation": math.degrees(entity.rotation),
+            },
+        )
+        return
+
+    if isinstance(entity, Dimension):
+        _write_dimension(msp, entity, attribs)
+        return
+
+    if isinstance(entity, Hatch):
+        _write_hatch(msp, entity, attribs)
+        return
+
     raise DxfIoError(f"Tipo de entidade não suportado para gravação DXF: {type(entity)!r}")
+
+
+def _perp_offset(p1: Point, p2: Point, other: Point) -> float:
+    """Deslocamento perpendicular (com sinal) de `other` em relação à reta
+    p1->p2, usado pra converter `dim_line_point` no parâmetro `distance` que
+    o `add_aligned_dim` do ezdxf espera."""
+    dx, dy = p2.x - p1.x, p2.y - p1.y
+    length = math.hypot(dx, dy) or 1.0
+    nx, ny = -dy / length, dx / length
+    return (other.x - p1.x) * nx + (other.y - p1.y) * ny
+
+
+def _write_dimension(msp, entity: Dimension, attribs: dict) -> None:
+    """Grava tanto a geometria DIMENSION padrão do DXF (pra abrir/visualizar
+    corretamente em qualquer programa CAD) quanto os campos exatos do nosso
+    modelo como XDATA sob NEWSICAD_APPID (pra round-trip 100% fiel dentro do
+    próprio NewSIcad — ver comentário no topo do arquivo)."""
+    dimattribs = dict(attribs)
+    override = None
+
+    if entity.kind == "linear":
+        override = msp.add_linear_dim(
+            base=(entity.dim_line_point.x, entity.dim_line_point.y),
+            p1=(entity.point1.x, entity.point1.y),
+            p2=(entity.point2.x, entity.point2.y),
+            angle=0.0 if entity.is_horizontal() else 90.0,
+            dimstyle="EZDXF",
+            dxfattribs=dimattribs,
+        )
+    elif entity.kind == "aligned":
+        override = msp.add_aligned_dim(
+            p1=(entity.point1.x, entity.point1.y),
+            p2=(entity.point2.x, entity.point2.y),
+            distance=_perp_offset(entity.point1, entity.point2, entity.dim_line_point),
+            dimstyle="EZDXF",
+            dxfattribs=dimattribs,
+        )
+    elif entity.kind == "radius":
+        angle = math.degrees(
+            math.atan2(entity.leader_point.y - entity.center.y, entity.leader_point.x - entity.center.x)
+        )
+        override = msp.add_radius_dim(
+            center=(entity.center.x, entity.center.y),
+            radius=entity.radius,
+            angle=angle,
+            dimstyle="EZ_RADIUS",
+            dxfattribs=dimattribs,
+        )
+    elif entity.kind == "diameter":
+        angle = math.degrees(
+            math.atan2(entity.leader_point.y - entity.center.y, entity.leader_point.x - entity.center.x)
+        )
+        override = msp.add_diameter_dim(
+            center=(entity.center.x, entity.center.y),
+            radius=entity.radius,
+            angle=angle,
+            dimstyle="EZ_RADIUS",
+            dxfattribs=dimattribs,
+        )
+    elif entity.kind == "angular":
+        override = msp.add_angular_dim_3p(
+            base=(entity.dim_line_point.x, entity.dim_line_point.y),
+            center=(entity.center.x, entity.center.y),
+            p1=(entity.point1.x, entity.point1.y),
+            p2=(entity.point2.x, entity.point2.y),
+            dimstyle="EZ_CURVED",
+            dxfattribs=dimattribs,
+        )
+    else:
+        raise DxfIoError(f"Tipo de Dimension não suportado: {entity.kind!r}")
+
+    override.render()
+
+    tags: list[tuple[int, object]] = [(1000, entity.kind)]
+    for pt in (entity.point1, entity.point2, entity.dim_line_point, entity.center, entity.leader_point):
+        tags.append((1040, float(pt.x)))
+        tags.append((1040, float(pt.y)))
+    tags.append((1040, float(entity.radius)))
+    override.dimension.set_xdata(NEWSICAD_APPID, tags)
+
+
+def _write_hatch(msp, entity: Hatch, attribs: dict) -> None:
+    hatch = msp.add_hatch(color=256, dxfattribs=dict(attribs))
+    points = [(p.x, p.y) for p in entity.boundary_points]
+    hatch.paths.add_polyline_path(points, is_closed=True)
+    hatch.set_pattern_fill("ANSI31", scale=max(entity.spacing, 0.1), angle=math.degrees(entity.angle))
+    # o "scale"/"angle" do padrão ANSI31 do ezdxf não mapeia 1:1 de volta pro
+    # nosso `spacing`/`angle` ao reler — grava os valores exatos como XDATA,
+    # igual à Dimension, pra round-trip fiel dentro do NewSIcad.
+    hatch.set_xdata(NEWSICAD_APPID, [(1040, float(entity.angle)), (1040, float(entity.spacing))])

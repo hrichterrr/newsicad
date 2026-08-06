@@ -56,6 +56,33 @@ def test_view_tab_zoom_buttons_call_canvas_methods():
     assert window.canvas.transform().m11() > initial_scale
 
 
+def test_annotate_buttons_start_matching_commands():
+    _app()
+    window = MainWindow()
+    cases = [
+        ("Multiline Text", "MTEXT"),
+        ("Linear", "DIMLINEAR"),
+        ("Aligned", "DIMALIGNED"),
+        ("Angular", "DIMANGULAR"),
+        ("Radius", "DIMRADIUS"),
+        ("Diameter", "DIMDIAMETER"),
+        ("Leader", "LEADER"),
+    ]
+    for label, command in cases:
+        window.interpreter.cancel()
+        _find_button(window, label).click()
+        assert window.interpreter.active, f"botão '{label}' não iniciou nenhum comando"
+        assert window.interpreter.last_command_name == command
+
+
+def test_hatch_button_starts_hatch_command():
+    _app()
+    window = MainWindow()
+    _find_button(window, "Hatch").click()
+    assert window.interpreter.active
+    assert window.interpreter.last_command_name == "HATCH"
+
+
 def test_grid_toggle_syncs_with_status_bar_button():
     _app()
     window = MainWindow()

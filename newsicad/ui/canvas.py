@@ -29,13 +29,17 @@ from newsicad.core.entities import (
     Arc,
     BlockReference,
     Circle,
+    Dimension,
     Ellipse,
     Entity,
+    Hatch,
     ImageReference,
     Line,
     LWPolyline,
     Point,
+    Text,
 )
+from newsicad.core.geometry_ops import dimension_geometry
 
 # Limite de profundidade para blocos aninhados (bloco cujo conteúdo referencia
 # outro bloco) — evita recursão infinita se um desenho malformado tiver um
@@ -55,6 +59,8 @@ CROSSING_SELECT_COLOR = "#4caf50"
 
 _GRID_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 _HIT_TOLERANCE_PX = 6.0
+DIM_TEXT_HEIGHT = 2.0
+HATCH_LINE_COLOR = "#5a7fa8"
 
 
 def cad_to_scene(point: Point) -> QPointF:
@@ -112,6 +118,95 @@ def _point_segment_distance(p: Point, a: Point, b: Point) -> float:
     t = max(0.0, min(1.0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / length_sq))
     proj = Point(a.x + t * dx, a.y + t * dy)
     return p.distance_to(proj)
+
+
+def _polygon_segments(points: list[Point]) -> list[tuple[Point, Point]]:
+    pairs = list(zip(points, points[1:]))
+    if len(points) > 2:
+        pairs.append((points[-1], points[0]))
+    return pairs
+
+
+def _point_in_polygon(p: Point, points: list[Point]) -> bool:
+    inside = False
+    n = len(points)
+    for i in range(n):
+        a = points[i]
+        b = points[(i + 1) % n]
+        crosses = (a.y > p.y) != (b.y > p.y)
+        if crosses:
+            x_at_y = (b.x - a.x) * (p.y - a.y) / ((b.y - a.y) or 1e-12) + a.x
+            if p.x < x_at_y:
+                inside = not inside
+    return inside
+
+
+def _text_local_extent(entity: Text) -> tuple[float, float]:
+    """Retângulo local aproximado (largura, altura) do texto, em unidades
+    CAD, ancorado no canto superior-esquerdo (insertion_point)."""
+    lines = entity.content.split("\n") or [""]
+    width = entity.height * 0.6 * max((len(line) for line in lines), default=1)
+    height = entity.height * 1.3 * max(len(lines), 1)
+    return max(width, 1e-6), max(height, 1e-6)
+
+
+class _HatchItem(QGraphicsPathItem):
+    """QGraphicsPathItem cujo path é o contorno da hachura; o preenchimento
+    (linhas diagonais paralelas) é desenhado por cima, recortado ao contorno
+    via QPainter.setClipPath — mais simples e robusto do que tentar recortar
+    cada segmento de linha manualmente contra o polígono."""
+
+    def __init__(self, boundary_path: QPainterPath) -> None:
+        super().__init__(boundary_path)
+        self._hatch_lines: list[tuple[QPointF, QPointF]] = []
+
+    def set_hatch_lines(self, lines: list[tuple[QPointF, QPointF]]) -> None:
+        self._hatch_lines = lines
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: D401
+        super().paint(painter, option, widget)
+        if not self._hatch_lines:
+            return
+        painter.save()
+        painter.setClipPath(self.path())
+        pen = QPen(QColor(HATCH_LINE_COLOR))
+        pen.setWidth(0)
+        painter.setPen(pen)
+        for a, b in self._hatch_lines:
+            painter.drawLine(a, b)
+        painter.restore()
+
+
+def _hatch_fill_lines(boundary_scene: list[QPointF], angle_rad: float, spacing_world: float) -> list[tuple[QPointF, QPointF]]:
+    """Gera segmentos de linha (em coords de cena, que são as mesmas unidades
+    "mundo" usadas pelo resto do canvas, só com Y invertido) cobrindo a
+    bounding box do contorno, num padrão diagonal com o ângulo/espaçamento
+    pedidos. O clipping ao contorno de verdade acontece no paint() via
+    setClipPath — essas linhas não precisam ser exatas, só cobrir a área."""
+    if len(boundary_scene) < 3:
+        return []
+    xs = [pt.x() for pt in boundary_scene]
+    ys = [pt.y() for pt in boundary_scene]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    diag = math.hypot(max_x - min_x, max_y - min_y) or 1.0
+    spacing_scene = max(spacing_world, 1e-3)
+
+    # ângulo em coords de cena (Y invertido em relação ao CAD)
+    scene_angle = -angle_rad
+    ux, uy = math.cos(scene_angle), math.sin(scene_angle)
+    # direção perpendicular, usada para varrer paralelas cobrindo a diagonal
+    px, py = -uy, ux
+
+    cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
+    lines: list[tuple[QPointF, QPointF]] = []
+    n_steps = min(int(diag / spacing_scene) + 2, 500)  # limite de segurança p/ contornos grandes
+    for i in range(-n_steps, n_steps + 1):
+        ox, oy = cx + px * spacing_scene * i, cy + py * spacing_scene * i
+        a = QPointF(ox - ux * diag, oy - uy * diag)
+        b = QPointF(ox + ux * diag, oy + uy * diag)
+        lines.append((a, b))
+    return lines
 
 
 class CanvasView(QGraphicsView):
@@ -263,6 +358,53 @@ class CanvasView(QGraphicsView):
         if isinstance(entity, ImageReference):
             return self._create_image_item(entity)
 
+        if isinstance(entity, Text):
+            pos = cad_to_scene(entity.insertion_point)
+            item = QGraphicsSimpleTextItem(entity.content)
+            font = QFont("Menlo")
+            font.setPointSizeF(max(entity.height, 0.1))
+            item.setFont(font)
+            item.setPos(pos)
+            # inverte o ângulo: rotação anti-horária em CAD (Y pra cima) vira
+            # horária em coords de cena (Y pra baixo) — mesmo ajuste que
+            # Arc/Ellipse já fazem.
+            item.setRotation(-math.degrees(entity.rotation))
+            item.setBrush(QBrush(QColor(ENTITY_COLOR)))
+            item.setPen(_entity_pen())
+            return item
+
+        if isinstance(entity, Dimension):
+            segments, text_anchor = dimension_geometry(entity)
+            path = QPainterPath()
+            for a, b in segments:
+                path.moveTo(cad_to_scene(a))
+                path.lineTo(cad_to_scene(b))
+            font = QFont("Menlo")
+            font.setPointSizeF(DIM_TEXT_HEIGHT)
+            anchor_scene = cad_to_scene(text_anchor)
+            path.addText(
+                anchor_scene.x() - DIM_TEXT_HEIGHT * 0.3 * len(entity.measurement_text()),
+                anchor_scene.y() - DIM_TEXT_HEIGHT * 0.4,
+                font,
+                entity.measurement_text(),
+            )
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen())
+            return item
+
+        if isinstance(entity, Hatch):
+            path = QPainterPath()
+            pts_scene = [cad_to_scene(p) for p in entity.boundary_points]
+            if pts_scene:
+                path.moveTo(pts_scene[0])
+                for pt in pts_scene[1:]:
+                    path.lineTo(pt)
+                path.closeSubpath()
+            item = _HatchItem(path)
+            item.setPen(_entity_pen())
+            item.set_hatch_lines(_hatch_fill_lines(pts_scene, entity.angle, entity.spacing))
+            return item
+
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
     def _create_block_reference_item(self, entity: BlockReference, _depth: int = 0) -> QGraphicsItem:
@@ -368,6 +510,29 @@ class CanvasView(QGraphicsView):
             return self._distance_to_block_reference(p, entity)
         if isinstance(entity, ImageReference):
             return self._distance_to_image(p, entity)
+        if isinstance(entity, Text):
+            width, height = _text_local_extent(entity)
+            dx, dy = p.x - entity.insertion_point.x, p.y - entity.insertion_point.y
+            cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
+            lx = dx * cos_a - dy * sin_a
+            ly = dx * sin_a + dy * cos_a
+            if 0.0 <= lx <= width and -height <= ly <= 0.0:
+                return 0.0
+            cx = min(max(lx, 0.0), width)
+            cy = min(max(ly, -height), 0.0)
+            return math.hypot(lx - cx, ly - cy)
+        if isinstance(entity, Dimension):
+            segments, _ = dimension_geometry(entity)
+            if not segments:
+                return None
+            return min(_point_segment_distance(p, a, b) for a, b in segments)
+        if isinstance(entity, Hatch) and len(entity.boundary_points) >= 3:
+            if _point_in_polygon(p, entity.boundary_points):
+                return 0.0
+            return min(
+                _point_segment_distance(p, a, b)
+                for a, b in _polygon_segments(entity.boundary_points)
+            )
         return None
 
     def _distance_to_block_reference(self, p: Point, entity: BlockReference, _depth: int = 0) -> float | None:
@@ -432,6 +597,36 @@ class CanvasView(QGraphicsView):
         if isinstance(entity, ImageReference):
             pos = cad_to_scene(Point(entity.insertion_point.x, entity.insertion_point.y + entity.height))
             return QRectF(pos.x(), pos.y(), entity.width, entity.height)
+        if isinstance(entity, Text):
+            width, height = _text_local_extent(entity)
+            local_corners = [(0.0, 0.0), (width, 0.0), (width, -height), (0.0, -height)]
+            cos_a, sin_a = math.cos(entity.rotation), math.sin(entity.rotation)
+            world_pts = [
+                cad_to_scene(
+                    Point(
+                        entity.insertion_point.x + lx * cos_a - ly * sin_a,
+                        entity.insertion_point.y + lx * sin_a + ly * cos_a,
+                    )
+                )
+                for lx, ly in local_corners
+            ]
+            xs = [pt.x() for pt in world_pts]
+            ys = [pt.y() for pt in world_pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, Dimension):
+            segments, text_anchor = dimension_geometry(entity)
+            pts = [text_anchor] + [pt for seg in segments for pt in seg]
+            if not pts:
+                return QRectF()
+            scene_pts = [cad_to_scene(pt) for pt in pts]
+            xs = [pt.x() for pt in scene_pts]
+            ys = [pt.y() for pt in scene_pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, Hatch) and entity.boundary_points:
+            pts = [cad_to_scene(p) for p in entity.boundary_points]
+            xs = [pt.x() for pt in pts]
+            ys = [pt.y() for pt in pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
         return QRectF()
 
     def _block_reference_bbox_scene(self, entity: BlockReference, _depth: int = 0) -> QRectF:
