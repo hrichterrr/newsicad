@@ -453,6 +453,18 @@ class CanvasView(QGraphicsView):
         rect = rect.adjusted(-margin, -margin, margin, margin)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
+    def zoom_window(self, p1: Point, p2: Point) -> None:
+        """Zoom pra uma janela definida por dois pontos em coordenadas CAD
+        (comando ZOOM digitado — "Specify corner of window")."""
+        s1, s2 = cad_to_scene(p1), cad_to_scene(p2)
+        rect = QRectF(
+            min(s1.x(), s2.x()), min(s1.y(), s2.y()),
+            abs(s2.x() - s1.x()), abs(s2.y() - s1.y()),
+        )
+        if rect.width() < 1e-9 or rect.height() < 1e-9:
+            return
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
     # ------------------------------------------------------------------ #
     # entrada do usuário
     # ------------------------------------------------------------------ #

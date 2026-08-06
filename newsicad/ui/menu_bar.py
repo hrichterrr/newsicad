@@ -98,6 +98,12 @@ def _build_edit_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     copy_base_action.triggered.connect(lambda: window._start_command("COPY"))
     menu.addAction(copy_base_action)
 
+    menu.addSeparator()
+    select_all_action = QAction("Select All", window)
+    select_all_action.setShortcut(QKeySequence("Ctrl+A"))
+    select_all_action.triggered.connect(window._select_all)
+    menu.addAction(select_all_action)
+
 
 def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&View")
@@ -212,7 +218,6 @@ def _build_help_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Help")
 
     about_action = QAction("About NewSIcad...", window)
-    about_action.setShortcut(QKeySequence("F1"))
 
     def show_about() -> None:
         QMessageBox.about(
@@ -224,6 +229,7 @@ def _build_help_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     about_action.triggered.connect(show_about)
     menu.addAction(about_action)
 
-    readme_action = QAction("Ver README no GitHub", window)
+    readme_action = QAction("Ver README no GitHub (Help)", window)
+    readme_action.setShortcut(QKeySequence("F1"))
     readme_action.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
     menu.addAction(readme_action)

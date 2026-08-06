@@ -4,14 +4,18 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
+    QFormLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -84,6 +88,7 @@ class MainWindow(QMainWindow):
         self.canvas.on_cancel = self._handle_cancel
         self.canvas.on_selection_changed = self._refresh_properties_panel
         self.canvas.mouse_moved.connect(self._handle_mouse_moved)
+        self.context.view = self.canvas
 
         self._build_command_dock()
         self._build_status_bar()
@@ -218,7 +223,11 @@ class MainWindow(QMainWindow):
         if self.interpreter.active:
             return
         name = self.interpreter.resolve_command(text)
-        if name == "UNDO":
+        if name in ("UNDO", "OOPS"):
+            # OOPS no AutoCAD restaura só o último apagado, mesmo que outros
+            # comandos tenham rodado depois — simplificação aqui: como nosso
+            # undo é por snapshot do desenho inteiro, um Undo comum cobre o
+            # caso de uso típico (desfazer o ERASE mais recente).
             self._do_undo()
             self._after_interpreter_step()
             return
@@ -226,9 +235,51 @@ class MainWindow(QMainWindow):
             self._do_redo()
             self._after_interpreter_step()
             return
+        if name == "REGEN":
+            self.interpreter.log.append("Regenerating model.")
+            self.canvas.refresh_entities()
+            self._after_interpreter_step()
+            return
+        if name == "UNITS":
+            self._show_units_dialog()
+            self._after_interpreter_step()
+            return
         self.undo_stack.push()
         self.interpreter.start(text)
         self._after_interpreter_step()
+
+    def _select_all(self) -> None:
+        self.selection.set(set(self.document.entities.keys()))
+        self.canvas.refresh_selection_highlight()
+        self.canvas.viewport().update()
+        self._refresh_properties_panel()
+
+    def _show_units_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Units")
+        layout = QFormLayout(dialog)
+
+        combo = QComboBox()
+        options = ["mm", "cm", "m", "in", "ft"]
+        combo.addItems(options)
+        if self.document.units in options:
+            combo.setCurrentText(self.document.units)
+        layout.addRow("Unidade de desenho:", combo)
+
+        note = QLabel(
+            "Só define a unidade nominal do desenho (metadado salvo no\n"
+            "arquivo) — não reescala entidades já desenhadas."
+        )
+        note.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addRow(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.document.units = combo.currentText()
 
     def _repeat_last_command(self) -> None:
         if self.interpreter.active or self.interpreter.last_command_name is None:
@@ -325,6 +376,7 @@ class MainWindow(QMainWindow):
             self._save_file_as()
             return
 
+        self._backup_before_overwrite(self.current_path)
         try:
             save_dxf(self.document, self.current_path)
         except DxfIoError as exc:
@@ -341,6 +393,7 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() != ".dxf":
             path = path.with_suffix(".dxf")
 
+        self._backup_before_overwrite(path)
         try:
             save_dxf(self.document, path)
         except DxfIoError as exc:
@@ -349,6 +402,16 @@ class MainWindow(QMainWindow):
 
         self.current_path = path
         self._update_window_title()
+
+    def _backup_before_overwrite(self, path: Path) -> None:
+        """Igual ao AutoCAD: se já existe um arquivo nesse caminho, guarda a
+        versão anterior como .bak antes de sobrescrever."""
+        if not path.exists():
+            return
+        try:
+            shutil.copy2(path, path.with_suffix(".bak"))
+        except OSError:
+            pass  # falha ao criar backup não deve impedir o salvamento
 
     def _show_command_history(self) -> None:
         dialog = QDialog(self)

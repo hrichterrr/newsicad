@@ -6,14 +6,15 @@ COMMAND_REGISTRY — nesse caso o CommandInterpreter reconhece o atalho mas
 avisa que o comando ainda não foi implementado, em vez de dizer "comando
 desconhecido".
 
-UNDO/REDO não entram em COMMAND_REGISTRY: não são comandos geradores de
-prompts, são tratados à parte pela MainWindow (pilha de undo por snapshot).
+UNDO/REDO/OOPS/REGEN/UNITS não entram em COMMAND_REGISTRY: não são comandos
+geradores de prompts, são tratados à parte pela MainWindow (`_start_command`).
 """
 
 from __future__ import annotations
 
 from newsicad.commands import draw_commands as dc
 from newsicad.commands import modify_commands as mc
+from newsicad.commands import view_commands as vc
 
 COMMAND_REGISTRY = {
     # desenho
@@ -32,31 +33,28 @@ COMMAND_REGISTRY = {
     "ROTATE": mc.rotate_command,
     "SCALE": mc.scale_command,
     "MIRROR": mc.mirror_command,
+    # navegação
+    "ZOOM": vc.zoom_command,
+    "PAN": vc.pan_command,
 }
 
 # Comandos conhecidos (do guia de atalhos do AutoCAD) que ainda não têm
-# implementação em COMMAND_REGISTRY — ficam desabilitados no menu e dão um
+# implementação em COMMAND_REGISTRY nem tratamento especial em
+# MainWindow._start_command — ficam desabilitados no menu/ribbon e dão um
 # aviso claro na linha de comando em vez de "comando desconhecido".
 PLANNED_COMMANDS = {
-    "HATCH",
-    "BLOCK",
-    "INSERT",
-    "REGION",
-    "MTEXT",
-    "DIMLINEAR",
-    "DIMALIGNED",
-    "DIMANGULAR",
-    "DIMRADIUS",
-    "DIMSTYLE",
+    "HATCH", "BLOCK", "INSERT", "REGION",
+    "MTEXT", "TABLE", "LEADER",
+    "DIMLINEAR", "DIMALIGNED", "DIMANGULAR", "DIMRADIUS", "DIMDIAMETER",
+    "DIMSTYLE", "DIM", "DIMEDIT", "DIMREASSOCIATE",
     "MATCHPROP",
-    "TRIM",
-    "EXTEND",
-    "OFFSET",
-    "FILLET",
-    "CHAMFER",
-    "EXPLODE",
-    "JOIN",
-    "STRETCH",
+    "TRIM", "EXTEND", "OFFSET", "FILLET", "CHAMFER", "EXPLODE", "JOIN",
+    "STRETCH", "DIVIDE", "PEDIT", "HATCHEDIT", "ALIGN", "ARRAY", "BOUNDARY",
+    "MEASURE", "INTERSECT",
+    "POLYGON", "SPLINE",
+    "BEDIT", "REFEDIT", "XREF", "EXTERNALREFERENCES", "IMAGEATTACH", "VIEWPORTS",
+    "OPTIONS", "STYLE", "GEOMCONSTRAINT", "DSETTINGS",
+    "PLOT", "PUBLISH", "DVIEW",
 }
 
 ALIASES = {
@@ -71,15 +69,27 @@ ALIASES = {
     "BLOCK": "BLOCK", "B": "BLOCK",
     "INSERT": "INSERT", "I": "INSERT",
     "REGION": "REGION", "REG": "REGION",
+    "POLYGON": "POLYGON", "POL": "POLYGON",
+    "SPLINE": "SPLINE", "SP": "SPLINE",
+    "TABLE": "TABLE", "TB": "TABLE",
+    "LEADER": "LEADER", "LE": "LEADER",
+    "BOUNDARY": "BOUNDARY", "BO": "BOUNDARY",
+    "IMAGEATTACH": "IMAGEATTACH", "IM": "IMAGEATTACH",
+    "VIEWPORTS": "VIEWPORTS", "VM": "VIEWPORTS",
     # --- anotação e medição ---
     "MTEXT": "MTEXT", "T": "MTEXT", "MT": "MTEXT",
     "DIMLINEAR": "DIMLINEAR", "DLI": "DIMLINEAR",
     "DIMALIGNED": "DIMALIGNED", "DAL": "DIMALIGNED",
     "DIMANGULAR": "DIMANGULAR", "DAN": "DIMANGULAR",
     "DIMRADIUS": "DIMRADIUS", "DRA": "DIMRADIUS",
+    "DIMDIAMETER": "DIMDIAMETER", "DDI": "DIMDIAMETER",
     "DIST": "DIST", "DI": "DIST",
     "MATCHPROP": "MATCHPROP", "MA": "MATCHPROP",
-    "DIMSTYLE": "DIMSTYLE", "D": "DIMSTYLE",
+    "DIMSTYLE": "DIMSTYLE", "D": "DIMSTYLE", "DS": "DIMSTYLE",
+    "DIM": "DIM",
+    "DIMEDIT": "DIMEDIT", "DED": "DIMEDIT",
+    "DIMREASSOCIATE": "DIMREASSOCIATE", "DRE": "DIMREASSOCIATE",
+    "STYLE": "STYLE", "ST": "STYLE",
     # --- modificação (MODIFY) ---
     "MOVE": "MOVE", "M": "MOVE",
     "COPY": "COPY", "CO": "COPY", "CP": "COPY",
@@ -95,7 +105,32 @@ ALIASES = {
     "EXPLODE": "EXPLODE", "X": "EXPLODE",
     "JOIN": "JOIN", "J": "JOIN",
     "STRETCH": "STRETCH", "S": "STRETCH",
-    # --- desfazer (tratados à parte pela MainWindow) ---
+    "DIVIDE": "DIVIDE", "DIV": "DIVIDE",
+    "PEDIT": "PEDIT", "PE": "PEDIT",
+    "HATCHEDIT": "HATCHEDIT", "HE": "HATCHEDIT",
+    "ALIGN": "ALIGN", "AL": "ALIGN",
+    "ARRAY": "ARRAY", "AR": "ARRAY",
+    "MEASURE": "MEASURE", "ME": "MEASURE",
+    "INTERSECT": "INTERSECT", "IN": "INTERSECT",
+    # --- blocos / referências externas ---
+    "BEDIT": "BEDIT", "BE": "BEDIT",
+    "REFEDIT": "REFEDIT",
+    "XREF": "XREF", "XR": "XREF",
+    "EXTERNALREFERENCES": "EXTERNALREFERENCES", "ER": "EXTERNALREFERENCES",
+    # --- navegação de vista ---
+    "ZOOM": "ZOOM", "Z": "ZOOM",
+    "PAN": "PAN",
+    "REGEN": "REGEN", "RE": "REGEN", "REA": "REGEN",
+    "DVIEW": "DVIEW",
+    # --- configuração / saída ---
+    "OPTIONS": "OPTIONS", "OP": "OPTIONS",
+    "UNITS": "UNITS",
+    "GEOMCONSTRAINT": "GEOMCONSTRAINT", "GCON": "GEOMCONSTRAINT",
+    "DSETTINGS": "DSETTINGS",
+    "PLOT": "PLOT",
+    "PUBLISH": "PUBLISH",
+    # --- desfazer / restaurar (tratados à parte pela MainWindow) ---
     "UNDO": "UNDO", "U": "UNDO",
     "REDO": "REDO",
+    "OOPS": "OOPS",
 }
