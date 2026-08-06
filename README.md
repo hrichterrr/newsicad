@@ -47,7 +47,7 @@ Implementado:
 - **Block Editor (`BEDIT`/`BE`, `REFEDIT`)**: abre um mini-desenho à parte (mesmo canvas/interpretador/linha de comando da janela principal) com cópias das entidades da definição — todos os comandos normais funcionam lá dentro (LINE, ERASE, MOVE, outro BLOCK aninhado...). "Save" grava de volta na definição e atualiza todas as instâncias no desenho principal automaticamente. Ver limitações na seção "Blocos e referências" abaixo
 - **Referências externas (`XREF`/`XR`, `EXTERNALREFERENCES`/`ER`)**: XREF anexa um `.dxf` externo como uma `BlockReference` marcada (`is_xref=True`); o painel EXTERNALREFERENCES lista as xrefs do desenho (nome + caminho) com um botão Reload que relê o arquivo. **Sem watch automático de arquivo** — ver limitações abaixo
 - **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. **Não é gravada em `.dxf`** — ver limitações
-- **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`
+- **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`, perguntando antes o **tamanho da folha** (A4/A3/A2/A1/A0) e a **orientação** (automática — escolhe retrato ou paisagem pela proporção do desenho, igual a um PLOT com "Fit" — ou fixa em retrato/paisagem)
 
 - **Edição geométrica (`TRIM`/TR, `EXTEND`/EX, `OFFSET`/O, `FILLET`/F, `CHAMFER`/CHA, `JOIN`/J, `EXPLODE`/X, `STRETCH`/S, `DIVIDE`/DIV, `MEASURE`/ME)**: geometria real de interseção/corte (segmento-segmento, segmento-círculo, círculo-círculo) — `FILLET`/`CHAMFER` cobrem Line-Line (com sub-opção `[Radius]`/`[Distance]`), `EXTEND` estende até um alvo do tipo Line, `OFFSET` cobre Line/Circle/Arc/LWPolyline (polilinha via aproximação por interseção de linhas de apoio), `STRETCH` usa uma janela crossing explícita. `DIVIDE`/`MEASURE` marcam os pontos com pequenos `Circle` (ainda não existe um tipo `POINT` dedicado) — ver detalhes/limitações na seção "Edição geométrica" abaixo
 - **OSNAP e POLAR reais**: `OSNAP` calcula Endpoint/Midpoint/Center/Intersection de verdade a partir das entidades próximas ao cursor (com prioridade sobre ORTHO/POLAR/grid-snap), `POLAR` trava em incrementos de 15°; ambos com marcador visual no canvas e toggle funcional (F3/F10)
@@ -94,6 +94,10 @@ que é uma versão reduzida, propositalmente, dentro do orçamento deste marco:
   space, os dois comandos fazem exatamente a mesma coisa (uma única página
   PDF com o desenho inteiro) — no AutoCAD real, PUBLISH lida com múltiplas
   folhas/layouts, o que não existe aqui.
+- **Export PDF não tem escala real definida**: o desenho é sempre ajustado
+  pra caber na folha escolhida ("Fit"), não numa escala técnica como 1:50 ou
+  1:100 — o tamanho de folha (A4-A0) e a orientação são escolhidos antes de
+  exportar, mas a escala do desenho dentro da folha não é controlável ainda.
 - **MIRROR de um `BlockReference`** espelha o ponto de inserção e inverte o
   ângulo de rotação, mas não inverte o CONTEÚDO do bloco (isso exigiria
   escala negativa por eixo, que o modelo atual de `BlockReference` — escala
@@ -265,7 +269,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-180/180 testes passando (validado no macOS nesta versão, rodando a suíte completa após mesclar os três marcos mais recentes — blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR). O merge desses três marcos expôs um bug real de integração (não visível em nenhum dos três isoladamente): reabrir qualquer `.dxf` com uma cota contava a seta da cota como "entidade não suportada", porque o bloco auto-gerado pelo ezdxf para a seta (`_CLOSEDFILLED`) não caía no filtro de "bloco anônimo" (que só reconhecia nomes começando com `*`) — corrigido em `newsicad/io/dxf_io.py`. Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses três marcos).
+193/193 testes passando (validado no macOS nesta versão, rodando a suíte completa após mesclar os três marcos mais recentes — blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR — mais correções de leitura de `.dwg` real e tamanho/orientação de folha no Export PDF). O merge dos três marcos expôs um bug real de integração (não visível em nenhum dos três isoladamente): reabrir qualquer `.dxf` com uma cota contava a seta da cota como "entidade não suportada", porque o bloco auto-gerado pelo ezdxf para a seta (`_CLOSEDFILLED`) não caía no filtro de "bloco anônimo" (que só reconhecia nomes começando com `*`) — corrigido em `newsicad/io/dxf_io.py`. Testando com 25 `.dwg` reais do usuário também apareceram e foram corrigidos: uma quebra de linha espúria que o `dwg2dxf` insere em MTEXT longos, um crash de decodificação UTF-8 em avisos do `dwg2dxf`, e um fallback de leitura tolerante (`ezdxf.recover`) pra arquivos com dano estrutural — foi de 12/25 pra 16/25 abrindo com desenho completo (ver `newsicad/io/dwg_bridge.py`). Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses marcos).
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 

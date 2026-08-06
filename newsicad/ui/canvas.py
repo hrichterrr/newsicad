@@ -9,7 +9,7 @@ import math
 from typing import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPageSize, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -66,6 +66,17 @@ _OSNAP_TOLERANCE_PX = 10.0
 _OSNAP_MARKER_SIZE_PX = 9.0
 _POLAR_STEP_DEG = 15.0
 _POLAR_TOLERANCE_DEG = 3.0
+
+# Tamanhos de folha padrão pra Export PDF (série ISO 216, do menor A4 até o
+# A0 usado em pranchas arquitetônicas de verdade) — nome exibido na UI -> id
+# do Qt.
+PDF_PAGE_SIZES: dict[str, QPageSize.PageSizeId] = {
+    "A4": QPageSize.PageSizeId.A4,
+    "A3": QPageSize.PageSizeId.A3,
+    "A2": QPageSize.PageSizeId.A2,
+    "A1": QPageSize.PageSizeId.A1,
+    "A0": QPageSize.PageSizeId.A0,
+}
 
 
 def cad_to_scene(point: Point) -> QPointF:
@@ -862,22 +873,39 @@ class CanvasView(QGraphicsView):
             return
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def export_pdf(self, path) -> bool:
+    def export_pdf(self, path, page_size: str = "A4", orientation: str = "auto") -> bool:
         """PLOT/PUBLISH: renderiza todas as entidades do documento (não só o
         que está visível na tela) numa única página PDF via QPdfWriter.
 
+        `page_size`: um dos nomes em `PDF_PAGE_SIZES` ("A4", "A3", "A2",
+        "A1", "A0" — os tamanhos padrão usados em desenho técnico/
+        arquitetônico). `orientation`: "auto" (retrato se a altura do
+        desenho for maior que a largura, paisagem caso contrário —
+        comportamento igual ao AutoCAD ao plotar "Fit"), "portrait" ou
+        "landscape".
+
         Simplificação documentada no README: o NewSIcad não tem conceito de
-        layouts/paper space, então não existe distinção real entre "imprimir
-        a vista atual" (PLOT) e "publicar várias folhas" (PUBLISH) — os dois
-        comandos chamam este mesmo método (uma folha, o desenho inteiro)."""
-        from PySide6.QtGui import QPageSize, QPdfWriter
+        layouts/paper space nem de escala real de impressão (sempre "ajusta
+        pra caber na folha", como um PLOT com Fit) — nem distinção real
+        entre "imprimir a vista atual" (PLOT) e "publicar várias folhas"
+        (PUBLISH), que aqui chamam este mesmo método (uma folha, o desenho
+        inteiro)."""
+        from PySide6.QtGui import QPageLayout, QPdfWriter
 
         rect = self.compute_extents_rect()
         if rect is None:
             return False
 
+        if orientation == "auto":
+            is_landscape = rect.width() >= rect.height()
+        else:
+            is_landscape = orientation == "landscape"
+
         writer = QPdfWriter(str(path))
-        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        writer.setPageSize(QPageSize(PDF_PAGE_SIZES.get(page_size, QPageSize.PageSizeId.A4)))
+        writer.setPageOrientation(
+            QPageLayout.Orientation.Landscape if is_landscape else QPageLayout.Orientation.Portrait
+        )
         writer.setResolution(300)
         painter = QPainter(writer)
         was_grid_visible = self.grid_visible

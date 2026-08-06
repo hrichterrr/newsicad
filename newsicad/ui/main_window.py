@@ -38,7 +38,7 @@ from newsicad.core.undo import UndoStack
 from newsicad.io.dwg_bridge import DwgBridgeError, dwg_to_document
 from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 from newsicad.ui.block_editor_dialog import BlockEditorDialog
-from newsicad.ui.canvas import CanvasView
+from newsicad.ui.canvas import PDF_PAGE_SIZES, CanvasView
 from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.menu_bar import build_menu_bar
 from newsicad.ui.ribbon import build_ribbon
@@ -367,6 +367,11 @@ class MainWindow(QMainWindow):
         """PLOT/PUBLISH: exporta o desenho inteiro pra uma única página PDF
         (ver newsicad/ui/canvas.py:CanvasView.export_pdf — sem distinção real
         entre PLOT e PUBLISH, já que não há layouts/paper space no NewSIcad)."""
+        settings = self._prompt_pdf_export_settings()
+        if settings is None:
+            return
+        page_size, orientation = settings
+
         path_str, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF (*.pdf)")
         if not path_str:
             return
@@ -374,8 +379,42 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() != ".pdf":
             path = path.with_suffix(".pdf")
 
-        if not self.canvas.export_pdf(path):
+        if not self.canvas.export_pdf(path, page_size=page_size, orientation=orientation):
             QMessageBox.information(self, "Export PDF", "Nada para exportar: o desenho está vazio.")
+
+    def _prompt_pdf_export_settings(self) -> tuple[str, str] | None:
+        """Pergunta tamanho de folha (A4-A0) e orientação antes de exportar.
+        Retorna None se o usuário cancelar."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export PDF")
+        layout = QFormLayout(dialog)
+
+        size_combo = QComboBox()
+        size_combo.addItems(list(PDF_PAGE_SIZES.keys()))
+        size_combo.setCurrentText("A3")
+        layout.addRow("Tamanho da folha:", size_combo)
+
+        orientation_combo = QComboBox()
+        orientation_combo.addItem("Automático (recomendado)", "auto")
+        orientation_combo.addItem("Retrato", "portrait")
+        orientation_combo.addItem("Paisagem", "landscape")
+        layout.addRow("Orientação:", orientation_combo)
+
+        note = QLabel(
+            "O desenho inteiro é ajustado pra caber na folha (sem escala\n"
+            "real definida, ex.: 1:50) — ver limitações no README."
+        )
+        note.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addRow(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return size_combo.currentText(), orientation_combo.currentData()
 
     def _repeat_last_command(self) -> None:
         if self.interpreter.active or self.interpreter.last_command_name is None:
