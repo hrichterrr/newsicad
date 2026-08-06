@@ -7,7 +7,16 @@ import copy
 import math
 import uuid
 
-from newsicad.core.entities import Arc, Circle, Entity, Line, LWPolyline, Point
+from newsicad.core.entities import (
+    Arc,
+    BlockReference,
+    Circle,
+    Entity,
+    ImageReference,
+    Line,
+    LWPolyline,
+    Point,
+)
 
 
 # ---------------------------------------------------------------------- #
@@ -102,6 +111,8 @@ def translate_entity(entity: Entity, dx: float, dy: float) -> None:
         entity.center = translate_point(entity.center, dx, dy)
     elif isinstance(entity, LWPolyline):
         entity.points = [translate_point(p, dx, dy) for p in entity.points]
+    elif isinstance(entity, (BlockReference, ImageReference)):
+        entity.insertion_point = translate_point(entity.insertion_point, dx, dy)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -118,6 +129,13 @@ def rotate_entity(entity: Entity, base: Point, angle_rad: float) -> None:
         entity.end_angle = (entity.end_angle + angle_rad) % (2 * math.pi)
     elif isinstance(entity, LWPolyline):
         entity.points = [rotate_point(p, base, angle_rad) for p in entity.points]
+    elif isinstance(entity, BlockReference):
+        entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
+        entity.rotation = (entity.rotation + angle_rad) % (2 * math.pi)
+    elif isinstance(entity, ImageReference):
+        # Imagens não têm campo de rotação própria (ver ImageReference) —
+        # só o ponto de inserção acompanha o giro do grupo selecionado.
+        entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -134,6 +152,13 @@ def scale_entity(entity: Entity, base: Point, factor: float) -> None:
         entity.radius *= factor
     elif isinstance(entity, LWPolyline):
         entity.points = [scale_point(p, base, factor) for p in entity.points]
+    elif isinstance(entity, BlockReference):
+        entity.insertion_point = scale_point(entity.insertion_point, base, factor)
+        entity.scale *= factor
+    elif isinstance(entity, ImageReference):
+        entity.insertion_point = scale_point(entity.insertion_point, base, factor)
+        entity.width *= factor
+        entity.height *= factor
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -167,6 +192,14 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.end_angle = end_angle
     elif isinstance(mirrored, LWPolyline):
         mirrored.points = [mirror_point(p, p1, p2) for p in entity.points]
+    elif isinstance(mirrored, BlockReference):
+        # Simplificação: espelha o ponto de inserção e o ângulo, mas não
+        # inverte o conteúdo do bloco em si (exigiria escala negativa por
+        # eixo, que BlockReference não modela — ver README).
+        mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
+        mirrored.rotation = (-entity.rotation) % (2 * math.pi)
+    elif isinstance(mirrored, ImageReference):
+        mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 

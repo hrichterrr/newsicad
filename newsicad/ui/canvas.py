@@ -9,12 +9,15 @@ import math
 from typing import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsItemGroup,
     QGraphicsLineItem,
     QGraphicsPathItem,
+    QGraphicsPixmapItem,
+    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -22,7 +25,22 @@ from PySide6.QtWidgets import (
 
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.core.document import Document
-from newsicad.core.entities import Arc, Circle, Ellipse, Entity, Line, LWPolyline, Point
+from newsicad.core.entities import (
+    Arc,
+    BlockReference,
+    Circle,
+    Ellipse,
+    Entity,
+    ImageReference,
+    Line,
+    LWPolyline,
+    Point,
+)
+
+# Limite de profundidade para blocos aninhados (bloco cujo conteúdo referencia
+# outro bloco) — evita recursão infinita se um desenho malformado tiver um
+# ciclo (bloco A contém referência a B que contém referência a A).
+_MAX_BLOCK_NESTING = 8
 
 BACKGROUND_COLOR = "#1e1e1e"
 GRID_MINOR_COLOR = "#3a3a3a"
@@ -172,7 +190,20 @@ class CanvasView(QGraphicsView):
     def refresh_selection_highlight(self) -> None:
         selected_ids = self.interpreter.context.selection.ids
         for entity_id, item in self._entity_items.items():
-            item.setPen(_selected_pen() if entity_id in selected_ids else _entity_pen())
+            pen = _selected_pen() if entity_id in selected_ids else _entity_pen()
+            self._apply_pen(item, pen)
+
+    def _apply_pen(self, item: QGraphicsItem, pen: QPen) -> None:
+        """`QGraphicsItemGroup` (usado por BlockReference) e
+        `QGraphicsPixmapItem` (usado por ImageReference) não têm setPen —
+        propaga pra baixo nos filhos do grupo, ignora silenciosamente pra
+        itens de imagem (destaque de seleção de imagem fica só um "sem
+        efeito visual" nesta versão, ver README)."""
+        if isinstance(item, QGraphicsItemGroup):
+            for child in item.childItems():
+                self._apply_pen(child, pen)
+        elif hasattr(item, "setPen"):
+            item.setPen(pen)
 
     def _create_item(self, entity: Entity) -> QGraphicsItem:
         if isinstance(entity, Line):
@@ -226,7 +257,66 @@ class CanvasView(QGraphicsView):
             item.setPen(_entity_pen())
             return item
 
+        if isinstance(entity, BlockReference):
+            return self._create_block_reference_item(entity)
+
+        if isinstance(entity, ImageReference):
+            return self._create_image_item(entity)
+
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
+
+    def _create_block_reference_item(self, entity: BlockReference, _depth: int = 0) -> QGraphicsItem:
+        """Renderiza a instância criando os QGraphicsItem de cada entidade da
+        definição do bloco (coordenadas relativas ao ponto base) dentro de um
+        QGraphicsItemGroup, e aplicando a transformação de inserção no grupo
+        (translação/escala/rotação) — não achata a geometria em memória."""
+        group = QGraphicsItemGroup()
+        if _depth >= _MAX_BLOCK_NESTING:
+            return group
+
+        definition = self.document.block_definitions.get(entity.block_name, [])
+        for child_entity in definition:
+            try:
+                if isinstance(child_entity, BlockReference):
+                    child_item = self._create_block_reference_item(child_entity, _depth + 1)
+                else:
+                    child_item = self._create_item(child_entity)
+            except TypeError:
+                continue
+            group.addToGroup(child_item)
+
+        pos = cad_to_scene(entity.insertion_point)
+        group.setPos(pos)
+        group.setRotation(-math.degrees(entity.rotation))
+        group.setScale(entity.scale if entity.scale else 1.0)
+        return group
+
+    def _create_image_item(self, entity: ImageReference) -> QGraphicsItem:
+        """ImageReference: insertion_point é o canto inferior-esquerdo (em
+        coordenadas CAD, Y para cima) do retângulo width x height."""
+        pixmap = QPixmap(str(entity.path))
+        top_left_cad = Point(entity.insertion_point.x, entity.insertion_point.y + entity.height)
+        pos = cad_to_scene(top_left_cad)
+
+        if pixmap.isNull():
+            # Arquivo ausente/corrompido: mostra um retângulo tracejado no
+            # lugar em vez de deixar a imagem sumir silenciosamente.
+            item = QGraphicsRectItem(pos.x(), pos.y(), entity.width, entity.height)
+            pen = QPen(QColor(ENTITY_COLOR))
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setWidth(0)
+            item.setPen(pen)
+            return item
+
+        pixmap_item = QGraphicsPixmapItem(pixmap)
+        pixmap_item.setPos(pos)
+        pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        if pixmap.width() > 0 and pixmap.height() > 0:
+            pixmap_item.setScale(1.0)
+            transform = QTransform()
+            transform.scale(entity.width / pixmap.width(), entity.height / pixmap.height())
+            pixmap_item.setTransform(transform)
+        return pixmap_item
 
     # ------------------------------------------------------------------ #
     # hit-testing / seleção
@@ -274,7 +364,48 @@ class CanvasView(QGraphicsView):
                 if best is None or d < best:
                     best = d
             return best
+        if isinstance(entity, BlockReference):
+            return self._distance_to_block_reference(p, entity)
+        if isinstance(entity, ImageReference):
+            return self._distance_to_image(p, entity)
         return None
+
+    def _distance_to_block_reference(self, p: Point, entity: BlockReference, _depth: int = 0) -> float | None:
+        """Aproxima a distância transformando o ponto de teste para o espaço
+        local da definição (desfaz translação/rotação/escala da inserção) e
+        reaproveita `_distance_to_entity` em cada entidade do bloco, depois
+        reescala o resultado de volta pra unidades do mundo (só correto para
+        escala uniforme, que é o único modo que BlockReference suporta)."""
+        if _depth >= _MAX_BLOCK_NESTING:
+            return None
+        scale = entity.scale if entity.scale else 1.0
+        dx, dy = p.x - entity.insertion_point.x, p.y - entity.insertion_point.y
+        cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
+        local = Point((dx * cos_a - dy * sin_a) / scale, (dx * sin_a + dy * cos_a) / scale)
+
+        best: float | None = None
+        for child in self.document.block_definitions.get(entity.block_name, []):
+            if isinstance(child, BlockReference):
+                d = self._distance_to_block_reference(local, child, _depth + 1)
+            else:
+                d = self._distance_to_entity(local, child)
+            if d is None:
+                continue
+            d_world = d * scale
+            if best is None or d_world < best:
+                best = d_world
+        return best
+
+    def _distance_to_image(self, p: Point, entity: ImageReference) -> float | None:
+        x0, y0 = entity.insertion_point.x, entity.insertion_point.y
+        x1, y1 = x0 + entity.width, y0 + entity.height
+        corners = [Point(x0, y0), Point(x1, y0), Point(x1, y1), Point(x0, y1)]
+        best: float | None = None
+        for a, b in zip(corners, corners[1:] + corners[:1]):
+            d = _point_segment_distance(p, a, b)
+            if best is None or d < best:
+                best = d
+        return best
 
     def _entity_bbox_scene(self, entity: Entity) -> QRectF:
         if isinstance(entity, Line):
@@ -296,7 +427,36 @@ class CanvasView(QGraphicsView):
             xs = [pt.x() for pt in pts]
             ys = [pt.y() for pt in pts]
             return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, BlockReference):
+            return self._block_reference_bbox_scene(entity)
+        if isinstance(entity, ImageReference):
+            pos = cad_to_scene(Point(entity.insertion_point.x, entity.insertion_point.y + entity.height))
+            return QRectF(pos.x(), pos.y(), entity.width, entity.height)
         return QRectF()
+
+    def _block_reference_bbox_scene(self, entity: BlockReference, _depth: int = 0) -> QRectF:
+        if _depth >= _MAX_BLOCK_NESTING:
+            return QRectF()
+        local_rect: QRectF | None = None
+        for child in self.document.block_definitions.get(entity.block_name, []):
+            child_rect = (
+                self._block_reference_bbox_scene(child, _depth + 1)
+                if isinstance(child, BlockReference)
+                else self._entity_bbox_scene(child)
+            )
+            if child_rect.isNull():
+                continue
+            local_rect = child_rect if local_rect is None else local_rect.united(child_rect)
+        if local_rect is None:
+            return QRectF()
+
+        transform = QTransform()
+        pos = cad_to_scene(entity.insertion_point)
+        transform.translate(pos.x(), pos.y())
+        transform.rotate(-math.degrees(entity.rotation))
+        scale = entity.scale if entity.scale else 1.0
+        transform.scale(scale, scale)
+        return transform.mapRect(local_rect)
 
     def _handle_selection_press(self, event) -> None:
         scene_pos = self.mapToScene(self._event_pos(event))
@@ -440,18 +600,52 @@ class CanvasView(QGraphicsView):
     def zoom_out(self) -> None:
         self.scale(1 / 1.25, 1 / 1.25)
 
-    def zoom_extents(self) -> None:
+    def compute_extents_rect(self, margin_ratio: float = 0.1) -> QRectF | None:
+        """Bounding box (coordenadas de cena) de todas as entidades do
+        documento, com margem — usado por zoom_extents() e por export_pdf()."""
         if not self.document.entities:
-            return
+            return None
         rect: QRectF | None = None
         for entity in self.document.entities.values():
             bbox = self._entity_bbox_scene(entity)
             rect = bbox if rect is None else rect.united(bbox)
         if rect is None or rect.isEmpty():
+            return None
+        margin = max(rect.width(), rect.height()) * margin_ratio or 1.0
+        return rect.adjusted(-margin, -margin, margin, margin)
+
+    def zoom_extents(self) -> None:
+        rect = self.compute_extents_rect()
+        if rect is None:
             return
-        margin = max(rect.width(), rect.height()) * 0.1 or 1.0
-        rect = rect.adjusted(-margin, -margin, margin, margin)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def export_pdf(self, path) -> bool:
+        """PLOT/PUBLISH: renderiza todas as entidades do documento (não só o
+        que está visível na tela) numa única página PDF via QPdfWriter.
+
+        Simplificação documentada no README: o NewSIcad não tem conceito de
+        layouts/paper space, então não existe distinção real entre "imprimir
+        a vista atual" (PLOT) e "publicar várias folhas" (PUBLISH) — os dois
+        comandos chamam este mesmo método (uma folha, o desenho inteiro)."""
+        from PySide6.QtGui import QPageSize, QPdfWriter
+
+        rect = self.compute_extents_rect()
+        if rect is None:
+            return False
+
+        writer = QPdfWriter(str(path))
+        writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+        writer.setResolution(300)
+        painter = QPainter(writer)
+        was_grid_visible = self.grid_visible
+        self.grid_visible = False
+        try:
+            self._scene.render(painter, source=rect)
+        finally:
+            self.grid_visible = was_grid_visible
+            painter.end()
+        return True
 
     def zoom_window(self, p1: Point, p2: Point) -> None:
         """Zoom pra uma janela definida por dois pontos em coordenadas CAD

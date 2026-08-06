@@ -416,11 +416,21 @@ def _build_insert_tab(window: "MainWindow") -> QWidget:
     block_panel = _panel(
         "Block",
         [
-            _button("Insert", _icon_block),
+            _button("Create", _icon_block, lambda: window._start_command("BLOCK")),
+            _button("Insert", _icon_block, lambda: window._start_command("INSERT")),
+            _button("Edit Block", _icon_block, lambda: window._start_command("BEDIT")),
             _button("Hatch", _icon_hatch),
         ],
     )
-    return _row([block_panel])
+    reference_panel = _panel(
+        "Reference",
+        [
+            _button("Attach Image", _icon_block, lambda: window._start_command("IMAGEATTACH")),
+            _button("Attach XREF", _icon_block, lambda: window._start_command("XREF")),
+            _button("Xref Panel", _icon_block, lambda: window._start_command("EXTERNALREFERENCES")),
+        ],
+    )
+    return _row([block_panel, reference_panel])
 
 
 def _build_annotate_tab(window: "MainWindow") -> QWidget:
@@ -472,6 +482,7 @@ def _build_file_tab(window: "MainWindow") -> QWidget:
             _button("New", _icon_new, window._new_document),
             _button("Open", _icon_open, window._open_file),
             _button("Save", _icon_save, window._save_file),
+            _button("Export PDF", _icon_save, window._export_pdf),
         ],
     )
     return _row([file_panel])

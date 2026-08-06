@@ -25,6 +25,11 @@ class Document:
         self.current_layer: str = "0"
         self.entities: dict[str, Entity] = {}
         self.units: str = "mm"
+        # Definições de bloco: nome -> lista de entidades "template" com
+        # coordenadas relativas ao ponto base do bloco (ver BlockReference
+        # em newsicad/core/entities.py). Não são entidades do desenho —
+        # só as instâncias (BlockReference) aparecem em `self.entities`.
+        self.block_definitions: dict[str, list[Entity]] = {}
 
     def add_layer(self, name: str, color: str = DEFAULT_LAYER_COLOR) -> Layer:
         layer = self.layers.get(name)
@@ -56,3 +61,10 @@ class Document:
 
     def clear(self) -> None:
         self.entities.clear()
+        self.block_definitions.clear()
+
+    def define_block(self, name: str, entities: list[Entity]) -> None:
+        self.block_definitions[name] = entities
+
+    def get_block_definition(self, name: str) -> list[Entity]:
+        return self.block_definitions.get(name, [])

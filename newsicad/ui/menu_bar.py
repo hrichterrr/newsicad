@@ -74,6 +74,12 @@ def _build_file_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(save_as_action)
 
     menu.addSeparator()
+    export_pdf_action = QAction("Print/Export PDF...", window)
+    export_pdf_action.setShortcut(QKeySequence("Ctrl+P"))
+    export_pdf_action.triggered.connect(window._export_pdf)
+    menu.addAction(export_pdf_action)
+
+    menu.addSeparator()
     exit_action = QAction("Exit", window)
     exit_action.triggered.connect(window.close)
     menu.addAction(exit_action)
@@ -164,7 +170,11 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
 
 def _build_insert_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Insert")
-    _add_disabled(menu, "Block...")
+    _add_command_action(menu, "Insert Block...", "INSERT", window)
+    menu.addSeparator()
+    _add_command_action(menu, "Attach Image...", "IMAGEATTACH", window)
+    _add_command_action(menu, "External Reference (XREF)...", "XREF", window)
+    _add_command_action(menu, "External References Panel...", "EXTERNALREFERENCES", window)
 
 
 def _build_draw_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
@@ -177,7 +187,8 @@ def _build_draw_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     _add_command_action(menu, "Ellipse", "ELLIPSE", window)
     menu.addSeparator()
     _add_disabled(menu, "Hatch...")
-    _add_disabled(menu, "Block...")
+    _add_command_action(menu, "Create Block...", "BLOCK", window)
+    _add_command_action(menu, "Edit Block Definition (BEDIT)...", "BEDIT", window)
     _add_disabled(menu, "Region")
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from newsicad.core.document import Document
-from newsicad.core.entities import Arc, Circle, Ellipse, Line, LWPolyline, Point
+from newsicad.core.entities import Arc, BlockReference, Circle, Ellipse, Line, LWPolyline, Point
 from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 
 
@@ -114,3 +114,68 @@ def test_load_dxf_missing_file_raises_dxf_io_error():
         missing_path = Path(tmp_dir) / "does_not_exist.dxf"
         with pytest.raises(DxfIoError):
             load_dxf(missing_path)
+
+
+def test_round_trip_preserves_block_definition_and_reference():
+    """Define um bloco (BLOCK), insere uma instância (INSERT), salva .dxf,
+    reabre, e confirma que tanto a definição quanto a BlockReference
+    (com escala/rotação/ponto de inserção) sobrevivem ao round-trip."""
+    original = Document()
+    original.define_block(
+        "CHAIR",
+        [
+            Line(layer="0", start=Point(0, 0), end=Point(2, 0)),
+            Circle(layer="0", center=Point(1, 1), radius=0.5),
+        ],
+    )
+    original.add_entity(
+        BlockReference(
+            layer="0",
+            block_name="CHAIR",
+            insertion_point=Point(10, 20),
+            scale=2.5,
+            rotation=math.radians(37),
+        )
+    )
+    # Uma segunda instância do mesmo bloco, pra garantir que a definição não
+    # é duplicada e que múltiplas referências ao mesmo nome funcionam.
+    original.add_entity(
+        BlockReference(
+            layer="0",
+            block_name="CHAIR",
+            insertion_point=Point(-5, -5),
+            scale=1.0,
+            rotation=0.0,
+        )
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "blocks_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    assert "CHAIR" in loaded.block_definitions
+    def_entities = loaded.block_definitions["CHAIR"]
+    assert len(def_entities) == 2
+
+    def_line = next(e for e in def_entities if isinstance(e, Line))
+    assert def_line.start.x == pytest.approx(0)
+    assert def_line.end.x == pytest.approx(2)
+
+    def_circle = next(e for e in def_entities if isinstance(e, Circle))
+    assert def_circle.center.x == pytest.approx(1)
+    assert def_circle.radius == pytest.approx(0.5)
+
+    refs = [e for e in loaded.all_entities() if isinstance(e, BlockReference)]
+    assert len(refs) == 2
+
+    ref_a = next(r for r in refs if r.insertion_point.x == pytest.approx(10))
+    assert ref_a.block_name == "CHAIR"
+    assert ref_a.insertion_point.y == pytest.approx(20)
+    assert ref_a.scale == pytest.approx(2.5)
+    assert ref_a.rotation == pytest.approx(math.radians(37))
+
+    ref_b = next(r for r in refs if r.insertion_point.x == pytest.approx(-5))
+    assert ref_b.scale == pytest.approx(1.0)
+    assert ref_b.rotation == pytest.approx(0.0)

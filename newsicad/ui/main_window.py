@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QFormLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from newsicad.commands.block_commands import place_image_command, place_reference_command
 from newsicad.commands.context import CommandContext
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.commands.registry import ALIASES, COMMAND_REGISTRY
@@ -35,10 +37,12 @@ from newsicad.core.selection import Selection
 from newsicad.core.undo import UndoStack
 from newsicad.io.dwg_bridge import DwgBridgeError, dwg_to_document
 from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
+from newsicad.ui.block_editor_dialog import BlockEditorDialog
 from newsicad.ui.canvas import CanvasView
 from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.menu_bar import build_menu_bar
 from newsicad.ui.ribbon import build_ribbon
+from newsicad.ui.xref_panel import XrefPanel
 
 APP_TITLE = "NewSIcad — Developed by HRichter"
 
@@ -244,6 +248,26 @@ class MainWindow(QMainWindow):
             self._show_units_dialog()
             self._after_interpreter_step()
             return
+        if name in ("BEDIT", "REFEDIT"):
+            self._start_bedit()
+            self._after_interpreter_step()
+            return
+        if name == "XREF":
+            self._start_xref()
+            self._after_interpreter_step()
+            return
+        if name == "EXTERNALREFERENCES":
+            XrefPanel(self).exec()
+            self._after_interpreter_step()
+            return
+        if name == "IMAGEATTACH":
+            self._start_imageattach()
+            self._after_interpreter_step()
+            return
+        if name in ("PLOT", "PUBLISH"):
+            self._export_pdf()
+            self._after_interpreter_step()
+            return
         self.undo_stack.push()
         self.interpreter.start(text)
         self._after_interpreter_step()
@@ -280,6 +304,78 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.document.units = combo.currentText()
+
+    # ------------------------------------------------------------------ #
+    # blocos: Block Editor (BEDIT/REFEDIT), referências externas (XREF/ER),
+    # imagem raster (IMAGEATTACH), exportação PDF (PLOT/PUBLISH)
+    # ------------------------------------------------------------------ #
+    def _start_bedit(self) -> None:
+        """BEDIT abre o editor para um bloco escolhido por nome numa lista.
+        REFEDIT também cai aqui (ver newsicad/ui/block_editor_dialog.py para
+        a limitação: não há seleção de referência por clique no canvas)."""
+        if not self.document.block_definitions:
+            QMessageBox.information(
+                self, "Block Editor",
+                "Nenhum bloco definido neste desenho ainda. Use BLOCK para criar um.",
+            )
+            return
+        names = sorted(self.document.block_definitions.keys())
+        name, ok = QInputDialog.getItem(self, "Edit Block Definition", "Block:", names, 0, False)
+        if not ok or not name:
+            return
+        BlockEditorDialog(self, name).exec()
+
+    def _start_xref(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Select external DXF reference", "", "DXF (*.dxf)"
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            loaded, skipped = load_dxf(path)
+        except DxfIoError as exc:
+            QMessageBox.critical(self, "Erro ao referenciar arquivo externo", str(exc))
+            return
+
+        block_name = f"XREF:{path.stem}"
+        self.document.define_block(block_name, loaded.all_entities())
+        if skipped > 0:
+            self.interpreter.log.append(
+                f"Aviso: {skipped} entidade(s) da xref não são suportadas e foram ignoradas."
+            )
+
+        self.undo_stack.push()
+        self.interpreter.log.append(f"Command: XREF ({path.name})")
+        generator = place_reference_command(self.context, block_name, is_xref=True, xref_path=path)
+        self.interpreter.start_generator(generator)
+
+    def _start_imageattach(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Select image", "", "Imagens (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+
+        self.undo_stack.push()
+        self.interpreter.log.append(f"Command: IMAGEATTACH ({path.name})")
+        generator = place_image_command(self.context, path)
+        self.interpreter.start_generator(generator)
+
+    def _export_pdf(self) -> None:
+        """PLOT/PUBLISH: exporta o desenho inteiro pra uma única página PDF
+        (ver newsicad/ui/canvas.py:CanvasView.export_pdf — sem distinção real
+        entre PLOT e PUBLISH, já que não há layouts/paper space no NewSIcad)."""
+        path_str, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF (*.pdf)")
+        if not path_str:
+            return
+        path = Path(path_str)
+        if path.suffix.lower() != ".pdf":
+            path = path.with_suffix(".pdf")
+
+        if not self.canvas.export_pdf(path):
+            QMessageBox.information(self, "Export PDF", "Nada para exportar: o desenho está vazio.")
 
     def _repeat_last_command(self) -> None:
         if self.interpreter.active or self.interpreter.last_command_name is None:
@@ -321,6 +417,8 @@ class MainWindow(QMainWindow):
         self.document.clear()
         for layer in loaded.layers.values():
             self.document.add_layer(layer.name, layer.color)
+        for name, entities in loaded.block_definitions.items():
+            self.document.define_block(name, entities)
         for entity in loaded.all_entities():
             self.document.add_entity(entity)
         self.selection.clear()

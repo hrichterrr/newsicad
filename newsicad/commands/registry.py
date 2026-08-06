@@ -12,6 +12,7 @@ geradores de prompts, são tratados à parte pela MainWindow (`_start_command`).
 
 from __future__ import annotations
 
+from newsicad.commands import block_commands as bc
 from newsicad.commands import draw_commands as dc
 from newsicad.commands import modify_commands as mc
 from newsicad.commands import view_commands as vc
@@ -33,6 +34,9 @@ COMMAND_REGISTRY = {
     "ROTATE": mc.rotate_command,
     "SCALE": mc.scale_command,
     "MIRROR": mc.mirror_command,
+    # blocos
+    "BLOCK": bc.block_command,
+    "INSERT": bc.insert_command,
     # navegação
     "ZOOM": vc.zoom_command,
     "PAN": vc.pan_command,
@@ -43,7 +47,7 @@ COMMAND_REGISTRY = {
 # MainWindow._start_command — ficam desabilitados no menu/ribbon e dão um
 # aviso claro na linha de comando em vez de "comando desconhecido".
 PLANNED_COMMANDS = {
-    "HATCH", "BLOCK", "INSERT", "REGION",
+    "HATCH", "REGION",
     "MTEXT", "TABLE", "LEADER",
     "DIMLINEAR", "DIMALIGNED", "DIMANGULAR", "DIMRADIUS", "DIMDIAMETER",
     "DIMSTYLE", "DIM", "DIMEDIT", "DIMREASSOCIATE",
@@ -52,10 +56,22 @@ PLANNED_COMMANDS = {
     "STRETCH", "DIVIDE", "PEDIT", "HATCHEDIT", "ALIGN", "ARRAY", "BOUNDARY",
     "MEASURE", "INTERSECT",
     "POLYGON", "SPLINE",
-    "BEDIT", "REFEDIT", "XREF", "EXTERNALREFERENCES", "IMAGEATTACH", "VIEWPORTS",
+    # VIEWPORTS fica planejado de propósito: um viewport de verdade vive numa
+    # layout de paper space, conceito que o NewSIcad não tem (só um espaço de
+    # modelo único). Uma versão simplificada ("janela congelada" dentro do
+    # próprio modelo) seria só um gadget de zoom duplicado sem paralelo real
+    # no AutoCAD — decidimos não fingir essa funcionalidade (ver README).
+    "VIEWPORTS",
     "OPTIONS", "STYLE", "GEOMCONSTRAINT", "DSETTINGS",
-    "PLOT", "PUBLISH", "DVIEW",
+    "DVIEW",
 }
+
+# BEDIT, REFEDIT, XREF, EXTERNALREFERENCES, IMAGEATTACH, PLOT e PUBLISH estão
+# implementados, mas — assim como UNITS/REGEN — não passam pelo sistema de
+# Prompt (point/distance/text/keyword/selection): precisam de um QDialog ou
+# QFileDialog, então a MainWindow os intercepta antes de chamar
+# CommandInterpreter.start() (ver MainWindow._start_command em
+# newsicad/ui/main_window.py). Por isso não aparecem em COMMAND_REGISTRY.
 
 ALIASES = {
     # --- desenho (DRAW) ---

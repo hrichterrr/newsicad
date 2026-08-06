@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -90,3 +91,34 @@ class LWPolyline(Entity):
         if self.closed and len(pts) > 2:
             pairs.append((pts[-1], pts[0]))
         return pairs
+
+
+@dataclass
+class BlockReference(Entity):
+    """Instância de um bloco inserida no desenho (comando INSERT). A
+    geometria de verdade fica em `Document.block_definitions[block_name]`
+    (uma lista de entidades "template" com coordenadas relativas ao ponto
+    base do bloco) — esta entidade só guarda a transformação de inserção.
+
+    `is_xref`/`xref_path` marcam uma referência externa (comando XREF):
+    tecnicamente é a mesma coisa que um bloco comum, mas a definição foi
+    importada de um arquivo .dxf externo em vez de ter sido desenhada no
+    documento atual. Ver README para as limitações (sem watch de arquivo)."""
+
+    block_name: str = ""
+    insertion_point: Point = field(default_factory=lambda: Point(0, 0))
+    scale: float = 1.0
+    rotation: float = 0.0  # radianos
+    is_xref: bool = False
+    xref_path: Path | None = None
+
+
+@dataclass
+class ImageReference(Entity):
+    """Referência a uma imagem raster (.png/.jpg) inserida no desenho
+    (comando IMAGEATTACH). Não sobrevive à gravação em .dxf — ver README."""
+
+    path: Path = field(default_factory=Path)
+    insertion_point: Point = field(default_factory=lambda: Point(0, 0))
+    width: float = 100.0
+    height: float = 100.0

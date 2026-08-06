@@ -74,6 +74,18 @@ class CommandInterpreter:
         self.last_command_name = name
         return self._advance(None)
 
+    def start_generator(self, generator: Generator[Prompt, object, None]) -> Prompt | None:
+        """Inicia um generator de comando já construído (parâmetros extras
+        fechados via closure), sem passar pelo lookup normal de nome/registry.
+
+        Usado por fluxos que precisam de uma etapa de UI própria antes dos
+        prompts point/distance/text (ex.: XREF e IMAGEATTACH abrem um
+        QFileDialog na MainWindow primeiro, e só depois alimentam este
+        generator com o restante — ver newsicad/commands/block_commands.py)."""
+        self._generator = generator
+        self.last_command_name = None
+        return self._advance(None)
+
     def repeat_last(self) -> Prompt | None:
         if self.last_command_name is None:
             return None

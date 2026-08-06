@@ -6,7 +6,7 @@ CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha 
 
 ## Status
 
-Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD.
+Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD + **blocos, referências externas e exportação PDF** (branch `feature/blocks-refs-plot`).
 
 Implementado:
 - Canvas escuro com grid adaptativo, crosshair, zoom (scroll) e pan (botão do meio)
@@ -25,8 +25,58 @@ Implementado:
 - Entrada de coordenadas absoluta, relativa (`@dx,dy`), polar (`@dist<ang`) e distância direta (mover o mouse + digitar número)
 - Toggles GRID / SNAP / ORTHO / DYN funcionais na barra de status (F7 / F9 / F8 / F12); POLAR / OSNAP / OTRACK já aparecem na UI mas ainda não afetam a captura de pontos
 - Todos os atalhos do guia rápido do AutoCAD são reconhecidos como comandos (mesmo os ainda não implementados, que respondem com uma mensagem clara em vez de "comando desconhecido")
+- **Blocos (`BLOCK`/`B`, `INSERT`/`I`)**: define um bloco a partir de entidades selecionadas (coordenadas gravadas relativas ao ponto base, entidades originais "consumidas" e substituídas por uma instância — igual ao AutoCAD) e insere instâncias (`BlockReference`, com escala/rotação) de blocos já definidos. Sobrevive a salvar/reabrir `.dxf` de verdade (bloco vira `BLOCK`/`INSERT` do DXF, testado com round-trip automatizado)
+- **Block Editor (`BEDIT`/`BE`, `REFEDIT`)**: abre um mini-desenho à parte (mesmo canvas/interpretador/linha de comando da janela principal) com cópias das entidades da definição — todos os comandos normais funcionam lá dentro (LINE, ERASE, MOVE, outro BLOCK aninhado...). "Save" grava de volta na definição e atualiza todas as instâncias no desenho principal automaticamente. Ver limitações na seção "Blocos e referências" abaixo
+- **Referências externas (`XREF`/`XR`, `EXTERNALREFERENCES`/`ER`)**: XREF anexa um `.dxf` externo como uma `BlockReference` marcada (`is_xref=True`); o painel EXTERNALREFERENCES lista as xrefs do desenho (nome + caminho) com um botão Reload que relê o arquivo. **Sem watch automático de arquivo** — ver limitações abaixo
+- **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. **Não é gravada em `.dxf`** — ver limitações
+- **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`
 
-Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, BLOCK/INSERT/REGION (sistema de blocos), MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, gravação de `.dwg` (ver nota abaixo).
+Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, REGION, MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, `VIEWPORTS`/`VM` (decisão consciente de não implementar — ver abaixo), gravação de `.dwg` (ver nota abaixo).
+
+### Blocos e referências — simplificações documentadas
+
+Esta seção existe pra ser honesta sobre o que é uma versão "de verdade" e o
+que é uma versão reduzida, propositalmente, dentro do orçamento deste marco:
+
+- **BEDIT/REFEDIT não distinguem instâncias**: o Block Editor escolhe o
+  bloco a editar por NOME numa lista (`QInputDialog`), não clicando numa
+  referência específica no desenho como o REFEDIT de verdade do AutoCAD
+  (que edita "in place", destacando o resto do desenho). Como toda
+  `BlockReference` do mesmo bloco compartilha a mesma definição, editar por
+  nome já cobre o caso de uso principal (mudar a geometria do bloco em
+  todas as instâncias de uma vez) — só não cobre "editar só esta instância
+  sem afetar as outras" (que no AutoCAD de verdade exigiria um bloco novo).
+- **Sem undo dentro do Block Editor**: o mini-editor não tem sua própria
+  pilha de undo; Cancel descarta tudo, Save grava tudo. Não afeta o undo
+  do desenho principal (que continua funcionando normalmente).
+- **XREF sem "live link"**: diferente do AutoCAD, não há verificação
+  automática se o arquivo `.dxf` referenciado mudou — "atualizar" significa
+  clicar em Reload no painel EXTERNALREFERENCES manualmente. Além disso,
+  ao salvar o desenho como `.dxf`, uma xref vira um `BLOCK`/`INSERT` comum
+  (perde a marcação `is_xref`/o caminho do arquivo original) — reabrir
+  esse `.dxf` não vai mais oferecer "Reload" pra esse bloco.
+- **Imagem raster não sobrevive ao `.dxf`**: `ImageReference` é só um
+  conceito do NewSIcad em memória; salvar como `.dxf` descarta silenciosamente
+  qualquer imagem inserida (raster embutido em DXF é raro e complexo o
+  suficiente pra ficar fora de escopo). Se o arquivo de imagem não existir
+  ou não puder ser aberto, o canvas mostra um retângulo tracejado no lugar
+  em vez de quebrar.
+- **`VIEWPORTS`/`VM` foi deixado como planejado, de propósito**: um
+  viewport de verdade vive numa layout de papel (paper space), conceito que
+  o NewSIcad não tem — só existe um espaço de modelo único. Avaliamos uma
+  versão simplificada ("janela congelada" mostrando uma vista/zoom
+  diferente dentro do próprio modelo), mas decidimos não implementar: sem
+  paper space por trás, isso seria só um gadget de zoom duplicado sem
+  paralelo real no fluxo de trabalho do AutoCAD — preferimos não fingir uma
+  funcionalidade capenga. Fica em `PLANNED_COMMANDS` (`newsicad/commands/registry.py`).
+- **`PLOT`/`PUBLISH` não distinguem folhas**: como não há layouts/paper
+  space, os dois comandos fazem exatamente a mesma coisa (uma única página
+  PDF com o desenho inteiro) — no AutoCAD real, PUBLISH lida com múltiplas
+  folhas/layouts, o que não existe aqui.
+- **MIRROR de um `BlockReference`** espelha o ponto de inserção e inverte o
+  ângulo de rotação, mas não inverte o CONTEÚDO do bloco (isso exigiria
+  escala negativa por eixo, que o modelo atual de `BlockReference` — escala
+  uniforme única — não representa).
 
 ## Instalação
 
@@ -107,6 +157,15 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | ROTATE | RO | Rotaciona objetos selecionados (ângulo digitado) |
 | SCALE | SC | Escala objetos selecionados (fator digitado) |
 | MIRROR | MI | Espelha objetos selecionados |
+| BLOCK | B | Define um bloco a partir de objetos selecionados (nome, ponto base, seleção) |
+| INSERT | I | Insere uma instância de um bloco já definido (nome, ponto, escala, rotação) |
+| BEDIT | BE | Abre o Block Editor para uma definição de bloco existente |
+| REFEDIT | — | Mesma coisa que BEDIT nesta versão (ver limitações) |
+| XREF | XR | Anexa um `.dxf` externo como referência (`BlockReference` marcada) |
+| EXTERNALREFERENCES | ER | Abre o painel de xrefs (lista + Reload) |
+| IMAGEATTACH | IM | Insere uma imagem raster (`.png`/`.jpg`/`.bmp`) |
+| PLOT | — | Exporta o desenho inteiro para PDF |
+| PUBLISH | — | Mesma coisa que PLOT nesta versão (sem layouts/paper space) |
 | UNDO | U | Desfaz o último comando |
 
 Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, roda do mouse dá zoom, botão do meio faz pan, clique direito equivale a Enter. Nos comandos de modificação, clique seleciona um objeto (Shift+clique alterna), e arrastar numa área vazia seleciona por janela/crossing.
@@ -118,16 +177,17 @@ Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, r
 | Ctrl+O | Abre um desenho `.dxf` ou `.dwg` (File > Open...) |
 | Ctrl+S | Salva no arquivo atual (`.dxf`; pede um caminho se ainda não houver um) |
 | Ctrl+Shift+S | Salva como... (`.dxf`) |
+| Ctrl+P | Exporta o desenho para PDF (`PLOT`/`PUBLISH`) |
 
 ## Estrutura
 
 ```
 newsicad/
-  core/        modelo de documento, entidades, seleção, geometria (translate/rotate/mirror/scale), undo
-  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho e modificação
-  ui/          canvas Qt, linha de comando, menu superior, janela principal
-  io/          leitura/gravação DXF (dxf_io.py) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
-tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto e undo/redo
+  core/        modelo de documento (Document.block_definitions), entidades (inclui BlockReference/ImageReference), seleção, geometria (translate/rotate/mirror/scale), undo
+  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho/modificação/blocos (block_commands.py)
+  ui/          canvas Qt (renderiza BlockReference/ImageReference), linha de comando, menu superior, janela principal, Block Editor (block_editor_dialog.py), painel de xrefs (xref_panel.py)
+  io/          leitura/gravação DXF (dxf_io.py, com blocos/INSERT) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
+tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto, undo/redo, blocos/xref/imagem/PDF
 ```
 
 ## Testes
@@ -140,7 +200,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-69/69 testes passando (validado no macOS nesta versão, incluindo os testes novos de DXF/DWG/menu File). A versão anterior — sem File Open/Save — foi validada também no Windows 11/Python 3.12 com 56/56; essa validação específica no Windows ainda não foi refeita com os 13 testes novos.
+104/104 testes passando (validado no macOS nesta versão — 83 pré-existentes + 21 novos deste marco de blocos/referências/PDF: `test_block_commands.py`, `test_block_canvas.py`, `test_block_ui_flows.py`, e a extensão de `test_dxf_io.py` com round-trip de bloco/INSERT). Essa validação foi feita só no macOS; a versão anterior (sem blocos) tinha sido validada também no Windows 11/Python 3.12 — essa validação específica ainda não foi refeita com os testes novos.
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 
