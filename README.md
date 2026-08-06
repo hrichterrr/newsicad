@@ -6,7 +6,10 @@ CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha 
 
 ## Status
 
-Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD.
+Em desenvolvimento — marco atual: desenho + modificação (seleção,
+MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD + **OSNAP
+e POLAR de verdade** + **comandos de edição geométrica** (TRIM, EXTEND,
+OFFSET, FILLET, CHAMFER, JOIN, EXPLODE, STRETCH, DIVIDE, MEASURE).
 
 Implementado:
 - Canvas escuro com grid adaptativo, crosshair, zoom (scroll) e pan (botão do meio)
@@ -19,14 +22,32 @@ Implementado:
 - Medição: `DIST`(DI)
 - Seleção de objetos: clique único, Shift+clique (alterna), e arrasto por janela (esquerda→direita, seleciona só o que está totalmente dentro) ou crossing (direita→esquerda, seleciona qualquer coisa que a janela toque) — igual ao AutoCAD
 - Comandos de modificação: `ERASE`(E), `MOVE`(M), `COPY`(CO/CP), `ROTATE`(RO), `SCALE`(SC), `MIRROR`(MI)
+- **OSNAP (F3) de verdade**: durante qualquer prompt de ponto, o cursor gruda no snap mais próximo dentro de uma tolerância em pixels, entre Endpoint (quadrado), Midpoint (triângulo), Center (círculo) e Intersection (X) — marcador visual verde desenhado em `CanvasView.drawForeground`. Endpoint/Midpoint cobrem Line e cada segmento de LWPolyline; Center cobre Circle/Arc/Ellipse; Intersection usa a nova geometria de interseção de `geometry_ops.py` (segmento×segmento e segmento×círculo/arco) entre pares de entidades próximas do cursor.
+- **POLAR (F10) de verdade**: quando ativo (e ORTHO desativado — os dois são mutuamente exclusivos, ORTHO tem prioridade se ambos ligados), o cursor gruda no múltiplo de 15° mais próximo a partir do último ponto, dentro de uma tolerância angular de 3°. Funciona tanto no clique quanto no preview/dynamic input.
+- **TRIM** (TR): seleciona cutting edges, depois clica no segmento a aparar — remove a porção do lado clicado até a interseção mais próxima. Suporta Line, Circle e Arc como objeto aparado (Circle vira Arc quando aparado); cutting edges podem ser Line/Circle/Arc/LWPolyline.
+- **EXTEND** (EX): seleciona boundary edges, clica numa Line pra estendê-la até a borda mais próxima na direção do clique. Boundary edges podem ser Line/Circle/Arc/LWPolyline. (Só estende objetos Line nesta versão — ver limitações.)
+- **OFFSET** (O): distância + clique no objeto + clique do lado — Line vira linha paralela, Circle/Arc mantêm centro com raio ±distância, LWPolyline desloca cada segmento e reconecta pelas retas suporte (aproximação razoável, não trata auto-interseção).
+- **FILLET** (F): fluxo real do AutoCAD — primeiro prompt oferece `[Radius]`; sem raio definido, pede pra usar a opção antes de selecionar. Depois de definido, seleciona duas Lines e arredonda o canto com um arco tangente. (Line-Arc não implementado nesta versão.)
+- **CHAMFER** (CHA): mesmo fluxo com sub-opção `[Distance]` (pede as duas distâncias), corta o canto entre duas Lines com uma reta.
+- **JOIN** (J): funde 2+ Lines colineares e conectadas nas pontas (com tolerância) numa única Line.
+- **EXPLODE** (X): quebra uma LWPolyline em Lines individuais, um Line por segmento.
+- **STRETCH** (S): usa um prompt explícito de janela crossing (dois cantos, como o próprio AutoCAD faz pra STRETCH) — só move vértices de Line/LWPolyline que caem dentro da janela, mantendo os demais fixos.
+- **DIVIDE** (DIV) / **MEASURE** (ME): dividem uma Line/Circle/Arc em N partes iguais (DIVIDE) ou por comprimento fixo (MEASURE); como o NewSIcad ainda não tem um tipo `POINT`, cada marcador de divisão é representado por um `Circle` bem pequeno (raio 0.05) — simplificação documentada.
 - Painel de Propriedades (Ctrl+1) mostrando tipo/camada da seleção atual
 - Undo/redo real (Ctrl+Z / Ctrl+Y, ou comando `U`/`UNDO` digitado) — pilha de snapshots do desenho
 - Janela de histórico de comandos (F2), ajuda (F1)
 - Entrada de coordenadas absoluta, relativa (`@dx,dy`), polar (`@dist<ang`) e distância direta (mover o mouse + digitar número)
-- Toggles GRID / SNAP / ORTHO / DYN funcionais na barra de status (F7 / F9 / F8 / F12); POLAR / OSNAP / OTRACK já aparecem na UI mas ainda não afetam a captura de pontos
+- Toggles GRID / SNAP / ORTHO / OSNAP / POLAR / DYN funcionais na barra de status (F7 / F9 / F8 / F3 / F10 / F12); OTRACK ainda não afeta a captura de pontos
 - Todos os atalhos do guia rápido do AutoCAD são reconhecidos como comandos (mesmo os ainda não implementados, que respondem com uma mensagem clara em vez de "comando desconhecido")
 
-Ainda não implementado (próximos marcos): TRIM, EXTEND, OFFSET, FILLET, CHAMFER, EXPLODE, JOIN, STRETCH, MATCHPROP (precisam de geometria de interseção/corte), HATCH, BLOCK/INSERT/REGION (sistema de blocos), MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), rastreamento POLAR e snap a objetos (OSNAP) reais, gravação de `.dwg` (ver nota abaixo).
+Limitações conhecidas / simplificações documentadas nesta versão:
+- **FILLET/CHAMFER**: só Line-Line (Line-Arc é bônus não implementado). FILLET não suporta raio 0 (corte de canto sem arco) — exige um raio positivo via `[Radius]`.
+- **EXTEND**: só estende objetos Line (Arc/Circle como alvo fica pra uma versão futura; podem ser usados como boundary edges normalmente).
+- **TRIM**: `[Undo]` dentro do comando ainda não desfaz o último corte — use Ctrl+Z depois de terminar o comando.
+- **OFFSET de LWPolyline**: aproximação por interseção das retas suporte de cada segmento deslocado; não trata perfeitamente polilinhas que colapsam ou auto-intersectam após o offset (falha com mensagem clara no log em vez de travar).
+- **Hit-test de TRIM/EXTEND/OFFSET sem CanvasView** (ex.: uso programático/testes): cai num fallback de tolerância fixa (0.5 unidade de desenho) em `geometry_ops.nearest_entity` em vez da tolerância em pixels da UI real.
+- **DIVIDE/MEASURE**: pontos de divisão representados por `Circle` de raio fixo (0.05), já que não existe um tipo `POINT` no NewSIcad ainda.
+- Ainda não implementado: MATCHPROP, HATCH, BLOCK/INSERT/REGION (sistema de blocos), MTEXT, DIMLINEAR/DIMALIGNED/DIMANGULAR/DIMRADIUS + DIMSTYLE (subsistema de anotação), ALIGN, ARRAY, BOUNDARY, PEDIT, OSNAP TRACKING (OTRACK), gravação de `.dwg` (ver nota abaixo).
 
 ## Instalação
 
@@ -107,6 +128,16 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | ROTATE | RO | Rotaciona objetos selecionados (ângulo digitado) |
 | SCALE | SC | Escala objetos selecionados (fator digitado) |
 | MIRROR | MI | Espelha objetos selecionados |
+| TRIM | TR | Apara objetos até a aresta de corte mais próxima |
+| EXTEND | EX | Estende uma Line até a borda mais próxima |
+| OFFSET | O | Cria cópia paralela deslocada (distância + lado) |
+| FILLET | F | Arredonda o canto entre duas Lines (opção `[Radius]`) |
+| CHAMFER | CHA | Corta o canto entre duas Lines com uma reta (opção `[Distance]`) |
+| JOIN | J | Funde Lines colineares e conectadas numa só |
+| EXPLODE | X | Quebra uma LWPolyline em Lines individuais |
+| STRETCH | S | Move vértices dentro de uma janela crossing |
+| DIVIDE | DIV | Marca N pontos de divisão iguais (círculos pequenos) |
+| MEASURE | ME | Marca pontos por comprimento fixo (círculos pequenos) |
 | UNDO | U | Desfaz o último comando |
 
 Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, roda do mouse dá zoom, botão do meio faz pan, clique direito equivale a Enter. Nos comandos de modificação, clique seleciona um objeto (Shift+clique alterna), e arrastar numa área vazia seleciona por janela/crossing.
@@ -140,7 +171,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-69/69 testes passando (validado no macOS nesta versão, incluindo os testes novos de DXF/DWG/menu File). A versão anterior — sem File Open/Save — foi validada também no Windows 11/Python 3.12 com 56/56; essa validação específica no Windows ainda não foi refeita com os 13 testes novos.
+131/131 testes passando (validado no macOS nesta versão, incluindo os testes novos de geometria de interseção/offset/fillet/chamfer, dos comandos TRIM/EXTEND/OFFSET/FILLET/CHAMFER/JOIN/EXPLODE/STRETCH/DIVIDE/MEASURE, e de OSNAP/POLAR no canvas real via QTest). A versão anterior — sem File Open/Save — foi validada também no Windows 11/Python 3.12 com 56/56; essa validação específica no Windows ainda não foi refeita com os testes novos.
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 
