@@ -265,7 +265,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-Validado no macOS nesta versão, combinando os três marcos mais recentes (blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR) — ver contagem exata de testes abaixo, gerada rodando a suíte completa após o merge dos três. Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses três marcos).
+180/180 testes passando (validado no macOS nesta versão, rodando a suíte completa após mesclar os três marcos mais recentes — blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR). O merge desses três marcos expôs um bug real de integração (não visível em nenhum dos três isoladamente): reabrir qualquer `.dxf` com uma cota contava a seta da cota como "entidade não suportada", porque o bloco auto-gerado pelo ezdxf para a seta (`_CLOSEDFILLED`) não caía no filtro de "bloco anônimo" (que só reconhecia nomes começando com `*`) — corrigido em `newsicad/io/dxf_io.py`. Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses três marcos).
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 
