@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from newsicad.core.document import Document
-from newsicad.core.entities import Arc, Circle, Ellipse, Line, LWPolyline, Point
+from newsicad.core.entities import Arc, Circle, Dimension, Ellipse, Hatch, Line, LWPolyline, Point, Text
 from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 
 
@@ -114,3 +114,136 @@ def test_load_dxf_missing_file_raises_dxf_io_error():
         missing_path = Path(tmp_dir) / "does_not_exist.dxf"
         with pytest.raises(DxfIoError):
             load_dxf(missing_path)
+
+
+# ---------------------------------------------------------------------- #
+# round-trip: Text, Dimension (todos os `kind`), Hatch
+# ---------------------------------------------------------------------- #
+def test_round_trip_text_preserves_content_height_rotation():
+    original = Document()
+    original.add_entity(
+        Text(
+            layer="0",
+            insertion_point=Point(1.5, -2.0),
+            content="Linha 1\nLinha 2 com espaço",
+            height=3.25,
+            rotation=math.radians(37),
+        )
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "text_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    texts = [e for e in loaded.all_entities() if isinstance(e, Text)]
+    assert len(texts) == 1
+    text = texts[0]
+    assert text.insertion_point.x == pytest.approx(1.5)
+    assert text.insertion_point.y == pytest.approx(-2.0)
+    assert text.content == "Linha 1\nLinha 2 com espaço"
+    assert text.height == pytest.approx(3.25)
+    assert text.rotation == pytest.approx(math.radians(37))
+
+
+def _make_dimension_document() -> Document:
+    document = Document()
+    document.add_entity(
+        Dimension(layer="0", kind="linear", point1=Point(0, 0), point2=Point(10, 0), dim_line_point=Point(0, 5))
+    )
+    document.add_entity(
+        Dimension(
+            layer="0", kind="aligned", point1=Point(0, 0), point2=Point(10, 10), dim_line_point=Point(2, 8)
+        )
+    )
+    document.add_entity(
+        Dimension(layer="0", kind="radius", center=Point(0, 0), radius=5.0, leader_point=Point(4, 4))
+    )
+    document.add_entity(
+        Dimension(layer="0", kind="diameter", center=Point(20, 20), radius=3.0, leader_point=Point(22, 22))
+    )
+    document.add_entity(
+        Dimension(
+            layer="0",
+            kind="angular",
+            center=Point(0, 0),
+            point1=Point(10, 0),
+            point2=Point(0, 10),
+            dim_line_point=Point(5, 5),
+        )
+    )
+    return document
+
+
+def test_round_trip_dimension_all_kinds_preserve_exact_geometry():
+    original = _make_dimension_document()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "dimension_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    orig_dims = [e for e in original.all_entities() if isinstance(e, Dimension)]
+    loaded_dims = {e.kind: e for e in loaded.all_entities() if isinstance(e, Dimension)}
+    assert len(loaded_dims) == len(orig_dims) == 5
+
+    for orig in orig_dims:
+        loaded_dim = loaded_dims[orig.kind]
+        assert loaded_dim.point1.as_tuple() == pytest.approx(orig.point1.as_tuple())
+        assert loaded_dim.point2.as_tuple() == pytest.approx(orig.point2.as_tuple())
+        assert loaded_dim.dim_line_point.as_tuple() == pytest.approx(orig.dim_line_point.as_tuple())
+        assert loaded_dim.center.as_tuple() == pytest.approx(orig.center.as_tuple())
+        assert loaded_dim.radius == pytest.approx(orig.radius)
+        assert loaded_dim.leader_point.as_tuple() == pytest.approx(orig.leader_point.as_tuple())
+        assert loaded_dim.measurement() == pytest.approx(orig.measurement())
+
+
+def test_round_trip_hatch_preserves_boundary_angle_spacing():
+    original = Document()
+    original.add_entity(
+        Hatch(
+            layer="0",
+            boundary_points=[Point(0, 0), Point(10, 0), Point(10, 10), Point(0, 10)],
+            angle=math.radians(30),
+            spacing=2.5,
+        )
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "hatch_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    hatches = [e for e in loaded.all_entities() if isinstance(e, Hatch)]
+    assert len(hatches) == 1
+    hatch = hatches[0]
+    assert len(hatch.boundary_points) == 4
+    for loaded_pt, orig_pt in zip(hatch.boundary_points, [Point(0, 0), Point(10, 0), Point(10, 10), Point(0, 10)]):
+        assert loaded_pt.x == pytest.approx(orig_pt.x)
+        assert loaded_pt.y == pytest.approx(orig_pt.y)
+    assert hatch.angle == pytest.approx(math.radians(30))
+    assert hatch.spacing == pytest.approx(2.5)
+
+
+def test_dimension_and_hatch_coexist_with_other_entity_types():
+    """Um único documento com TODOS os 8 tipos suportados (5 antigos + Text,
+    Dimension, Hatch) grava e recarrega sem perder nem uma entidade."""
+    original = _make_document()
+    original.add_entity(Text(insertion_point=Point(0, 0), content="ok", height=2.0))
+    original.add_entity(
+        Dimension(kind="linear", point1=Point(0, 0), point2=Point(5, 0), dim_line_point=Point(0, 2))
+    )
+    original.add_entity(
+        Hatch(boundary_points=[Point(0, 0), Point(4, 0), Point(4, 4), Point(0, 4)])
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "mixed_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    assert len(loaded.all_entities()) == len(original.all_entities()) == 8

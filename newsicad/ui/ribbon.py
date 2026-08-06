@@ -303,6 +303,47 @@ def _icon_dimension(p: QPainter, r: QRectF) -> None:
     p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y))
 
 
+def _icon_dimension_aligned(p: QPainter, r: QRectF) -> None:
+    p.save()
+    p.translate(r.center())
+    p.rotate(-25)
+    half_w, half_h = r.width() / 2, 4.0
+    p.drawLine(QPointF(-half_w, -half_h), QPointF(-half_w, half_h))
+    p.drawLine(QPointF(half_w, -half_h), QPointF(half_w, half_h))
+    p.drawLine(QPointF(-half_w, 0), QPointF(half_w, 0))
+    p.restore()
+
+
+def _icon_dimension_angular(p: QPainter, r: QRectF) -> None:
+    p.drawLine(r.bottomLeft(), r.bottomRight())
+    p.drawLine(r.bottomLeft(), r.topLeft())
+    path = QPainterPath()
+    path.arcMoveTo(QRectF(r.left() - r.width() * 0.4, r.bottom() - r.height() * 0.4, r.width() * 0.8, r.height() * 0.8), 0)
+    path.arcTo(QRectF(r.left() - r.width() * 0.4, r.bottom() - r.height() * 0.4, r.width() * 0.8, r.height() * 0.8), 0, 90)
+    p.drawPath(path)
+
+
+def _icon_dimension_radius(p: QPainter, r: QRectF) -> None:
+    p.drawEllipse(r)
+    c = r.center()
+    p.drawLine(c, QPointF(r.right(), r.top()))
+
+
+def _icon_dimension_diameter(p: QPainter, r: QRectF) -> None:
+    p.drawEllipse(r)
+    p.drawLine(r.topLeft(), r.bottomRight())
+
+
+def _icon_leader(p: QPainter, r: QRectF) -> None:
+    tip = QPointF(r.left(), r.bottom())
+    bend = QPointF(r.left() + r.width() * 0.4, r.top() + r.height() * 0.3)
+    end = QPointF(r.right(), r.top() + r.height() * 0.3)
+    p.drawLine(tip, bend)
+    p.drawLine(bend, end)
+    p.drawLine(tip, QPointF(tip.x() + 6, tip.y() - 2))
+    p.drawLine(tip, QPointF(tip.x() + 2, tip.y() - 7))
+
+
 # ---------------------------------------------------------------------- #
 # construção de botões / painéis
 # ---------------------------------------------------------------------- #
@@ -417,18 +458,28 @@ def _build_insert_tab(window: "MainWindow") -> QWidget:
         "Block",
         [
             _button("Insert", _icon_block),
-            _button("Hatch", _icon_hatch),
+            _button("Hatch", _icon_hatch, lambda: window._start_command("HATCH")),
         ],
     )
     return _row([block_panel])
 
 
 def _build_annotate_tab(window: "MainWindow") -> QWidget:
-    text_panel = _panel("Text", [_button("Multiline Text", _icon_text)])
+    text_panel = _panel(
+        "Text",
+        [
+            _button("Multiline Text", _icon_text, lambda: window._start_command("MTEXT")),
+            _button("Leader", _icon_leader, lambda: window._start_command("LEADER")),
+        ],
+    )
     dim_panel = _panel(
         "Dimensions",
         [
-            _button("Linear", _icon_dimension),
+            _button("Linear", _icon_dimension, lambda: window._start_command("DIMLINEAR")),
+            _button("Aligned", _icon_dimension_aligned, lambda: window._start_command("DIMALIGNED")),
+            _button("Angular", _icon_dimension_angular, lambda: window._start_command("DIMANGULAR")),
+            _button("Radius", _icon_dimension_radius, lambda: window._start_command("DIMRADIUS")),
+            _button("Diameter", _icon_dimension_diameter, lambda: window._start_command("DIMDIAMETER")),
             _button("Distance", _icon_dimension, lambda: window._start_command("DIST")),
         ],
     )

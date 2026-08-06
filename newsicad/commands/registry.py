@@ -12,6 +12,7 @@ geradores de prompts, são tratados à parte pela MainWindow (`_start_command`).
 
 from __future__ import annotations
 
+from newsicad.commands import annotation_commands as ac
 from newsicad.commands import draw_commands as dc
 from newsicad.commands import modify_commands as mc
 from newsicad.commands import view_commands as vc
@@ -36,6 +37,16 @@ COMMAND_REGISTRY = {
     # navegação
     "ZOOM": vc.zoom_command,
     "PAN": vc.pan_command,
+    # anotação
+    "MTEXT": ac.mtext_command,
+    "DIMLINEAR": ac.dimlinear_command,
+    "DIMALIGNED": ac.dimaligned_command,
+    "DIMANGULAR": ac.dimangular_command,
+    "DIMRADIUS": ac.dimradius_command,
+    "DIMDIAMETER": ac.dimdiameter_command,
+    "DIMSTYLE": ac.dimstyle_command,
+    "HATCH": ac.hatch_command,
+    "LEADER": ac.leader_command,
 }
 
 # Comandos conhecidos (do guia de atalhos do AutoCAD) que ainda não têm
@@ -43,10 +54,9 @@ COMMAND_REGISTRY = {
 # MainWindow._start_command — ficam desabilitados no menu/ribbon e dão um
 # aviso claro na linha de comando em vez de "comando desconhecido".
 PLANNED_COMMANDS = {
-    "HATCH", "BLOCK", "INSERT", "REGION",
-    "MTEXT", "TABLE", "LEADER",
-    "DIMLINEAR", "DIMALIGNED", "DIMANGULAR", "DIMRADIUS", "DIMDIAMETER",
-    "DIMSTYLE", "DIM", "DIMEDIT", "DIMREASSOCIATE",
+    "BLOCK", "INSERT", "REGION",
+    "TABLE",
+    "DIM", "DIMEDIT", "DIMREASSOCIATE",
     "MATCHPROP",
     "TRIM", "EXTEND", "OFFSET", "FILLET", "CHAMFER", "EXPLODE", "JOIN",
     "STRETCH", "DIVIDE", "PEDIT", "HATCHEDIT", "ALIGN", "ARRAY", "BOUNDARY",
