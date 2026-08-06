@@ -62,9 +62,13 @@ def load_dxf(path: str | Path) -> tuple[Document, int]:
     # (renderiza/faz hit-test certo) se `document.block_definitions` já tiver
     # a definição correspondente. "*Model_Space"/"*Paper_Space" e blocos
     # anônimos (nomes começando com "*", ex.: gerados por hachura/dimensão)
-    # não são blocos nomeados de verdade — pulamos.
+    # não são blocos nomeados de verdade — pulamos. Blocos com nome começando
+    # com "_" (ex.: "_CLOSEDFILLED") são símbolos de seta padrão que o ezdxf
+    # cria sozinho ao renderizar uma Dimension — também não são blocos do
+    # usuário; sem esse filtro, o SOLID da seta contava como entidade "não
+    # suportada" (skipped) ao reabrir qualquer .dxf com cota.
     for block in dxf_doc.blocks:
-        if block.name.startswith("*"):
+        if block.name.startswith("*") or block.name.startswith("_"):
             continue
         block_entities: list[Entity] = []
         for dxf_entity in block:
