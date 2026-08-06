@@ -5,12 +5,27 @@ de forma transparente — o usuário só vê "File > Open" de um .dwg, nunca rod
 nada manualmente.
 
 NÃO há gravação de .dwg aqui de propósito: o `dxf2dwg` do LibreDWG (testado
-na versão 0.13.3) se mostrou não-confiável mesmo para DWG R2000 com conteúdo
-mínimo — produz arquivos com handles de entidade duplicados que nem o
-próprio `dwg2dxf` consegue reler direito. Os mantenedores do próprio
-LibreDWG descrevem o `dxf2dwg` como "ainda altamente experimental"
-(github.com/LibreDWG/libredwg/issues/195). Por enquanto, "Save"/"Save As"
-só grava `.dxf` — ver o README para o status dessa limitação.
+nas versões 0.13.3 via Homebrew E 0.14 compilado localmente a partir do
+código-fonte, github.com/LibreDWG/libredwg/releases/tag/0.14) se mostrou
+não-confiável mesmo para DWG R2000 com conteúdo mínimo (ou mesmo com um
+documento vazio, sem nenhuma entidade) — produz arquivos com handles de
+entidade duplicados que nem o próprio `dwg2dxf` consegue reler direito
+(`ERROR: Duplicate handle ... already points to object ...` na escrita;
+`ValueError: Invalid handle 0.` no ezdxf ao reler). Chegamos a tentar um
+fix pontual em `dwg_next_handle()` (src/dwg.c) — a função calculava o
+"maior handle já usado" de forma incorreta (parava no primeiro handle
+não-nulo varrendo o array de trás pra frente, em vez de calcular o máximo
+real) — mas corrigir isso sozinho não resolveu as colisões, indicando que a
+causa raiz está em outro lugar (provavelmente na forma como TABLE/CLASS
+recebem handles fora do caminho normal de `dwg_add_handle`/`object_map`).
+Isso é um bug conhecido e ainda aberto do próprio LibreDWG, não algo
+específico do NewSIcad: veja github.com/LibreDWG/libredwg/issues/192
+("check duplicate owner handles", aberto desde 2020) e
+github.com/LibreDWG/libredwg/issues/1356 (mesma classe de bug, relatado
+recentemente). Os mantenedores do próprio LibreDWG descrevem o `dxf2dwg`
+como "ainda altamente experimental" (github.com/LibreDWG/libredwg/issues/195).
+Por enquanto, "Save"/"Save As" só grava `.dxf` — ver o README para o status
+dessa limitação.
 """
 
 from __future__ import annotations
