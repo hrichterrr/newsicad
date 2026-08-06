@@ -15,12 +15,14 @@ import math
 from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
+    QStyleFactory,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -35,13 +37,23 @@ PIXMAP_SIZE = 32
 STROKE_COLOR = "#d8d8d8"
 NOT_IMPLEMENTED_TIP = "Ainda não implementado — previsto para um próximo marco do NewSIcad."
 
+BUTTON_MIN_WIDTH = 58
+BUTTON_HEIGHT = 54
+
 RIBBON_STYLE = """
+    QTabWidget {
+        background-color: #232323;
+    }
     QTabWidget::pane {
         border: none;
         background-color: #232323;
     }
     QTabWidget QWidget {
         background-color: #232323;
+    }
+    QTabBar {
+        background-color: #232323;
+        border: none;
     }
     QTabBar::tab {
         background-color: #232323;
@@ -454,7 +466,7 @@ def _button(
     button.setIconSize(_icon_qsize())
     button.setText(label)
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-    button.setFixedSize(58, 54)
+    button.setFixedSize(_button_width_for(label), BUTTON_HEIGHT)
     button.setCheckable(checkable)
     if handler is not None:
         button.clicked.connect(handler)
@@ -466,6 +478,18 @@ def _button(
 
 def _icon_qsize() -> QSize:
     return QSize(ICON_SIZE, ICON_SIZE)
+
+
+def _button_width_for(label: str) -> int:
+    """Largura do botão: BUTTON_MIN_WIDTH pros rótulos curtos (a maioria),
+    ou o suficiente pro texto de rótulos compostos de 2 palavras (ex.:
+    "Multiline Text", "Attach Image") não truncar com "...". Calculado sob
+    demanda (não em import time) porque QFontMetrics precisa de uma
+    QApplication já criada."""
+    font = QFont()
+    font.setPointSize(10)  # mesmo tamanho do "font-size: 10px" do QToolButton em RIBBON_STYLE
+    text_width = QFontMetrics(font).horizontalAdvance(label)
+    return max(BUTTON_MIN_WIDTH, text_width + 12)
 
 
 def _panel(title: str, buttons: list[QToolButton]) -> QWidget:
@@ -496,6 +520,11 @@ def _separator() -> QFrame:
 
 
 def _row(widgets: list[QWidget]) -> QWidget:
+    """Monta o conteúdo de uma aba (painéis lado a lado) dentro de um
+    QScrollArea horizontal — sem isso, numa janela mais estreita que a soma
+    dos painéis (ex.: aba Home, com bastante coisa), os botões mais à
+    direita ficavam simplesmente cortados fora da tela, sem nenhum jeito de
+    alcançá-los."""
     page = QWidget()
     layout = QHBoxLayout(page)
     layout.setContentsMargins(4, 2, 4, 2)
@@ -505,7 +534,15 @@ def _row(widgets: list[QWidget]) -> QWidget:
             layout.addWidget(_separator())
         layout.addWidget(w)
     layout.addStretch(1)
-    return page
+
+    scroll = QScrollArea()
+    scroll.setWidget(page)
+    scroll.setWidgetResizable(False)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setStyleSheet("QScrollArea { background-color: #232323; border: none; }")
+    return scroll
 
 
 # ---------------------------------------------------------------------- #
@@ -659,14 +696,27 @@ def _build_file_tab(window: "MainWindow") -> QWidget:
 def build_ribbon(window: "MainWindow") -> QTabWidget:
     ribbon = QTabWidget()
     ribbon.setStyleSheet(RIBBON_STYLE)
-    ribbon.setFixedHeight(92)
     ribbon.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     ribbon.setDocumentMode(True)
+    # No macOS, documentMode=True desenha a tira "vazia" da barra de abas
+    # (depois da última aba) com o fundo nativo claro do Cocoa, ignorando o
+    # stylesheet — só o estilo Fusion (não-nativo) respeita background-color
+    # aí. Aplicado só neste widget (não no app inteiro), pra não perder a
+    # aparência nativa do resto da janela.
+    ribbon.setStyle(QStyleFactory.create("Fusion"))
 
     ribbon.addTab(_build_file_tab(window), "File")
     ribbon.addTab(_build_home_tab(window), "Home")
     ribbon.addTab(_build_insert_tab(window), "Insert")
     ribbon.addTab(_build_annotate_tab(window), "Annotate")
     ribbon.addTab(_build_view_tab(window), "View")
+
+    # Altura calculada a partir do sizeHint() real (tab bar + maior página de
+    # botões), em vez de um número fixo chutado — um valor fixo menor que o
+    # necessário (era 92, mas o conteúdo pede >=109) cortava a parte de baixo
+    # de todo rótulo de botão e do título de cada painel ("Draw", "Modify"
+    # etc.) em todas as abas. +4px de folga pra fontes um pouco mais altas
+    # que a testada no macOS (ex.: renderização de fonte no Windows).
+    ribbon.setFixedHeight(ribbon.sizeHint().height() + 4)
 
     return ribbon
