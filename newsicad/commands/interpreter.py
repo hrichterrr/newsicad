@@ -26,6 +26,12 @@ class Prompt:
     message: str
     kind: PromptKind = "point"
     options: list[str] = field(default_factory=list)
+    # Para kind="point": indica se o canvas deve desenhar uma linha de "borracha"
+    # ligando o último ponto até o cursor e aplicar OSNAP/ORTHO/POLAR de definição
+    # de geometria. False para prompts que só *identificam* uma entidade já
+    # existente na tela (ex.: "select the line to trim/extend/fillet"), onde esse
+    # rubber-band não faz sentido e mais atrapalha do que ajuda.
+    connect_to_last: bool = True
 
 
 CommandFactory = Callable[[CommandContext], Generator[Prompt, object, None]]
@@ -72,6 +78,7 @@ class CommandInterpreter:
         factory = self.registry[name]
         self._generator = factory(self.context)
         self.last_command_name = name
+        self.last_point = None
         return self._advance(None)
 
     def start_generator(self, generator: Generator[Prompt, object, None]) -> Prompt | None:
@@ -84,6 +91,7 @@ class CommandInterpreter:
         generator com o restante — ver newsicad/commands/block_commands.py)."""
         self._generator = generator
         self.last_command_name = None
+        self.last_point = None
         return self._advance(None)
 
     def repeat_last(self) -> Prompt | None:

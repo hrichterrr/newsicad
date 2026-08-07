@@ -15,7 +15,7 @@ import math
 
 
 def id_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    point = yield Prompt("Specify point:", kind="point")
+    point = yield Prompt("Specify point:", kind="point", connect_to_last=False)
     yield Prompt(f"X = {point.x:.4f}  Y = {point.y:.4f}  Z = 0.0000", kind="info")
 
 

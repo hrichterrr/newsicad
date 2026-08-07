@@ -952,10 +952,17 @@ class CanvasView(QGraphicsView):
         active_point_prompt = (
             self.interpreter.active and prompt is not None and prompt.kind == "point"
         )
+        # ORTHO/POLAR só fazem sentido quando o ponto está definindo um segmento
+        # que continua a partir do último ponto (ex.: próximo vértice de uma
+        # LINE/PLINE). Em prompts que só *identificam* uma entidade já existente
+        # (TRIM/EXTEND/OFFSET/FILLET/CHAMFER's "select object"), connect_to_last
+        # é False e essas restrições relativas ao last_point não se aplicam.
+        connect_prompt = active_point_prompt and prompt.connect_to_last
 
         # OSNAP tem prioridade sobre ORTHO/POLAR/SNAP — igual ao AutoCAD, o
         # cursor "gruda" no ponto de snap de objeto mesmo que isso quebre a
-        # restrição ortogonal/polar.
+        # restrição ortogonal/polar. OSNAP continua ativo mesmo em prompts de
+        # picking (ajuda a clicar com precisão perto de um endpoint/midpoint).
         if self.osnap_enabled and active_point_prompt:
             snap = self._find_osnap_point(point)
             if snap is not None:
@@ -967,7 +974,7 @@ class CanvasView(QGraphicsView):
 
         if (
             self.ortho_enabled
-            and active_point_prompt
+            and connect_prompt
             and self.interpreter.last_point is not None
         ):
             base = self.interpreter.last_point
@@ -976,7 +983,7 @@ class CanvasView(QGraphicsView):
             result = Point(result.x, base.y) if abs(dx) >= abs(dy) else Point(base.x, result.y)
         elif (
             self.polar_enabled
-            and active_point_prompt
+            and connect_prompt
             and self.interpreter.last_point is not None
         ):
             result = self._apply_polar(result)
@@ -1188,7 +1195,7 @@ class CanvasView(QGraphicsView):
             path.addEllipse(center_scene, radius, radius)
             path.moveTo(center_scene)
             path.lineTo(cad_to_scene(cursor_point))
-        elif prompt is not None and prompt.kind == "point":
+        elif prompt is not None and prompt.kind == "point" and prompt.connect_to_last:
             path.moveTo(cad_to_scene(last))
             path.lineTo(cad_to_scene(cursor_point))
 
@@ -1202,6 +1209,9 @@ class CanvasView(QGraphicsView):
 
         prompt = interp.current_prompt
         if prompt is None or prompt.kind not in ("point", "distance"):
+            self._dyn_text.hide()
+            return
+        if prompt.kind == "point" and not prompt.connect_to_last:
             self._dyn_text.hide()
             return
 

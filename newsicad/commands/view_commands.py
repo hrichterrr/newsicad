@@ -16,6 +16,7 @@ def zoom_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         "Specify corner of window, enter a scale factor, or [All/Extents]:",
         kind="point",
         options=["All", "Extents"],
+        connect_to_last=False,
     )
     if first is ENTER:
         return
@@ -25,7 +26,7 @@ def zoom_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             ctx.view.zoom_extents()
         return
 
-    second = yield Prompt("Specify opposite corner:", kind="point")
+    second = yield Prompt("Specify opposite corner:", kind="point", connect_to_last=False)
     if isinstance(second, Point) and ctx.view is not None:
         ctx.view.zoom_window(first, second)
 

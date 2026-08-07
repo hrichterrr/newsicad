@@ -268,6 +268,7 @@ def trim_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     while True:
         result = yield Prompt(
             "Select object to trim or [Undo] (Enter to finish):", kind="point", options=["Undo"],
+            connect_to_last=False,
         )
         if result is ENTER:
             break
@@ -350,6 +351,7 @@ def extend_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     while True:
         result = yield Prompt(
             "Select object to extend or [Undo] (Enter to finish):", kind="point", options=["Undo"],
+            connect_to_last=False,
         )
         if result is ENTER:
             break
@@ -393,6 +395,7 @@ def offset_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     while True:
         result = yield Prompt(
             "Select object to offset or [Undo] (Enter to exit):", kind="point", options=["Undo"],
+            connect_to_last=False,
         )
         if result is ENTER:
             break
@@ -405,7 +408,7 @@ def offset_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             yield Prompt("Nenhum objeto encontrado sob o clique.", kind="info")
             continue
 
-        side_point = yield Prompt("Specify point on side to offset:", kind="point")
+        side_point = yield Prompt("Specify point on side to offset:", kind="point", connect_to_last=False)
         try:
             if isinstance(target, Line):
                 new_entity: Entity = offset_line(target, distance, side_point)
@@ -434,7 +437,7 @@ def fillet_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     while True:
         first = yield Prompt(
             f"Select first object or [Radius] (current radius = {radius:g}):",
-            kind="point", options=["Radius"],
+            kind="point", options=["Radius"], connect_to_last=False,
         )
         if first == "RADIUS":
             radius = yield Prompt("Specify fillet radius:", kind="distance")
@@ -450,7 +453,7 @@ def fillet_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         yield Prompt("FILLET nesta versão exige selecionar duas Lines (Line-Arc fica para uma versão futura).", kind="info")
         return
 
-    click2 = yield Prompt("Select second object:", kind="point")
+    click2 = yield Prompt("Select second object:", kind="point", connect_to_last=False)
     target2 = _hit_test_entity(ctx, click2)
     if target2 is None or not isinstance(target2, Line) or target2.id == target1.id:
         yield Prompt("FILLET nesta versão exige selecionar duas Lines diferentes.", kind="info")
@@ -473,7 +476,7 @@ def chamfer_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     while True:
         first = yield Prompt(
             f"Select first line or [Distance] (current distances = {dist1:g}, {dist2:g}):",
-            kind="point", options=["Distance"],
+            kind="point", options=["Distance"], connect_to_last=False,
         )
         if first == "DISTANCE":
             dist1 = yield Prompt("Specify first chamfer distance:", kind="distance")
@@ -606,8 +609,9 @@ def explode_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     corner1 = yield Prompt(
         "Select objects to stretch by crossing-window...\nSpecify first corner:", kind="point",
+        connect_to_last=False,
     )
-    corner2 = yield Prompt("Specify opposite corner:", kind="point")
+    corner2 = yield Prompt("Specify opposite corner:", kind="point", connect_to_last=False)
 
     lo_x, hi_x = sorted((corner1.x, corner2.x))
     lo_y, hi_y = sorted((corner1.y, corner2.y))
