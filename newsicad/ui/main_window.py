@@ -45,7 +45,8 @@ from newsicad.ui.menu_bar import build_menu_bar
 from newsicad.ui.ribbon import build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_TITLE = "NewSIcad — Developed by HRichter"
+APP_VERSION = "2.0.0"
+APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
     QPushButton {
@@ -464,7 +465,7 @@ class MainWindow(QMainWindow):
         if self.current_path is None:
             self.setWindowTitle(APP_TITLE)
         else:
-            self.setWindowTitle(f"NewSIcad — {self.current_path.name} — Developed by HRichter")
+            self.setWindowTitle(f"NewSIcad {APP_VERSION} — {self.current_path.name} — Developed by HRichter")
 
     def _load_document(self, loaded: Document, path: Path, skipped: int) -> None:
         """Substitui o documento atual pelo `loaded` (vindo de load_dxf/dwg_to_document)."""
