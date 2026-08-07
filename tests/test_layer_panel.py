@@ -116,3 +116,51 @@ def test_layer_command_shows_and_raises_the_dock():
 
     window._start_command("LAYER")
     assert window.layer_dock.isVisible()
+
+
+# ---------------------------------------------------------------------- #
+# renomear (REN / clique direito na tabela)
+# ---------------------------------------------------------------------- #
+def test_rename_layer_with_names_updates_document_and_table():
+    _app()
+    window = MainWindow()
+    window.document.add_layer("PAREDES")
+    window.layer_dock.refresh()
+
+    window.layer_dock._rename_layer_with_names("PAREDES", "ALVENARIA")
+
+    assert "ALVENARIA" in window.document.layers
+    assert "PAREDES" not in window.document.layers
+    names = {
+        window.layer_dock.table.item(row, _COL_NAME).text()
+        for row in range(window.layer_dock.table.rowCount())
+    }
+    assert "ALVENARIA" in names
+
+
+def test_rename_layer_with_names_ignores_empty_or_unchanged_name():
+    _app()
+    window = MainWindow()
+    window.document.add_layer("PAREDES")
+    window.layer_dock.refresh()
+
+    window.layer_dock._rename_layer_with_names("PAREDES", "  ")
+    assert "PAREDES" in window.document.layers
+
+    window.layer_dock._rename_layer_with_names("PAREDES", "PAREDES")
+    assert "PAREDES" in window.document.layers
+
+
+def test_rename_command_targets_current_layer():
+    _app()
+    window = MainWindow()
+    window.document.add_layer("PAREDES")
+    window.document.set_current_layer("PAREDES")
+
+    window.layer_dock.prompt_rename_current_layer = lambda: window.layer_dock._rename_layer_with_names(
+        "PAREDES", "ALVENARIA"
+    )
+    window._start_command("RENAME")
+
+    assert "ALVENARIA" in window.document.layers
+    assert window.document.current_layer == "ALVENARIA"

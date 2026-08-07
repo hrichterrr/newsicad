@@ -48,7 +48,8 @@ Implementado:
 - **Referências externas (`XREF`/`XR`, `EXTERNALREFERENCES`/`ER`)**: XREF anexa um `.dxf` externo como uma `BlockReference` marcada (`is_xref=True`); o painel EXTERNALREFERENCES lista as xrefs do desenho (nome + caminho) com um botão Reload que relê o arquivo. **Sem watch automático de arquivo** — ver limitações abaixo
 - **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. **Não é gravada em `.dxf`** — ver limitações
 - **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`, perguntando antes o **tamanho da folha** (A4/A3/A2/A1/A0) e a **orientação** (automática — escolhe retrato ou paisagem pela proporção do desenho, igual a um PLOT com "Fit" — ou fixa em retrato/paisagem)
-- **Painel de Camadas (`LAYER`/`LA`, View > Layers..., aba View do ribbon)**: lista todas as camadas do desenho (vem tabificado com o painel Properties) com checkbox de **visibilidade** e **trava** por camada, e duplo clique no nome define a **camada atual** (onde LINE/CIRCLE/ARC/MTEXT/cotas/BLOCK/INSERT novos são desenhados — antes desse painel isso nunca funcionava de verdade, ver nota abaixo). Desligar a visibilidade tira a entidade do desenho de verdade (some da tela, do hit-test/seleção e do zoom extents/Export PDF), não só "esconde visualmente"; travar mantém visível mas bloqueia seleção. Botão "Nova camada..." cria uma camada vazia
+- **Painel de Camadas (`LAYER`/`LA`, View > Layers..., aba View do ribbon)**: lista todas as camadas do desenho (vem tabificado com o painel Properties) com checkbox de **visibilidade** e **trava** por camada, e duplo clique no nome define a **camada atual** (onde LINE/CIRCLE/ARC/MTEXT/cotas/BLOCK/INSERT novos são desenhados — antes desse painel isso nunca funcionava de verdade, ver nota abaixo). Desligar a visibilidade tira a entidade do desenho de verdade (some da tela, do hit-test/seleção e do zoom extents/Export PDF), não só "esconde visualmente"; travar mantém visível mas bloqueia seleção. Botão "Nova camada..." cria uma camada vazia; clique direito numa camada (ou o comando `RENAME`/`REN`) renomeia
+- **Comandos utilitários adicionados do guia oficial de atalhos do AutoCAD**: `AREA`(AA) soma área/perímetro de círculos e polilinhas fechadas selecionados; `ID` mostra as coordenadas de um ponto clicado; `DDEDIT`(ED) edita o conteúdo de um `Text` já colocado no desenho (só `Text` — cotas não têm campo de texto sobreposto no modelo, ver limitações); `PURGE`(PU) remove camadas e blocos não usados em lugar nenhum do desenho; `PAN` ganhou o alias de uma letra `P`
 
 - **Edição geométrica (`TRIM`/TR, `EXTEND`/EX, `OFFSET`/O, `FILLET`/F, `CHAMFER`/CHA, `JOIN`/J, `EXPLODE`/X, `STRETCH`/S, `DIVIDE`/DIV, `MEASURE`/ME)**: geometria real de interseção/corte (segmento-segmento, segmento-círculo, círculo-círculo) — `FILLET`/`CHAMFER` cobrem Line-Line (com sub-opção `[Radius]`/`[Distance]`), `EXTEND` estende até um alvo do tipo Line, `OFFSET` cobre Line/Circle/Arc/LWPolyline (polilinha via aproximação por interseção de linhas de apoio), `STRETCH` usa uma janela crossing explícita. `DIVIDE`/`MEASURE` marcam os pontos com pequenos `Circle` (ainda não existe um tipo `POINT` dedicado) — ver detalhes/limitações na seção "Edição geométrica" abaixo
 - **OSNAP e POLAR reais**: `OSNAP` calcula Endpoint/Midpoint/Center/Intersection de verdade a partir das entidades próximas ao cursor (com prioridade sobre ORTHO/POLAR/grid-snap), `POLAR` trava em incrementos de 15°; ambos com marcador visual no canvas e toggle funcional (F3/F10)
@@ -132,8 +133,10 @@ externos é ignorado, contado como entidade "skipped" no aviso pós-abertura).
 ### Camadas — simplificações documentadas
 
 - **Sem cor por camada na tela**: `Layer.color` existe no modelo (grava/lê certinho de `.dxf`) mas o canvas nunca usou cor nenhuma pra desenhar entidades — é sempre um branco fixo (`ENTITY_COLOR`), então o painel de camadas não oferece editar cor: seria um controle que muda o dado sem nenhum efeito visível.
-- **Renomear/apagar camada** ainda não têm UI — só criar (`Nova camada...`), ligar/desligar visibilidade, travar, e definir qual é a atual.
+- **Apagar camada** ainda não tem UI — só criar (`Nova camada...`), renomear, ligar/desligar visibilidade, travar, definir qual é a atual, e `PURGE` (remove só camadas sem nenhuma entidade, não uma remoção forçada).
 - Corrigido junto com o painel: `document.current_layer` (a camada onde entidades novas são desenhadas) **nunca funcionou de verdade** antes disso — nenhum comando de desenho passava `layer=` explicitamente ao criar a entidade, e como o valor padrão do dataclass `Entity.layer` é `"0"` (não vazio), o fallback de `Document.add_entity` pro current_layer nunca disparava. Toda entidade nova ia sempre para a camada "0", não importa o que estivesse selecionado como atual. Corrigido em `draw_commands.py`, `annotation_commands.py` e `block_commands.py` (`modify_commands.py` não precisou de mudança — COPY/TRIM/FILLET/etc. já preservavam corretamente a camada da entidade original, o que é o comportamento certo).
+- **`AREA`(AA) não tem o modo "clicar pontos pra definir um polígono"** do AREA de verdade do AutoCAD — só soma a área de círculos e polilinhas fechadas já desenhados que forem selecionados (o caso de uso mais comum: contorno de um ambiente já desenhado como `PLINE` fechada).
+- **`DDEDIT`(ED) só edita `Text`** (MTEXT/LEADER) — cotas (`Dimension`) não têm um campo de texto sobreposto no modelo do NewSIcad (o texto exibido é sempre calculado a partir da medição real geometricamente), então selecionar uma cota no ED não faz nada.
 
 ## Instalação
 
@@ -208,6 +211,8 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | PLINE | PL | Desenha polilinha (aceita Undo) |
 | ELLIPSE | EL | Desenha elipse (centro, eixo maior, eixo menor) |
 | DIST | DI | Mede distância e ângulo entre 2 pontos |
+| AREA | AA | Soma área/perímetro de círculos e polilinhas fechadas selecionados |
+| ID | — | Mostra as coordenadas X/Y de um ponto clicado |
 | ERASE | E | Apaga objetos selecionados |
 | MOVE | M | Move objetos selecionados |
 | COPY | CO / CP | Copia objetos selecionados |
@@ -224,6 +229,7 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | STRETCH | S | Move vértices dentro de uma janela crossing |
 | DIVIDE | DIV | Marca N pontos de divisão iguais (círculos pequenos) |
 | MEASURE | ME | Marca pontos por comprimento fixo (círculos pequenos) |
+| DDEDIT | ED | Edita o conteúdo de um `Text` (MTEXT/LEADER) já colocado no desenho |
 | BLOCK | B | Define um bloco a partir de objetos selecionados (nome, ponto base, seleção) |
 | INSERT | I | Insere uma instância de um bloco já definido (nome, ponto, escala, rotação) |
 | BEDIT | BE | Abre o Block Editor para uma definição de bloco existente |
@@ -232,6 +238,8 @@ zipe a pasta `dist\NewSIcad` inteira (não só o `.exe`).
 | EXTERNALREFERENCES | ER | Abre o painel de xrefs (lista + Reload) |
 | IMAGEATTACH | IM | Insere uma imagem raster (`.png`/`.jpg`/`.bmp`) |
 | LAYER | LA | Abre o painel de camadas (visibilidade, trava, camada atual) |
+| RENAME | REN | Renomeia a camada atual (ou clique direito numa camada no painel) |
+| PURGE | PU | Remove camadas e blocos não usados em lugar nenhum do desenho |
 | PLOT | — | Exporta o desenho inteiro para PDF (pergunta tamanho de folha e orientação) |
 | PUBLISH | — | Mesma coisa que PLOT nesta versão (sem layouts/paper space) |
 | UNDO | U | Desfaz o último comando |
@@ -261,7 +269,7 @@ Convenções: Enter/Espaço confirma ou repete o último comando, Esc cancela, r
 ```
 newsicad/
   core/        modelo de documento (Document.block_definitions), entidades (inclui BlockReference/ImageReference/Text/Dimension/Hatch), seleção, geometria (translate/rotate/mirror/scale/offset/fillet/chamfer/interseções + dimension_geometry), undo
-  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho/modificação (draw_commands.py/modify_commands.py), blocos (block_commands.py) e anotação (annotation_commands.py)
+  commands/    interpretador de comandos, parser de coordenadas, comandos de desenho/modificação (draw_commands.py/modify_commands.py), blocos (block_commands.py), anotação (annotation_commands.py) e utilitários (utility_commands.py — AREA/ID/DDEDIT/PURGE)
   ui/          canvas Qt (renderiza todos os tipos de entidade, OSNAP/POLAR reais, respeita visibilidade/trava de camada), linha de comando, menu superior, ribbon, janela principal, Block Editor (block_editor_dialog.py), painel de xrefs (xref_panel.py), painel de camadas (layer_panel.py)
   io/          leitura/gravação DXF (dxf_io.py, com blocos/INSERT/Text/Dimension/Hatch) e ponte de leitura DWG via LibreDWG (dwg_bridge.py)
 tests/         testes automatizados (pytest) — incluindo testes de integração Qt (QTest) para seleção, arrasto, undo/redo, blocos/xref/imagem/PDF, anotação e OSNAP/POLAR
@@ -277,7 +285,7 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
-213/213 testes passando (validado no macOS nesta versão, rodando a suíte completa após mesclar os três marcos mais recentes — blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR — mais correções de leitura de `.dwg` real, tamanho/orientação de folha no Export PDF, correções de layout do ribbon, e o painel de camadas). O merge dos três marcos expôs um bug real de integração (não visível em nenhum dos três isoladamente): reabrir qualquer `.dxf` com uma cota contava a seta da cota como "entidade não suportada", porque o bloco auto-gerado pelo ezdxf para a seta (`_CLOSEDFILLED`) não caía no filtro de "bloco anônimo" (que só reconhecia nomes começando com `*`) — corrigido em `newsicad/io/dxf_io.py`. Testando com 25 `.dwg` reais do usuário também apareceram e foram corrigidos: uma quebra de linha espúria que o `dwg2dxf` insere em MTEXT longos, um crash de decodificação UTF-8 em avisos do `dwg2dxf`, e um fallback de leitura tolerante (`ezdxf.recover`) pra arquivos com dano estrutural — foi de 12/25 pra 16/25 abrindo com desenho completo (ver `newsicad/io/dwg_bridge.py`). O painel de camadas revelou (e corrigiu) mais um bug real: `document.current_layer` nunca funcionava de verdade — toda entidade nova ia sempre pra camada "0" (ver seção "Camadas" acima). Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses marcos).
+235/235 testes passando (validado no macOS nesta versão, rodando a suíte completa após mesclar os três marcos mais recentes — blocos/referências/PDF, anotação, e edição geométrica/OSNAP/POLAR — mais correções de leitura de `.dwg` real, tamanho/orientação de folha no Export PDF, correções de layout do ribbon, o painel de camadas, e os comandos utilitários `AREA`/`ID`/`DDEDIT`/`PURGE`/`RENAME` incorporados do guia oficial de atalhos do AutoCAD). O merge dos três marcos expôs um bug real de integração (não visível em nenhum dos três isoladamente): reabrir qualquer `.dxf` com uma cota contava a seta da cota como "entidade não suportada", porque o bloco auto-gerado pelo ezdxf para a seta (`_CLOSEDFILLED`) não caía no filtro de "bloco anônimo" (que só reconhecia nomes começando com `*`) — corrigido em `newsicad/io/dxf_io.py`. Testando com 25 `.dwg` reais do usuário também apareceram e foram corrigidos: uma quebra de linha espúria que o `dwg2dxf` insere em MTEXT longos, um crash de decodificação UTF-8 em avisos do `dwg2dxf`, e um fallback de leitura tolerante (`ezdxf.recover`) pra arquivos com dano estrutural — foi de 12/25 pra 16/25 abrindo com desenho completo (ver `newsicad/io/dwg_bridge.py`). O painel de camadas revelou (e corrigiu) mais um bug real: `document.current_layer` nunca funcionava de verdade — toda entidade nova ia sempre pra camada "0" (ver seção "Camadas" acima). Essa validação específica ainda não foi refeita no Windows 11 (a última validação em Windows real, com 56/56 testes, foi antes desses marcos).
 
 Observação sobre `tests/test_dwg_bridge.py`: os testes que exercitam `dwg_to_document` de verdade dependem do binário `dwg2dxf` do LibreDWG (empacotado para macOS/Windows em `newsicad/resources/libredwg/`, ou disponível no PATH). Em ambientes sem nenhum dos dois (ex.: a maioria dos runners de CI em Linux), esses testes são pulados automaticamente (`pytest.skip`) em vez de falhar.
 

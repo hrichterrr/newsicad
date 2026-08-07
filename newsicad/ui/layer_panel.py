@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTableWidget,
@@ -69,7 +70,8 @@ class LayerPanel(QDockWidget):
 
         note = QLabel(
             "Duplo clique no nome define a camada atual (onde novas\n"
-            "entidades são desenhadas) — em negrito na lista."
+            "entidades são desenhadas) — em negrito na lista. Clique com o\n"
+            "botão direito pra renomear."
         )
         note.setStyleSheet("color: #808080; font-size: 10px;")
         layout.addWidget(note)
@@ -85,6 +87,8 @@ class LayerPanel(QDockWidget):
         header.setSectionResizeMode(_COL_LOCKED, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
         self.table.cellDoubleClicked.connect(self._handle_double_click)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.table, stretch=1)
 
         button_row = QHBoxLayout()
@@ -169,6 +173,51 @@ class LayerPanel(QDockWidget):
             return
         self.main_window.document.set_current_layer(name_item.text())
         self.refresh()
+
+    def _show_context_menu(self, pos) -> None:
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        name_item = self.table.item(row, _COL_NAME)
+        if name_item is None:
+            return
+        name = name_item.text()
+
+        menu = QMenu(self)
+        rename_action = menu.addAction("Renomear...")
+        rename_action.setEnabled(name != "0")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is rename_action:
+            self._rename_layer(name)
+
+    def prompt_rename_current_layer(self) -> None:
+        """Chamado pelo comando RENAME (REN) digitado — sem uma linha da
+        tabela clicada pra saber qual camada, usa a camada atual como
+        default (mesmo padrão de "onde o usuário está trabalhando agora")."""
+        self._rename_layer(self.main_window.document.current_layer)
+
+    def _rename_layer(self, old_name: str) -> None:
+        if old_name == "0":
+            QMessageBox.information(self, "Renomear camada", 'A camada "0" não pode ser renomeada.')
+            return
+        new_name, ok = QInputDialog.getText(self, "Renomear camada", "Novo nome:", text=old_name)
+        if not ok:
+            return
+        self._rename_layer_with_names(old_name, new_name)
+
+    def _rename_layer_with_names(self, old_name: str, new_name: str) -> None:
+        """Lógica de renomear em si, separada de `_rename_layer` (que lida
+        com o QInputDialog) pra poder ser testada sem simular um diálogo."""
+        new_name = new_name.strip()
+        if not new_name or new_name == old_name:
+            return
+        try:
+            self.main_window.document.rename_layer(old_name, new_name)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Renomear camada", str(exc))
+            return
+        self.refresh()
+        self.main_window._refresh_properties_panel()
 
     def _create_layer(self) -> None:
         name, ok = QInputDialog.getText(self, "Nova camada", "Nome da camada:")

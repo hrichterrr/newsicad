@@ -787,3 +787,29 @@ def chamfer_lines(line1: Line, line2: Line, dist1: float, dist2: float) -> Line:
         line2.end = point2
 
     return Line(start=point1, end=point2, layer=line1.layer, color=line1.color)
+
+
+# ---------------------------------------------------------------------- #
+# área/perímetro de polígono — usado pelo comando AREA (AA)
+# ---------------------------------------------------------------------- #
+def polygon_area(points: list[Point]) -> float:
+    """Área de um polígono fechado pela fórmula do shoelace (assume que o
+    último ponto se conecta de volta ao primeiro, mesmo sem repeti-lo em
+    `points`)."""
+    if len(points) < 3:
+        return 0.0
+    total = 0.0
+    n = len(points)
+    for i in range(n):
+        a, b = points[i], points[(i + 1) % n]
+        total += a.x * b.y - b.x * a.y
+    return abs(total) / 2.0
+
+
+def polygon_perimeter(points: list[Point], closed: bool) -> float:
+    if len(points) < 2:
+        return 0.0
+    pairs = list(zip(points, points[1:]))
+    if closed:
+        pairs.append((points[-1], points[0]))
+    return sum(a.distance_to(b) for a, b in pairs)

@@ -80,6 +80,9 @@ def _build_file_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(export_pdf_action)
 
     menu.addSeparator()
+    _add_command_action(menu, "Purge Unused...", "PURGE", window)
+
+    menu.addSeparator()
     exit_action = QAction("Exit", window)
     exit_action.triggered.connect(window.close)
     menu.addAction(exit_action)
@@ -171,6 +174,10 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     layers_action.triggered.connect(lambda: window._start_command("LAYER"))
     menu.addAction(layers_action)
 
+    rename_layer_action = QAction("Rename Current Layer...", window)
+    rename_layer_action.triggered.connect(lambda: window._start_command("RENAME"))
+    menu.addAction(rename_layer_action)
+
 
 def _build_insert_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Insert")
@@ -210,6 +217,8 @@ def _build_dimension_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     _add_command_action(menu, "Style...", "DIMSTYLE", window)
     menu.addSeparator()
     _add_command_action(menu, "Distance", "DIST", window)
+    _add_command_action(menu, "Area", "AREA", window)
+    _add_command_action(menu, "Point Coordinates (ID)", "ID", window)
 
 
 def _build_modify_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
@@ -232,6 +241,8 @@ def _build_modify_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addSeparator()
     _add_command_action(menu, "Divide", "DIVIDE", window)
     _add_command_action(menu, "Measure", "MEASURE", window)
+    menu.addSeparator()
+    _add_command_action(menu, "Edit Text...", "DDEDIT", window)
     menu.addSeparator()
     _add_disabled(menu, "Match Properties")
 

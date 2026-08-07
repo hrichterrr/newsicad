@@ -268,10 +268,12 @@ class MainWindow(QMainWindow):
             XrefPanel(self).exec()
             self._after_interpreter_step()
             return
-        if name == "LAYER":
+        if name in ("LAYER", "RENAME"):
             self.layer_dock.refresh()
             self.layer_dock.setVisible(True)
             self.layer_dock.raise_()
+            if name == "RENAME":
+                self.layer_dock.prompt_rename_current_layer()
             self._after_interpreter_step()
             return
         if name == "IMAGEATTACH":

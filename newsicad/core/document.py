@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from newsicad.core.entities import Entity
+from newsicad.core.entities import BlockReference, Entity
 
 DEFAULT_LAYER_COLOR = "#FFFFFF"
 
@@ -76,3 +76,66 @@ class Document:
 
     def get_block_definition(self, name: str) -> list[Entity]:
         return self.block_definitions.get(name, [])
+
+    def rename_layer(self, old_name: str, new_name: str) -> None:
+        """RENAME (REN): renomeia uma camada, atualizando toda entidade que a
+        referencia (no desenho e dentro de definições de bloco) e o
+        current_layer se for o caso. Camada "0" nunca pode ser renomeada
+        (igual ao AutoCAD — é a camada padrão de qualquer desenho)."""
+        if old_name == "0":
+            raise ValueError('A camada "0" não pode ser renomeada.')
+        if old_name not in self.layers:
+            raise ValueError(f"Camada '{old_name}' não existe.")
+        if new_name in self.layers:
+            raise ValueError(f"Já existe uma camada chamada '{new_name}'.")
+
+        layer = self.layers.pop(old_name)
+        layer.name = new_name
+        self.layers[new_name] = layer
+
+        for entity in self.entities.values():
+            if entity.layer == old_name:
+                entity.layer = new_name
+        for entities in self.block_definitions.values():
+            for entity in entities:
+                if entity.layer == old_name:
+                    entity.layer = new_name
+
+        if self.current_layer == old_name:
+            self.current_layer = new_name
+
+    def _used_layer_names(self) -> set[str]:
+        used = {entity.layer for entity in self.entities.values()}
+        for entities in self.block_definitions.values():
+            used.update(entity.layer for entity in entities)
+        return used
+
+    def purge_unused_layers(self) -> list[str]:
+        """PURGE (PU): remove camadas sem nenhuma entidade (no desenho ou
+        dentro de blocos) — nunca a camada "0". Retorna os nomes removidos.
+        Se a camada atual for removida, current_layer volta a ser "0"."""
+        used = self._used_layer_names()
+        removable = sorted(name for name in self.layers if name != "0" and name not in used)
+        for name in removable:
+            del self.layers[name]
+            if self.current_layer == name:
+                self.current_layer = "0"
+        return removable
+
+    def purge_unused_blocks(self) -> list[str]:
+        """PURGE (PU): remove definições de bloco sem nenhuma BlockReference
+        apontando pra elas (nem no desenho, nem dentro de outro bloco).
+        Retorna os nomes removidos."""
+        referenced: set[str] = set()
+        for entity in self.entities.values():
+            if isinstance(entity, BlockReference):
+                referenced.add(entity.block_name)
+        for entities in self.block_definitions.values():
+            for entity in entities:
+                if isinstance(entity, BlockReference):
+                    referenced.add(entity.block_name)
+
+        removable = sorted(name for name in self.block_definitions if name not in referenced)
+        for name in removable:
+            del self.block_definitions[name]
+        return removable

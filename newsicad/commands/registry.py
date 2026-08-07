@@ -16,6 +16,7 @@ from newsicad.commands import annotation_commands as ac
 from newsicad.commands import block_commands as bc
 from newsicad.commands import draw_commands as dc
 from newsicad.commands import modify_commands as mc
+from newsicad.commands import utility_commands as uc
 from newsicad.commands import view_commands as vc
 
 COMMAND_REGISTRY = {
@@ -62,6 +63,11 @@ COMMAND_REGISTRY = {
     "DIMSTYLE": ac.dimstyle_command,
     "HATCH": ac.hatch_command,
     "LEADER": ac.leader_command,
+    # utilitários
+    "AREA": uc.area_command,
+    "ID": uc.id_command,
+    "DDEDIT": uc.edit_text_command,
+    "PURGE": uc.purge_command,
 }
 
 # Comandos conhecidos (do guia de atalhos do AutoCAD) que ainda não têm
@@ -86,13 +92,13 @@ PLANNED_COMMANDS = {
     "DVIEW",
 }
 
-# BEDIT, REFEDIT, XREF, EXTERNALREFERENCES, IMAGEATTACH, PLOT, PUBLISH e
-# LAYER estão implementados, mas — assim como UNITS/REGEN — não passam pelo
-# sistema de Prompt (point/distance/text/keyword/selection): precisam de um
-# QDialog, QFileDialog ou QDockWidget (LAYER), então a MainWindow os
-# intercepta antes de chamar CommandInterpreter.start() (ver
-# MainWindow._start_command em newsicad/ui/main_window.py). Por isso não
-# aparecem em COMMAND_REGISTRY.
+# BEDIT, REFEDIT, XREF, EXTERNALREFERENCES, IMAGEATTACH, PLOT, PUBLISH,
+# LAYER e RENAME estão implementados, mas — assim como UNITS/REGEN — não
+# passam pelo sistema de Prompt (point/distance/text/keyword/selection):
+# precisam de um QDialog, QFileDialog ou QDockWidget (LAYER/RENAME abrem o
+# painel de camadas), então a MainWindow os intercepta antes de chamar
+# CommandInterpreter.start() (ver MainWindow._start_command em
+# newsicad/ui/main_window.py). Por isso não aparecem em COMMAND_REGISTRY.
 
 ALIASES = {
     # --- desenho (DRAW) ---
@@ -121,6 +127,9 @@ ALIASES = {
     "DIMRADIUS": "DIMRADIUS", "DRA": "DIMRADIUS",
     "DIMDIAMETER": "DIMDIAMETER", "DDI": "DIMDIAMETER",
     "DIST": "DIST", "DI": "DIST",
+    "AREA": "AREA", "AA": "AREA",
+    "ID": "ID",
+    "DDEDIT": "DDEDIT", "ED": "DDEDIT",
     "MATCHPROP": "MATCHPROP", "MA": "MATCHPROP",
     "DIMSTYLE": "DIMSTYLE", "D": "DIMSTYLE", "DS": "DIMSTYLE",
     "DIM": "DIM",
@@ -156,11 +165,13 @@ ALIASES = {
     "EXTERNALREFERENCES": "EXTERNALREFERENCES", "ER": "EXTERNALREFERENCES",
     # --- navegação de vista ---
     "ZOOM": "ZOOM", "Z": "ZOOM",
-    "PAN": "PAN",
+    "PAN": "PAN", "P": "PAN",
     "REGEN": "REGEN", "RE": "REGEN", "REA": "REGEN",
     "DVIEW": "DVIEW",
     # --- configuração / saída ---
     "LAYER": "LAYER", "LA": "LAYER",
+    "RENAME": "RENAME", "REN": "RENAME",
+    "PURGE": "PURGE", "PU": "PURGE",
     "OPTIONS": "OPTIONS", "OP": "OPTIONS",
     "UNITS": "UNITS",
     "GEOMCONSTRAINT": "GEOMCONSTRAINT", "GCON": "GEOMCONSTRAINT",
