@@ -635,6 +635,12 @@ class MainWindow(QMainWindow):
         self.canvas.viewport().update()
         self._refresh_prompt()
         self._refresh_properties_panel()
+        # Cobre PURGE/BLOCK/qualquer comando que possa mudar o conjunto de
+        # camadas do documento sem passar pelo LAYER/RENAME (que já dão
+        # refresh explícito) — sem isso o painel de camadas ficava com dados
+        # obsoletos (ex.: mostrando uma camada que o PURGE acabou de remover)
+        # até o usuário mexer nele manualmente.
+        self.layer_dock.refresh()
         self.command_line.focus_input()
 
     def _refresh_prompt(self) -> None:
