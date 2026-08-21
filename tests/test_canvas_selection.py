@@ -148,3 +148,45 @@ def test_move_via_real_mouse_events_updates_rendered_geometry():
     expected_start = cad_to_scene(moved.start)
     assert abs(rendered_line.x1() - expected_start.x()) < 1e-6
     assert abs(rendered_line.y1() - expected_start.y()) < 1e-6
+
+
+def test_delete_key_erases_selected_entities():
+    """Regressão: selecionar clicando direto no canvas (sem comando ativo)
+    e apertar Delete precisa apagar a seleção, igual ao ERASE."""
+    app = _app()
+    window = MainWindow()
+
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
+    assert len(window.document.entities) == 1
+
+    pos = _viewport_pos(window, Point(5, 0))
+    QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    app.processEvents()
+    assert len(window.selection.ids) == 1
+
+    QTest.keyClick(window.canvas.viewport(), Qt.Key.Key_Delete)
+    app.processEvents()
+
+    assert len(window.document.entities) == 0
+    assert len(window.selection.ids) == 0
+
+
+def test_delete_key_without_selection_does_nothing():
+    app = _app()
+    window = MainWindow()
+
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
+    assert len(window.document.entities) == 1
+
+    QTest.keyClick(window.canvas.viewport(), Qt.Key.Key_Delete)
+    app.processEvents()
+
+    assert len(window.document.entities) == 1

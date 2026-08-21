@@ -273,6 +273,7 @@ class CanvasView(QGraphicsView):
         self.on_enter: Callable[[], None] | None = None
         self.on_cancel: Callable[[], None] | None = None
         self.on_selection_changed: Callable[[], None] | None = None
+        self.on_delete_pressed: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------ #
     # sincronização com o Document
@@ -1103,6 +1104,13 @@ class CanvasView(QGraphicsView):
                 self._handle_selection_press(event)
                 event.accept()
                 return
+            if not self.interpreter.active:
+                # Sem comando ativo, clique/arrasto seleciona direto (estilo
+                # AutoCAD "noun-verb") — permite depois apertar Delete/ERASE
+                # sem precisar iniciar um comando de modificação primeiro.
+                self._handle_selection_press(event)
+                event.accept()
+                return
             if self.on_point is not None:
                 self.on_point(self._resolve_point(event))
             event.accept()
@@ -1172,6 +1180,13 @@ class CanvasView(QGraphicsView):
             # precisa confirmar mesmo assim, igual clique direito.
             if self.on_enter is not None:
                 self.on_enter()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Delete:
+            # Seleção feita direto no canvas (noun-verb, sem comando ativo)
+            # também precisa responder a Delete, igual ao ERASE do menu.
+            if self.on_delete_pressed is not None:
+                self.on_delete_pressed()
             event.accept()
             return
         super().keyPressEvent(event)

@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         self.canvas.on_enter = self._handle_enter
         self.canvas.on_cancel = self._handle_cancel
         self.canvas.on_selection_changed = self._refresh_properties_panel
+        self.canvas.on_delete_pressed = self._delete_selected
         self.canvas.mouse_moved.connect(self._handle_mouse_moved)
         self.context.view = self.canvas
 
@@ -292,6 +293,18 @@ class MainWindow(QMainWindow):
     def _select_all(self) -> None:
         self.selection.set(set(self.document.entities.keys()))
         self.canvas.refresh_selection_highlight()
+
+    def _delete_selected(self) -> None:
+        """Delete pressionado no canvas: apaga a seleção feita direto por
+        clique (noun-verb), sem precisar digitar/menu ERASE. Só age fora de
+        um comando ativo — durante um comando, Delete não faz nada aqui."""
+        if self.interpreter.active or not self.selection.ids:
+            return
+        self.undo_stack.push()
+        for entity in self.selection.entities(self.document):
+            self.document.remove_entity(entity.id)
+        self.selection.clear()
+        self.canvas.refresh_entities()
         self.canvas.viewport().update()
         self._refresh_properties_panel()
 
