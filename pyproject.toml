@@ -1,6 +1,6 @@
 [project]
 name = "newsicad"
-version = "2.0.0"
+version = "2.0.1"
 description = "CAD 2D desktop com interface e comandos estilo AutoCAD"
 authors = [{ name = "HRichter" }]
 requires-python = ">=3.9"
