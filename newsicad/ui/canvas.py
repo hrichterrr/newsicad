@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
+    QStyleOptionGraphicsItem,
 )
 
 from newsicad.commands.interpreter import CommandInterpreter
@@ -85,6 +86,9 @@ CROSSHAIR_COLOR = "#d0d0d0"
 # da viewport (100%); Albert (grupo de testers) pediu um cursor menor, "tipo
 # o do AutoCad".
 CROSSHAIR_SIZE_PERCENT = 5
+#: Folga (px) somada à caixa repintada ao redor do cursor: cobre o texto
+#: do dynamic input, que fica ao lado do cursor, e o marcador de OSNAP.
+_CURSOR_REGION_PADDING_PX = 16
 ENTITY_COLOR = "#e8e8e8"
 # Chave arbitrária pra QGraphicsItem.setData/.data — QGraphicsItem não é um
 # QObject (diferente da maioria dos outros widgets Qt), então não tem
@@ -92,6 +96,11 @@ ENTITY_COLOR = "#e8e8e8"
 # equivalente. Usado só pra guardar a cor "de base" de cada item, restaurada
 # ao desselecionar (ver CanvasView._restore_base_pen).
 _BASE_COLOR_DATA_KEY = 0
+#: Chave de dados onde cada item de PRIMEIRO NÍVEL guarda o id da entidade
+#: que ele representa. Usada pelo pré-filtro de hit-test: a cena devolve
+#: wrappers Python novos a cada consulta, então comparar por identidade de
+#: objeto (ou `id()`) não funciona — o dado fica do lado do Qt e sobrevive.
+_ENTITY_ID_DATA_KEY = 1
 # Ordem de desenho: cada entidade do modelspace recebe zValue = (posição no
 # dict do Document) x este passo, então a cena empilha na mesma ordem em que
 # as entidades estão no documento (= ordem de criação, ou a ordem de desenho
@@ -471,30 +480,67 @@ def _scaled_text_path(font: QFont, text: str, scale: float) -> tuple[QPainterPat
     return transform.map(path), _metrics(font).horizontalAdvance(text) * scale
 
 
+#: Abaixo deste tamanho em PIXELS na tela, uma hachura é pintada como um
+#: preenchimento chapado translúcido em vez de linha a linha: o padrão não é
+#: distinguível nesse zoom e o custo de desenhar centenas de segmentos por
+#: hachura, a cada repintura, é o que travava o mover do mouse numa planta
+#: real (medido em 2026-09-03 na planta Ana Beatriz: 97 mil `drawLine` em 40
+#: movimentos de mouse, 40 ms por movimento).
+_HATCH_LOD_MIN_PIXELS = 24.0
+
+
 class _HatchItem(QGraphicsPathItem):
     """QGraphicsPathItem cujo path é o contorno da hachura; o preenchimento
     (linhas diagonais paralelas) é desenhado por cima, recortado ao contorno
     via QPainter.setClipPath — mais simples e robusto do que tentar recortar
-    cada segmento de linha manualmente contra o polígono."""
+    cada segmento de linha manualmente contra o polígono.
+
+    As linhas são guardadas num ÚNICO `QPainterPath` (`_lines_path`), não numa
+    lista de pares de pontos: um `drawPath` por repintura no lugar de um
+    `drawLine` por segmento. Some com a maior parte do custo por repintura sem
+    mudar nada do que aparece na tela."""
 
     def __init__(self, boundary_path: QPainterPath) -> None:
         super().__init__(boundary_path)
         self._hatch_lines: list[tuple[QPointF, QPointF]] = []
+        self._lines_path: QPainterPath | None = None
 
     def set_hatch_lines(self, lines: list[tuple[QPointF, QPointF]]) -> None:
         self._hatch_lines = lines
+        if lines:
+            path = QPainterPath()
+            for a, b in lines:
+                path.moveTo(a)
+                path.lineTo(b)
+            self._lines_path = path
+        else:
+            self._lines_path = None
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: D401
         super().paint(painter, option, widget)
-        if not self._hatch_lines:
+        if self._lines_path is None:
             return
+        # Tamanho aparente da hachura na tela: `option.levelOfDetailFromTransform`
+        # é a escala do mundo pra pixels na transformação atual da view.
+        try:
+            lod = QStyleOptionGraphicsItem.levelOfDetailFromTransform(painter.worldTransform())
+        except Exception:  # pragma: no cover - salvaguarda de plataforma
+            lod = 1.0
+        rect = self.boundingRect()
+        on_screen = max(rect.width(), rect.height()) * lod
         painter.save()
         painter.setClipPath(self.path())
-        pen = QPen(QColor(HATCH_LINE_COLOR))
-        pen.setWidth(0)
-        painter.setPen(pen)
-        for a, b in self._hatch_lines:
-            painter.drawLine(a, b)
+        if on_screen < _HATCH_LOD_MIN_PIXELS:
+            # Longe demais pra distinguir o padrão: chapa translúcida, uma
+            # operação só (mesma leitura visual, custo constante).
+            color = QColor(HATCH_LINE_COLOR)
+            color.setAlpha(90)
+            painter.fillPath(self.path(), QBrush(color))
+        else:
+            pen = QPen(QColor(HATCH_LINE_COLOR))
+            pen.setWidth(0)
+            painter.setPen(pen)
+            painter.drawPath(self._lines_path)
         painter.restore()
 
 
@@ -596,6 +642,9 @@ class CanvasView(QGraphicsView):
         self.scale(20, 20)
 
         self._entity_items: dict[str, QGraphicsItem] = {}
+        #: ids cujo item está com a caneta de seleção aplicada agora —
+        #: ver refresh_selection_highlight.
+        self._highlighted_ids: set[str] = set()
         #: id da entidade -> "impressão digital" do estado com que o item
         #: gráfico dela foi criado (ver refresh_entities) — permite pular a
         #: recriação de itens cujas entidades não mudaram desde o último
@@ -738,11 +787,12 @@ class CanvasView(QGraphicsView):
                 self._scene.removeItem(old_item)
             item = self._create_item(entity)
             item.setZValue(z_value)
+            item.setData(_ENTITY_ID_DATA_KEY, entity_id)
             self._scene.addItem(item)
             self._entity_items[entity_id] = item
             self._entity_fingerprints[entity_id] = fingerprint
 
-        self.refresh_selection_highlight()
+        self.refresh_selection_highlight(changed_only=False)
 
     def _effective_color(self, entity: Entity, inherited: tuple[str, str] | None = None) -> str:
         """Cor de verdade com que a entidade deve ser desenhada — regra do
@@ -784,13 +834,31 @@ class CanvasView(QGraphicsView):
         layer = self.document.layers.get(layer_name)
         return layer is None or layer.visible
 
-    def refresh_selection_highlight(self) -> None:
-        selected_ids = self.interpreter.context.selection.ids
-        for entity_id, item in self._entity_items.items():
-            if entity_id in selected_ids:
+    def refresh_selection_highlight(self, changed_only: bool = True) -> None:
+        """Aplica/remove a caneta de destaque nos itens selecionados.
+
+        `changed_only` (padrão) toca apenas os ids que ENTRARAM ou SAÍRAM da
+        seleção desde a última chamada — antes disso todo clique varria os
+        itens do desenho inteiro, descendo em cada bloco, o que custava ~0,6 s
+        por clique numa planta real (medição de 2026-09-03). Passe False
+        depois de recriar itens (refresh_entities), quando o que está na tela
+        não corresponde mais ao que foi destacado antes."""
+        selected_ids = set(self.interpreter.context.selection.ids)
+        if changed_only:
+            to_select = selected_ids - self._highlighted_ids
+            to_restore = self._highlighted_ids - selected_ids
+        else:
+            to_select = selected_ids
+            to_restore = set(self._entity_items) - selected_ids
+        for entity_id in to_select:
+            item = self._entity_items.get(entity_id)
+            if item is not None:
                 self._apply_pen(item, _selected_pen())
-            else:
+        for entity_id in to_restore:
+            item = self._entity_items.get(entity_id)
+            if item is not None:
                 self._restore_base_pen(item)
+        self._highlighted_ids = selected_ids & set(self._entity_items)
 
     def _apply_pen(self, item: QGraphicsItem, pen: QPen) -> None:
         """`QGraphicsItemGroup` (usado por BlockReference) e
@@ -1249,7 +1317,7 @@ class CanvasView(QGraphicsView):
         tolerance = self._hit_tolerance_world()
         best_id: str | None = None
         best_dist = tolerance
-        for entity_id, entity in self.document.entities.items():
+        for entity_id, entity in self._hit_candidates(cad_point, tolerance):
             if not self.document.is_layer_visible(entity) or self.document.is_layer_locked(entity):
                 continue
             dist = self._distance_to_entity(cad_point, entity)
@@ -1257,6 +1325,56 @@ class CanvasView(QGraphicsView):
                 best_dist = dist
                 best_id = entity_id
         return best_id
+
+    def _hit_candidates(self, cad_point: Point, tolerance: float):
+        """(id, entidade) das entidades que PODEM estar sob o ponto, usando o
+        índice espacial da cena como pré-filtro.
+
+        O teste exato (`_distance_to_entity`) é caro para BlockReference: ele
+        desce em toda a definição do bloco, e uma planta de arquitetura tem
+        centenas de instâncias de móveis com milhares de segmentos cada. A
+        cena do Qt já sabe, por índice, quais itens gráficos cruzam a
+        vizinhança do clique — o resto nem precisa ser testado (0,8 s por
+        clique antes disso, medição de 2026-09-03).
+
+        Se a cena ainda não estiver montada (ou o clique cair fora dela),
+        devolve tudo: correção nunca depende do pré-filtro."""
+        scene_point = cad_to_scene(cad_point)
+        rect = QRectF(
+            scene_point.x() - tolerance,
+            scene_point.y() - tolerance,
+            tolerance * 2,
+            tolerance * 2,
+        )
+        if len(self._entity_items) != len(self.document.entities):
+            # Cena ainda não montada ou desatualizada (entidade criada no meio
+            # de um comando, antes do refresh): sem pré-filtro confiável.
+            return self.document.entities.items()
+        items = self._scene.items(rect)
+        seen: set[str] = set()
+        candidates = []
+        for item in items:
+            # Sobe até o item de primeiro nível: os filhos de um bloco têm
+            # forma própria (é isso que permite descartar o bloco inteiro
+            # quando o clique cai num vão dele), mas quem é selecionável é a
+            # entidade dona.
+            top = item
+            parent = top.parentItem()
+            while parent is not None:
+                top = parent
+                parent = top.parentItem()
+            entity_id = top.data(_ENTITY_ID_DATA_KEY)
+            if entity_id is None or entity_id in seen:
+                continue
+            entity = self.document.entities.get(entity_id)
+            if entity is None:
+                continue
+            seen.add(entity_id)
+            candidates.append((entity_id, entity))
+        # Lista vazia aqui significa "não há nada desenhado perto do clique",
+        # não "não sei" — a cena está em dia (checado acima).
+        return candidates
+
 
     def _distance_to_entity(self, p: Point, entity: Entity) -> float | None:
         if isinstance(entity, Line):
@@ -2029,6 +2147,7 @@ class CanvasView(QGraphicsView):
 
         cad_point = self._apply_constraints(scene_to_cad(scene_pos))
         self._update_dynamic_input(cad_point)
+        previous_preview = self._preview_path
         self._update_preview(cad_point)
         self.mouse_moved.emit(cad_point)
         # Invalidação PARCIAL: o que o drawForeground desenha em função do
@@ -2044,17 +2163,36 @@ class CanvasView(QGraphicsView):
         # marcadas pra repintura.
         prev = self._last_cursor_viewport_pos
         self._last_cursor_viewport_pos = pos
-        if prev is None:
+        if prev is None or self._preview_path is not None or previous_preview is not None:
+            # Preview de comando (linha/retângulo/círculo em elástico até o
+            # cursor) pode cruzar a viewport inteira em diagonal — aí não dá
+            # pra recortar a área; repinta tudo. Fora de comando (o caso do
+            # dia a dia, navegando pelo desenho) cai no ramo barato abaixo.
             self.viewport().update()
         else:
-            w, h = self.viewport().width(), self.viewport().height()
-            region = QRegion()
-            for p in (prev, pos):
-                region += QRect(0, p.y() - 2, w, 5)
-                region += QRect(p.x() - 2, 0, 5, h)
-                region += QRect(p.x() - 150, p.y() - 150, 300, 300)
-            self.viewport().update(region)
+            self.viewport().update(self._cursor_region(prev, pos))
         super().mouseMoveEvent(event)
+
+    def _cursor_region(self, prev: QPoint, pos: QPoint) -> QRegion:
+        """Área a repintar quando SÓ o cursor se moveu: uma caixa em volta da
+        posição anterior e da nova, do tamanho do crosshair (uma fração da
+        viewport, ver CROSSHAIR_SIZE_PERCENT) mais uma folga para o pickbox,
+        o marcador de OSNAP e o texto do dynamic input.
+
+        Antes daqui saíam duas faixas de borda a borda da viewport (herança de
+        quando o crosshair era de tela cheia), o que fazia cada movimento do
+        mouse repintar todos os itens cruzados pela linha e pela coluna do
+        cursor — a causa da lentidão relatada pelos testers em plantas reais
+        (medição em newsicad/ui/canvas.py: 40 ms por movimento na planta Ana
+        Beatriz)."""
+        w, h = self.viewport().width(), self.viewport().height()
+        half_w = w * CROSSHAIR_SIZE_PERCENT / 100 / 2
+        half_h = h * CROSSHAIR_SIZE_PERCENT / 100 / 2
+        margin = int(max(half_w, half_h, _PICKBOX_SIZE_PX, _OSNAP_MARKER_SIZE_PX)) + _CURSOR_REGION_PADDING_PX
+        region = QRegion()
+        for p in (prev, pos):
+            region += QRect(p.x() - margin, p.y() - margin, margin * 2, margin * 2)
+        return region
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
