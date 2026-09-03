@@ -6,11 +6,25 @@ da transformação."""
 from __future__ import annotations
 
 import math
+import pickle
 from typing import Generator
 
 from newsicad.commands.context import CommandContext
 from newsicad.commands.interpreter import ENTER, Prompt
-from newsicad.core.entities import Arc, Circle, Entity, Line, LWPolyline, Point
+from newsicad.core.entities import (
+    Arc,
+    BlockReference,
+    Circle,
+    Entity,
+    ImageReference,
+    Line,
+    LWPolyline,
+    Point,
+    PointEntity,
+    Spline,
+    Text,
+    _new_id,
+)
 from newsicad.core.geometry_ops import (
     as_intersectable_pieces,
     chamfer_lines,
@@ -27,6 +41,7 @@ from newsicad.core.geometry_ops import (
     offset_line,
     offset_polyline,
     rotate_entity,
+    rotate_point,
     scale_entity,
     segment_parameter,
     translate_entity,
@@ -94,6 +109,14 @@ def scale_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         return
     base = yield Prompt("Specify base point:", kind="point")
     factor = yield Prompt("Specify scale factor:", kind="distance")
+    if factor <= 0:
+        # Fator 0 colapsa a geometria num ponto; fator negativo produz
+        # raio/dimensão negativos que sobrevivem intactos a um round-trip de
+        # .dxf sem nenhum aviso em lugar nenhum (bug real de auditoria,
+        # 2026-08-22) — mesma guarda que OFFSET já tem pra distância.
+        yield Prompt("SCALE: o fator de escala deve ser positivo.", kind="info")
+        ctx.selection.clear()
+        return
     for entity in selected:
         scale_entity(entity, base, factor)
     ctx.selection.clear()
@@ -105,16 +128,118 @@ def mirror_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         return
     p1 = yield Prompt("Specify first point of mirror line:", kind="point")
     p2 = yield Prompt("Specify second point of mirror line:", kind="point")
+    if p1.distance_to(p2) <= 1e-9:
+        # Eixo degenerado (os dois cliques no mesmo lugar) faz mirror_point
+        # dividir por zero internamente e devolver uma cópia idêntica
+        # empilhada em cima do original, sem nenhum aviso — bug real de
+        # auditoria, 2026-08-22.
+        yield Prompt("MIRROR: os dois pontos do eixo de espelhamento não podem coincidir.", kind="info")
+        ctx.selection.clear()
+        return
     choice = yield Prompt("Erase source objects? [Yes/No] <N>:", kind="keyword", options=["Yes", "No"])
 
     for entity in selected:
-        ctx.document.add_entity(mirror_entity(entity, p1, p2))
+        mirrored = mirror_entity(entity, p1, p2)
+        mirrored.id = _new_id()
+        ctx.document.add_entity(mirrored)
 
     if choice == "YES":
         for entity in selected:
             ctx.document.remove_entity(entity.id)
 
     ctx.selection.clear()
+
+
+def align_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """ALIGN (AL): move/rotaciona (e opcionalmente escala) os objetos
+    selecionados para alinhar um par de pontos de origem com um par de
+    pontos de destino — mesmo cálculo do ALIGN de verdade do AutoCAD no modo
+    2 pontos (o modo de 3 pontos/3D não é suportado nesta versão, já que o
+    NewSIcad só tem um espaço de desenho 2D)."""
+    selected = yield from _select_objects(ctx)
+    if not selected:
+        return
+    src1 = yield Prompt("Specify first source point:", kind="point")
+    dst1 = yield Prompt("Specify first destination point:", kind="point")
+    src2 = yield Prompt("Specify second source point:", kind="point")
+    dst2 = yield Prompt("Specify second destination point:", kind="point")
+    scale_choice = yield Prompt(
+        "Scale objects based on alignment points? [Yes/No] <N>:", kind="keyword", options=["Yes", "No"]
+    )
+
+    dx, dy = dst1.x - src1.x, dst1.y - src1.y
+    for entity in selected:
+        translate_entity(entity, dx, dy)
+    src2_translated = Point(src2.x + dx, src2.y + dy)
+
+    angle = dst1.angle_to(dst2) - dst1.angle_to(src2_translated)
+    for entity in selected:
+        rotate_entity(entity, dst1, angle)
+
+    if scale_choice == "YES":
+        src_len = dst1.distance_to(src2_translated)
+        dst_len = dst1.distance_to(dst2)
+        if src_len > 1e-9:
+            factor = dst_len / src_len
+            for entity in selected:
+                scale_entity(entity, dst1, factor)
+
+    ctx.selection.clear()
+
+
+def array_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """ARRAY (AR): array retangular (linhas/colunas + espaçamento) ou polar
+    (centro + número de itens + ângulo total a preencher, sentido
+    anti-horário), reaproveitando clone_entity/translate_entity/rotate_entity
+    — igual a COPY/ROTATE feitos várias vezes. Simplificação documentada:
+    sem edição associativa depois de criado (cada cópia é uma entidade
+    independente, como se o usuário tivesse dado EXPLODE no array)."""
+    selected = yield from _select_objects(ctx)
+    if not selected:
+        return
+    kind = yield Prompt(
+        "Enter array type [Rectangular/Polar] <Rectangular>:", kind="keyword", options=["Rectangular", "Polar"]
+    )
+    new_ids: set[str] = set()
+
+    if kind == "POLAR":
+        center = yield Prompt("Specify center point of array:", kind="point")
+        count_raw = yield Prompt("Enter number of items <6>:", kind="distance")
+        count = 6 if count_raw is ENTER else max(1, int(count_raw))
+        angle_raw = yield Prompt("Specify angle to fill <360>:", kind="distance")
+        angle_total_deg = 360.0 if angle_raw is ENTER else angle_raw
+        angle_total = math.radians(angle_total_deg)
+        full_circle = abs(angle_total_deg % 360.0) < 1e-9
+        step = angle_total / count if full_circle else (angle_total / (count - 1) if count > 1 else 0.0)
+        for i in range(1, count):
+            for entity in selected:
+                clone = clone_entity(entity)
+                rotate_entity(clone, center, step * i)
+                ctx.document.add_entity(clone)
+                new_ids.add(clone.id)
+    else:
+        rows_raw = yield Prompt("Enter number of rows <1>:", kind="distance")
+        rows = 1 if rows_raw is ENTER else max(1, int(rows_raw))
+        cols_raw = yield Prompt("Enter number of columns <1>:", kind="distance")
+        cols = 1 if cols_raw is ENTER else max(1, int(cols_raw))
+        row_spacing = 0.0
+        if rows > 1:
+            row_spacing = yield Prompt("Specify distance between rows:", kind="distance")
+        col_spacing = 0.0
+        if cols > 1:
+            col_spacing = yield Prompt("Specify distance between columns:", kind="distance")
+        for row in range(rows):
+            for col in range(cols):
+                if row == 0 and col == 0:
+                    continue
+                dx, dy = col * col_spacing, row * row_spacing
+                for entity in selected:
+                    clone = clone_entity(entity)
+                    translate_entity(clone, dx, dy)
+                    ctx.document.add_entity(clone)
+                    new_ids.add(clone.id)
+
+    ctx.selection.set(new_ids)
 
 
 # ------------------------------------------------------------------ #
@@ -510,41 +635,73 @@ def chamfer_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 # ------------------------------------------------------------------ #
 # JOIN (Lines colineares conectadas nas pontas -> uma única Line)
 # ------------------------------------------------------------------ #
-def _join_collinear_lines(lines: list[Line]) -> tuple[Point, Point, set[str]] | None:
-    base_a, base_b = lines[0].start, lines[0].end
-    dx, dy = base_b.x - base_a.x, base_b.y - base_a.y
+def _lines_collinear(a: Line, b: Line) -> bool:
+    dx, dy = a.end.x - a.start.x, a.end.y - a.start.y
     length = math.hypot(dx, dy)
     if length < 1e-9:
-        return None
+        return False
     ux, uy = dx / length, dy / length
-
-    def project(pt: Point) -> float:
-        return (pt.x - base_a.x) * ux + (pt.y - base_a.y) * uy
+    tolerance = max(length, 1.0) * 1e-6
 
     def perp_dist(pt: Point) -> float:
-        return abs((pt.x - base_a.x) * (-uy) + (pt.y - base_a.y) * ux)
+        return abs((pt.x - a.start.x) * (-uy) + (pt.y - a.start.y) * ux)
 
-    tolerance = max(length, 1.0) * 1e-6
-    intervals = []
+    return perp_dist(b.start) <= tolerance and perp_dist(b.end) <= tolerance
+
+
+def _join_collinear_runs(lines: list[Line]) -> list[list[Line]]:
+    """Agrupa `lines` em "runs" — grupos colineares E conectados ponta-a-
+    ponta sem gap (mesmo critério de tolerância de antes). Uma linha solta
+    que não é colinear/conectada a nenhuma outra vira seu próprio run de
+    tamanho 1, em vez de bloquear a união das demais: antes, uma única linha
+    fora do padrão na seleção fazia o JOIN inteiro falhar (tudo-ou-nada),
+    mesmo quando o resto da seleção formava pares válidos (bug real de
+    auditoria, 2026-08-22)."""
+    clusters: list[list[Line]] = []
     for line in lines:
-        if perp_dist(line.start) > tolerance or perp_dist(line.end) > tolerance:
-            return None
-        t1, t2 = project(line.start), project(line.end)
-        intervals.append((min(t1, t2), max(t1, t2), line.id))
+        for cluster in clusters:
+            if _lines_collinear(cluster[0], line):
+                cluster.append(line)
+                break
+        else:
+            clusters.append([line])
 
-    intervals.sort(key=lambda iv: iv[0])
-    merged_lo, merged_hi = intervals[0][0], intervals[0][1]
-    used = {intervals[0][2]}
-    gap_tol = max(length, 1.0) * 1e-6
-    for lo, hi, line_id in intervals[1:]:
-        if lo > merged_hi + gap_tol:
-            return None
-        merged_hi = max(merged_hi, hi)
-        used.add(line_id)
+    runs: list[list[Line]] = []
+    for cluster in clusters:
+        if len(cluster) == 1:
+            runs.append(cluster)
+            continue
 
-    start_pt = Point(base_a.x + ux * merged_lo, base_a.y + uy * merged_lo)
-    end_pt = Point(base_a.x + ux * merged_hi, base_a.y + uy * merged_hi)
-    return start_pt, end_pt, used
+        base_a, base_b = cluster[0].start, cluster[0].end
+        dx, dy = base_b.x - base_a.x, base_b.y - base_a.y
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            runs.extend([line] for line in cluster)
+            continue
+        ux, uy = dx / length, dy / length
+
+        def project(pt: Point) -> float:
+            return (pt.x - base_a.x) * ux + (pt.y - base_a.y) * uy
+
+        gap_tol = max(length, 1.0) * 1e-6
+        entries = sorted(
+            ((min(project(line.start), project(line.end)), max(project(line.start), project(line.end)), line)
+             for line in cluster),
+            key=lambda entry: entry[0],
+        )
+        current_run = [entries[0]]
+        current_hi = entries[0][1]
+        for lo, hi, line in entries[1:]:
+            if lo > current_hi + gap_tol:
+                runs.append([e[2] for e in current_run])
+                current_run = [(lo, hi, line)]
+                current_hi = hi
+            else:
+                current_run.append((lo, hi, line))
+                current_hi = max(current_hi, hi)
+        runs.append([e[2] for e in current_run])
+
+    return runs
 
 
 def join_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -558,22 +715,46 @@ def join_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         ctx.selection.clear()
         return
 
-    result = _join_collinear_lines(lines)
-    if result is None:
+    runs = _join_collinear_runs(lines)
+    joined_count = 0
+    untouched_count = 0
+    merged_objects = 0
+    for run in runs:
+        if len(run) < 2:
+            untouched_count += len(run)
+            continue
+
+        base_a, base_b = run[0].start, run[0].end
+        dx, dy = base_b.x - base_a.x, base_b.y - base_a.y
+        length = math.hypot(dx, dy)
+        ux, uy = dx / length, dy / length
+
+        def project(pt: Point) -> float:
+            return (pt.x - base_a.x) * ux + (pt.y - base_a.y) * uy
+
+        lo = min(min(project(line.start), project(line.end)) for line in run)
+        hi = max(max(project(line.start), project(line.end)) for line in run)
+
+        survivor = run[0]
+        survivor.start = Point(base_a.x + ux * lo, base_a.y + uy * lo)
+        survivor.end = Point(base_a.x + ux * hi, base_a.y + uy * hi)
+        for line in run[1:]:
+            ctx.document.remove_entity(line.id)
+        joined_count += len(run)
+        merged_objects += 1
+
+    ctx.selection.clear()
+    if joined_count == 0:
         yield Prompt(
             "Os objetos selecionados não são colineares e conectados nas pontas — nada foi unido.",
             kind="info",
         )
-        ctx.selection.clear()
         return
 
-    new_start, new_end, used_ids = result
-    survivor = lines[0]
-    survivor.start, survivor.end = new_start, new_end
-    for line in lines[1:]:
-        if line.id in used_ids:
-            ctx.document.remove_entity(line.id)
-    ctx.selection.clear()
+    message = f"JOIN: {joined_count} linha(s) unida(s) em {merged_objects} objeto(s)."
+    if untouched_count:
+        message += f" {untouched_count} objeto(s) não colinear(es)/conectado(s) ficaram como estavam."
+    yield Prompt(message, kind="info")
 
 
 # ------------------------------------------------------------------ #
@@ -619,11 +800,24 @@ def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     def inside(pt: Point) -> bool:
         return lo_x <= pt.x <= hi_x and lo_y <= pt.y <= hi_y
 
+    # Entidades de "ponto único" (sem vértice parcial possível): a janela
+    # captura o objeto inteiro ou não captura nada, igual ao STRETCH de
+    # verdade do AutoCAD tratando Circle/bloco/texto pelo ponto que os
+    # define. Antes só Line/LWPolyline eram reconhecidas — esticar uma
+    # parede (Line) deixava portas/sensores/câmeras (Circle/PointEntity/
+    # BlockReference/Text) pra trás, em silêncio (bug real de auditoria,
+    # 2026-08-22).
     affected: list[Entity] = []
     for entity in ctx.document.all_entities():
         if isinstance(entity, Line) and (inside(entity.start) or inside(entity.end)):
             affected.append(entity)
-        elif isinstance(entity, LWPolyline) and any(inside(pt) for pt in entity.points):
+        elif isinstance(entity, (LWPolyline, Spline)) and any(inside(pt) for pt in entity.points):
+            affected.append(entity)
+        elif isinstance(entity, (Circle, Arc)) and inside(entity.center):
+            affected.append(entity)
+        elif isinstance(entity, PointEntity) and inside(entity.location):
+            affected.append(entity)
+        elif isinstance(entity, (BlockReference, Text)) and inside(entity.insertion_point):
             affected.append(entity)
 
     if not affected:
@@ -640,18 +834,23 @@ def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
                 entity.start = Point(entity.start.x + dx, entity.start.y + dy)
             if inside(entity.end):
                 entity.end = Point(entity.end.x + dx, entity.end.y + dy)
-        elif isinstance(entity, LWPolyline):
+        elif isinstance(entity, (LWPolyline, Spline)):
             entity.points = [
                 Point(pt.x + dx, pt.y + dy) if inside(pt) else pt for pt in entity.points
             ]
+        elif isinstance(entity, (Circle, Arc)):
+            entity.center = Point(entity.center.x + dx, entity.center.y + dy)
+        elif isinstance(entity, PointEntity):
+            entity.location = Point(entity.location.x + dx, entity.location.y + dy)
+        elif isinstance(entity, (BlockReference, Text)):
+            entity.insertion_point = Point(entity.insertion_point.x + dx, entity.insertion_point.y + dy)
 
 
 # ------------------------------------------------------------------ #
-# DIVIDE / MEASURE — como não existe um tipo POINT no NewSIcad ainda, cada
-# ponto de divisão/medida é representado por um Circle bem pequeno (raio
-# fixo, ~0.05 unidade de desenho) — simplificação documentada no README.
+# DIVIDE / MEASURE — cada ponto de divisão/medida é um PointEntity real
+# (comando POINT, ver core/entities.py). Antes de PointEntity existir, cada
+# ponto era um Circle minúsculo (_MARKER_RADIUS) — histórico, não mais usado.
 # ------------------------------------------------------------------ #
-_MARKER_RADIUS = 0.05
 
 
 def divide_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -663,6 +862,10 @@ def divide_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
     target = selected[0]
     count = yield Prompt("Enter number of segments:", kind="distance")
+    if count is ENTER:
+        yield Prompt("DIVIDE exige um número de segmentos — não há valor padrão.", kind="info")
+        ctx.selection.clear()
+        return
     n = int(round(count))
     if n < 2:
         yield Prompt("O número de segmentos deve ser maior ou igual a 2.", kind="info")
@@ -692,8 +895,267 @@ def divide_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         return
 
     for pt in points:
-        ctx.document.add_entity(Circle(center=pt, radius=_MARKER_RADIUS, layer=target.layer))
+        ctx.document.add_entity(PointEntity(location=pt, layer=target.layer))
     ctx.selection.clear()
+
+
+# ------------------------------------------------------------------ #
+# BREAK / BREAK AT POINT (Line/Arc/Circle) — mesmo espírito do TRIM: remove
+# o trecho entre dois pontos ao longo da própria entidade (não usa arestas de
+# corte de outros objetos). BREAK AT POINT é o caso particular de dividir em
+# dois pedaços sem remover material (os dois pontos coincidem).
+# ------------------------------------------------------------------ #
+def _line_point_at(line: Line, t: float) -> Point:
+    return Point(line.start.x + t * (line.end.x - line.start.x), line.start.y + t * (line.end.y - line.start.y))
+
+
+def _break_line_pieces(line: Line, p1: Point, p2: Point) -> list[tuple[Point, Point]]:
+    t1 = max(0.0, min(1.0, segment_parameter(p1, line.start, line.end)))
+    t2 = max(0.0, min(1.0, segment_parameter(p2, line.start, line.end)))
+    lo, hi = sorted((t1, t2))
+    eps = 1e-9
+    pieces: list[tuple[Point, Point]] = []
+    if lo > eps:
+        pieces.append((line.start, _line_point_at(line, lo)))
+    if hi < 1 - eps:
+        pieces.append((_line_point_at(line, hi), line.end))
+    return pieces
+
+
+def _break_arc_pieces(arc: Arc, p1: Point, p2: Point) -> list[tuple[float, float]]:
+    base = arc.start_angle
+    total = (arc.end_angle - arc.start_angle) % (2 * math.pi)
+
+    def sweep(pt: Point) -> float:
+        return max(0.0, min(total, (arc.center.angle_to(pt) - base) % (2 * math.pi)))
+
+    lo, hi = sorted((sweep(p1), sweep(p2)))
+    eps = 1e-9
+    pieces: list[tuple[float, float]] = []
+    if lo > eps:
+        pieces.append((base, (base + lo) % (2 * math.pi)))
+    if hi < total - eps:
+        pieces.append(((base + hi) % (2 * math.pi), arc.end_angle))
+    return pieces
+
+
+def _break_circle_arc(circle: Circle, p1: Point, p2: Point) -> Arc | None:
+    a1 = circle.center.angle_to(p1) % (2 * math.pi)
+    a2 = circle.center.angle_to(p2) % (2 * math.pi)
+    if abs(a1 - a2) < 1e-9:
+        return None
+    return Arc(
+        center=Point(circle.center.x, circle.center.y), radius=circle.radius,
+        start_angle=a2, end_angle=a1, layer=circle.layer, color=circle.color,
+    )
+
+
+def _apply_break(ctx: CommandContext, target: Entity, p1: Point, p2: Point) -> bool:
+    if isinstance(target, Line):
+        pieces = _break_line_pieces(target, p1, p2)
+        if not pieces:
+            ctx.document.remove_entity(target.id)
+            return True
+        target.start, target.end = pieces[0]
+        for extra_start, extra_end in pieces[1:]:
+            ctx.document.add_entity(Line(start=extra_start, end=extra_end, layer=target.layer, color=target.color))
+        return True
+    if isinstance(target, Arc):
+        pieces = _break_arc_pieces(target, p1, p2)
+        if not pieces:
+            ctx.document.remove_entity(target.id)
+            return True
+        target.start_angle, target.end_angle = pieces[0]
+        for start_angle, end_angle in pieces[1:]:
+            ctx.document.add_entity(Arc(
+                center=Point(target.center.x, target.center.y), radius=target.radius,
+                start_angle=start_angle, end_angle=end_angle, layer=target.layer, color=target.color,
+            ))
+        return True
+    if isinstance(target, Circle):
+        new_arc = _break_circle_arc(target, p1, p2)
+        if new_arc is None:
+            return False
+        ctx.document.remove_entity(target.id)
+        ctx.document.add_entity(new_arc)
+        return True
+    return False
+
+
+def break_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    first = yield Prompt("Select object:", kind="point", connect_to_last=False)
+    target = _hit_test_entity(ctx, first)
+    if target is None:
+        yield Prompt("Nenhum objeto encontrado sob o clique.", kind="info")
+        return
+    if not isinstance(target, (Line, Arc, Circle)):
+        yield Prompt("BREAK nesta versão só funciona em Line, Arc e Circle.", kind="info")
+        return
+
+    first_point = first
+    second = yield Prompt(
+        "Specify second break point or [First point]:", kind="point",
+        options=["First point"], connect_to_last=False,
+    )
+    if second == "FIRST POINT":
+        first_point = yield Prompt("Specify first break point:", kind="point", connect_to_last=False)
+        second = yield Prompt("Specify second break point:", kind="point", connect_to_last=False)
+
+    if not _apply_break(ctx, target, first_point, second):
+        yield Prompt("Não foi possível calcular o BREAK com os pontos informados.", kind="info")
+
+
+def breakatpoint_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """BREAK AT POINT: divide a entidade em dois pedaços no ponto informado,
+    sem remover material (os dois "lados" ficam com a mesma ponta). Só
+    funciona em Line e Arc — igual ao AutoCAD, Circle não é um alvo válido
+    (não há como dividir um círculo num único ponto sem virar arco quase
+    completo, o que aqui é feito pelo BREAK normal com dois pontos)."""
+    first = yield Prompt("Select object:", kind="point", connect_to_last=False)
+    target = _hit_test_entity(ctx, first)
+    if target is None:
+        yield Prompt("Nenhum objeto encontrado sob o clique.", kind="info")
+        return
+    if not isinstance(target, (Line, Arc)):
+        yield Prompt("BREAK AT POINT nesta versão só funciona em Line e Arc.", kind="info")
+        return
+
+    point = yield Prompt("Specify break point:", kind="point", connect_to_last=False)
+    if not _apply_break(ctx, target, point, point):
+        yield Prompt("O ponto informado coincide com uma das pontas — nada para dividir.", kind="info")
+
+
+# ------------------------------------------------------------------ #
+# LENGTHEN (Line/Arc) — sub-opções [DElta/Percent/Total], como no AutoCAD.
+# Alonga/encurta a partir da ponta mais próxima do clique, mantendo a outra
+# ponta fixa (mesma lógica de "qual ponta se move" do EXTEND).
+# ------------------------------------------------------------------ #
+def _lengthen_new_length(current: float, mode: str, value: float) -> float:
+    if mode == "PERCENT":
+        return current * value / 100.0
+    if mode == "TOTAL":
+        return value
+    return current + value  # DELTA
+
+
+def _apply_lengthen_line(line: Line, pick: Point, mode: str, value: float) -> None:
+    current = line.length()
+    new_length = _lengthen_new_length(current, mode, value)
+    if new_length <= 1e-9:
+        raise ValueError("O comprimento resultante do LENGTHEN deve ser maior que zero.")
+
+    t = segment_parameter(pick, line.start, line.end)
+    moving_is_start = t <= 0.5
+    anchor = line.end if moving_is_start else line.start
+    moving = line.start if moving_is_start else line.end
+    ux, uy = moving.x - anchor.x, moving.y - anchor.y
+    length = math.hypot(ux, uy)
+    if length < 1e-9:
+        raise ValueError("Não é possível aplicar LENGTHEN numa linha de comprimento zero.")
+    ux, uy = ux / length, uy / length
+    new_point = Point(anchor.x + ux * new_length, anchor.y + uy * new_length)
+    if moving_is_start:
+        line.start = new_point
+    else:
+        line.end = new_point
+
+
+def _apply_lengthen_arc(arc: Arc, pick: Point, mode: str, value: float) -> None:
+    sweep_total = (arc.end_angle - arc.start_angle) % (2 * math.pi)
+    current = arc.radius * sweep_total
+    new_length = _lengthen_new_length(current, mode, value)
+    if arc.radius <= 1e-9:
+        raise ValueError("Não é possível aplicar LENGTHEN num arco de raio zero.")
+    new_sweep = new_length / arc.radius
+    if new_sweep <= 1e-9 or new_sweep >= 2 * math.pi:
+        raise ValueError("O comprimento resultante do LENGTHEN é inválido para este arco.")
+
+    moving_is_start = pick.distance_to(arc.start_point()) <= pick.distance_to(arc.end_point())
+    if moving_is_start:
+        arc.start_angle = (arc.end_angle - new_sweep) % (2 * math.pi)
+    else:
+        arc.end_angle = (arc.start_angle + new_sweep) % (2 * math.pi)
+
+
+def lengthen_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    mode = "DELTA"
+    value = 0.0
+    while True:
+        pick = yield Prompt(
+            f"Select an object to change or [DElta/Percent/Total] (Enter to exit) <{mode}>:",
+            kind="point", options=["DElta", "Percent", "Total"], connect_to_last=False,
+        )
+        if pick is ENTER:
+            return
+        if pick == "DELTA":
+            value = yield Prompt("Enter delta length:", kind="distance")
+            mode = "DELTA"
+            continue
+        if pick == "PERCENT":
+            value = yield Prompt("Enter percentage length (100 = sem mudança):", kind="distance")
+            mode = "PERCENT"
+            continue
+        if pick == "TOTAL":
+            value = yield Prompt("Specify total length:", kind="distance")
+            mode = "TOTAL"
+            continue
+
+        target = _hit_test_entity(ctx, pick)
+        if target is None:
+            yield Prompt("Nenhum objeto encontrado sob o clique.", kind="info")
+            continue
+        try:
+            if isinstance(target, Line):
+                _apply_lengthen_line(target, pick, mode, value)
+            elif isinstance(target, Arc):
+                _apply_lengthen_arc(target, pick, mode, value)
+            else:
+                yield Prompt("LENGTHEN nesta versão só funciona em Line e Arc.", kind="info")
+        except ValueError as exc:
+            yield Prompt(str(exc), kind="info")
+
+
+def pedit_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """PEDIT (PE): edição básica de uma LWPolyline já desenhada, em loop de
+    opções igual ao PEDIT de verdade do AutoCAD — mas sem o submenu completo
+    de edição de vértice (Next/Previous/Break/Tangent etc., que dependeria
+    de marcadores de vértice interativos no canvas). Opções suportadas:
+    [Close/Open/Add vertex/Remove vertex/eXit]. "Add vertex" sempre
+    acrescenta no FINAL da polilinha (não insere no meio); "Remove vertex"
+    remove o vértice mais próximo do ponto clicado."""
+    selected = yield from _select_objects(ctx, "Select polyline:")
+    polylines = [e for e in selected if isinstance(e, LWPolyline)]
+    if not polylines:
+        yield Prompt("PEDIT: nenhuma polilinha selecionada.", kind="info")
+        return
+    poly = polylines[0]
+
+    while True:
+        option = yield Prompt(
+            "Enter an option [Close/Open/Add vertex/Remove vertex/eXit] <eXit>:",
+            kind="keyword",
+            options=["Close", "Open", "Add vertex", "Remove vertex", "eXit"],
+        )
+        if option is ENTER or option == "EXIT":
+            return
+        if option == "CLOSE":
+            poly.closed = True
+        elif option == "OPEN":
+            poly.closed = False
+        elif option == "ADD VERTEX":
+            point = yield Prompt(
+                "Specify new vertex (added at the end):", kind="point", connect_to_last=False
+            )
+            poly.points.append(point)
+        elif option == "REMOVE VERTEX":
+            if len(poly.points) <= 2:
+                yield Prompt("PEDIT: a polilinha precisa de pelo menos 2 vértices.", kind="info")
+                continue
+            point = yield Prompt(
+                "Specify vertex to remove (click near it):", kind="point", connect_to_last=False
+            )
+            nearest_index = min(range(len(poly.points)), key=lambda i: poly.points[i].distance_to(point))
+            poly.points.pop(nearest_index)
 
 
 def measure_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -705,7 +1167,7 @@ def measure_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
     target = selected[0]
     seg_length = yield Prompt("Specify length of segment:", kind="distance")
-    if seg_length <= 0:
+    if seg_length is ENTER or seg_length <= 0:
         yield Prompt("O comprimento do segmento deve ser positivo.", kind="info")
         ctx.selection.clear()
         return
@@ -720,6 +1182,19 @@ def measure_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             return
         ux, uy = (target.end.x - target.start.x) / total, (target.end.y - target.start.y) / total
         points = [Point(target.start.x + ux * seg_length * i, target.start.y + uy * seg_length * i) for i in range(1, n + 1)]
+    elif isinstance(target, Circle):
+        total = 2 * math.pi * target.radius
+        n = int(total // seg_length + 1e-9)
+        if n < 1:
+            yield Prompt("Comprimento do segmento maior que o objeto selecionado.", kind="info")
+            ctx.selection.clear()
+            return
+        angle_per = seg_length / target.radius
+        points = [
+            Point(target.center.x + target.radius * math.cos(angle_per * i),
+                  target.center.y + target.radius * math.sin(angle_per * i))
+            for i in range(n)
+        ]
     elif isinstance(target, Arc):
         total = target.radius * ((target.end_angle - target.start_angle) % (2 * math.pi))
         n = int(total // seg_length + 1e-9)
@@ -734,10 +1209,153 @@ def measure_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             for i in range(1, n + 1)
         ]
     else:
-        yield Prompt("MEASURE nesta versão suporta Line e Arc.", kind="info")
+        yield Prompt("MEASURE nesta versão suporta Line, Arc e Circle.", kind="info")
         ctx.selection.clear()
         return
 
     for pt in points:
-        ctx.document.add_entity(Circle(center=pt, radius=_MARKER_RADIUS, layer=target.layer))
+        ctx.document.add_entity(PointEntity(location=pt, layer=target.layer))
+
+
+# ------------------------------------------------------------------ #
+# CLIP / CLIPOFF (recorte de bloco/xref/imagem)
+# ------------------------------------------------------------------ #
+def _world_point_to_block_local(entity: BlockReference, world: Point) -> Point:
+    """Converte um ponto do mundo para o referencial LOCAL do bloco (origem
+    no ponto base, sem a rotação/escala da instância) — mesmo referencial em
+    que `Document.block_definitions[block_name]` guarda seus filhos, e em que
+    `BlockReference.clip_boundary` é guardado (ver core/entities.py)."""
+    offset = Point(world.x - entity.insertion_point.x, world.y - entity.insertion_point.y)
+    unrotated = rotate_point(offset, Point(0, 0), -entity.rotation)
+    sx, sy = entity.scale_xy()
+    return Point(unrotated.x / sx, unrotated.y / sy)
+
+
+def _world_point_to_image_local(entity: ImageReference, world: Point) -> Point:
+    """ImageReference não tem rotação/escala própria (só width/height) — o
+    referencial local é só uma translação a partir do ponto de inserção."""
+    return Point(world.x - entity.insertion_point.x, world.y - entity.insertion_point.y)
+
+
+def clip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """CLIP (XCLIP): recorta a área visível de um bloco, referência externa
+    (XREF — que é um BlockReference com `is_xref=True`, ver core/entities.py)
+    ou imagem, escondendo tudo fora de um retângulo escolhido na hora —
+    mesma ideia do XCLIP do AutoCAD, mas só com contorno retangular (o de
+    verdade também aceita polígono à mão livre). Chamar CLIP de novo sobre o
+    mesmo objeto substitui o contorno anterior; CLIPOFF remove."""
+    first = yield Prompt("Select block, xref or image to clip:", kind="point", connect_to_last=False)
+    target = _hit_test_entity(ctx, first)
+    if not isinstance(target, (BlockReference, ImageReference)):
+        yield Prompt("CLIP: selecione um bloco, referência externa (xref) ou imagem.", kind="info")
+        return
+
+    corner1 = yield Prompt("Specify first clip boundary corner:", kind="point")
+    corner2 = yield Prompt("Specify opposite corner:", kind="point", connect_to_last=True)
+
+    if isinstance(target, BlockReference):
+        local1 = _world_point_to_block_local(target, corner1)
+        local2 = _world_point_to_block_local(target, corner2)
+    else:
+        local1 = _world_point_to_image_local(target, corner1)
+        local2 = _world_point_to_image_local(target, corner2)
+
+    target.clip_boundary = [local1, Point(local2.x, local1.y), local2, Point(local1.x, local2.y)]
+
+
+def clipoff_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """CLIPOFF: remove o contorno de recorte aplicado por CLIP, voltando o
+    bloco/xref/imagem a aparecer inteiro."""
+    first = yield Prompt("Select clipped object:", kind="point", connect_to_last=False)
+    target = _hit_test_entity(ctx, first)
+    if not isinstance(target, (BlockReference, ImageReference)):
+        yield Prompt("CLIPOFF: selecione um bloco, referência externa (xref) ou imagem.", kind="info")
+        return
+    target.clip_boundary = None
+
+
+# ------------------------------------------------------------------ #
+# COPYCLIP / CUTCLIP / PASTECLIP (clipboard do Windows)
+# ------------------------------------------------------------------ #
+#: MIME type próprio pro clipboard do SO — só o próprio NewSIcad grava e lê
+#: (Ctrl+C num app qualquer não vira "cola" aqui, e vice-versa: colar num
+#: Word depois de um Ctrl+C no NewSIcad não traz nada, já que não geramos
+#: nenhum formato de imagem/texto junto — ver docstring de copyclip_command).
+_CLIPBOARD_MIME_TYPE = "application/x-newsicad-entities"
+
+
+def _write_clipboard(entities: list[Entity], base: Point) -> None:
+    from PySide6.QtCore import QByteArray, QMimeData
+    from PySide6.QtWidgets import QApplication
+
+    # pickle em vez de um serializador JSON próprio: os dataclasses de
+    # entidade (com Point/Path/listas aninhadas) já são pickláveis de graça,
+    # e é o mesmo mecanismo que o undo/redo usa (core/undo.py) pra clonar o
+    # documento inteiro — clipboard só entre instâncias do próprio NewSIcad
+    # no mesmo computador, sem canal de rede envolvido.
+    payload = pickle.dumps(([clone_entity(e) for e in entities], base))
+    mime = QMimeData()
+    mime.setData(_CLIPBOARD_MIME_TYPE, QByteArray(payload))
+    QApplication.clipboard().setMimeData(mime)
+
+
+def _read_clipboard() -> tuple[list[Entity], Point] | None:
+    from PySide6.QtWidgets import QApplication
+
+    mime = QApplication.clipboard().mimeData()
+    if mime is None or not mime.hasFormat(_CLIPBOARD_MIME_TYPE):
+        return None
+    try:
+        return pickle.loads(bytes(mime.data(_CLIPBOARD_MIME_TYPE)))
+    except Exception:
+        return None
+
+
+def copyclip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """COPYCLIP (Ctrl+C): copia os objetos selecionados pro clipboard do
+    Windows num formato próprio do NewSIcad — cola de volta com PASTECLIP
+    (Ctrl+V), na mesma aba, em outra aba ou até em outra instância do
+    NewSIcad aberta ao mesmo tempo."""
+    selected = yield from _select_objects(ctx)
+    if not selected:
+        return
+    base = yield Prompt("Specify base point:", kind="point")
+    _write_clipboard(selected, base)
+
+
+def cutclip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """CUTCLIP (Ctrl+X): como COPYCLIP, mas também apaga os objetos do
+    desenho atual (equivalente a COPYCLIP + ERASE)."""
+    selected = yield from _select_objects(ctx)
+    if not selected:
+        return
+    base = yield Prompt("Specify base point:", kind="point")
+    _write_clipboard(selected, base)
+    for entity in selected:
+        ctx.document.remove_entity(entity.id)
     ctx.selection.clear()
+
+
+def pasteclip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
+    """PASTECLIP (Ctrl+V): cola os objetos copiados/recortados por
+    COPYCLIP/CUTCLIP na posição escolhida, deslocados a partir do ponto base
+    guardado na cópia. IDs são regenerados pra nunca colidir com os já
+    presentes no documento — inclusive ao colar de volta na MESMA aba onde
+    foi copiado (ver `newsicad.core.entities._new_id`)."""
+    payload = _read_clipboard()
+    if payload is None:
+        yield Prompt("PASTECLIP: clipboard vazio ou sem objetos do NewSIcad.", kind="info")
+        return
+    entities, base = payload
+
+    insertion = yield Prompt("Specify insertion point:", kind="point")
+    dx, dy = insertion.x - base.x, insertion.y - base.y
+
+    pasted_ids: set[str] = set()
+    for entity in entities:
+        clone = clone_entity(entity)
+        clone.id = _new_id()
+        translate_entity(clone, dx, dy)
+        ctx.document.add_entity(clone)
+        pasted_ids.add(clone.id)
+    ctx.selection.set(pasted_ids)

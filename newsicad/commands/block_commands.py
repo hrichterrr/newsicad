@@ -77,6 +77,13 @@ def insert_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
     scale_raw = yield Prompt("Specify scale factor <1>:", kind="distance")
     scale = 1.0 if scale_raw is ENTER else float(scale_raw)
+    if scale <= 0:
+        # ezdxf recusa xscale/yscale <= 0 na gravação e silenciosamente
+        # volta pro padrão 1.0 ao regravar — um bloco "escondido" com escala
+        # 0 reaparecia em tamanho normal ao reabrir o arquivo, sem nenhum
+        # aviso (bug real de auditoria, 2026-08-22).
+        yield Prompt("INSERT: o fator de escala deve ser positivo.", kind="info")
+        return
 
     rotation_raw = yield Prompt("Specify rotation angle <0>:", kind="distance")
     rotation_deg = 0.0 if rotation_raw is ENTER else float(rotation_raw)

@@ -5,7 +5,7 @@ confirma, Esc cancela, ↑/↓ navegam o histórico de entradas digitadas."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont, QKeySequence, QTextCursor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QTextEdit, QVBoxLayout, QWidget
 
 MONO_FONT_FAMILY = "Menlo"
@@ -46,9 +46,24 @@ class CommandLineEdit(QLineEdit):
     cancelled = Signal()
     history_prev = Signal()
     history_next = Signal()
+    undo_requested = Signal()
+    redo_requested = Signal()
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
+        # QLineEdit tem undo/redo NATIVO de texto embutido em Ctrl+Z/Ctrl+Y —
+        # sem interceptar aqui, ele "rouba" o atalho antes do Undo/Redo do
+        # desenho (QAction global do menu Edit) ter qualquer chance de disparar,
+        # sempre que a linha de comando estiver com foco (o caso comum, já que
+        # focus_input() é chamado depois de cada comando). Bug real reportado:
+        # Ctrl+Z parecia "não funcionar" — na verdade desfazia só o texto
+        # digitado, nunca o desenho.
+        if event.matches(QKeySequence.StandardKey.Undo):
+            self.undo_requested.emit()
+            return
+        if event.matches(QKeySequence.StandardKey.Redo):
+            self.redo_requested.emit()
+            return
         if key == Qt.Key.Key_Escape:
             self.clear()
             self.cancelled.emit()
@@ -73,6 +88,8 @@ class CommandLineEdit(QLineEdit):
 class CommandLineWidget(QWidget):
     text_submitted = Signal(str)
     cancel_requested = Signal()
+    undo_requested = Signal()
+    redo_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -103,6 +120,8 @@ class CommandLineWidget(QWidget):
         self.input_edit.setFont(QFont(MONO_FONT_FAMILY, 10))
         self.input_edit.submitted.connect(self._on_submitted)
         self.input_edit.cancelled.connect(self.cancel_requested)
+        self.input_edit.undo_requested.connect(self.undo_requested)
+        self.input_edit.redo_requested.connect(self.redo_requested)
         self.input_edit.history_prev.connect(self._history_prev)
         self.input_edit.history_next.connect(self._history_next)
         input_row.addWidget(self.input_edit, stretch=1)

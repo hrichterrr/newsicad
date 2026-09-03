@@ -18,7 +18,12 @@ from newsicad.core.entities import (
     Line,
     LWPolyline,
     Point,
+    PointEntity,
+    Ray,
+    Spline,
+    Table,
     Text,
+    XLine,
 )
 
 
@@ -95,6 +100,36 @@ def mirror_point(p: Point, p1: Point, p2: Point) -> Point:
 
 
 # ---------------------------------------------------------------------- #
+# SPLINE: interpolação Catmull-Rom (curva suave passando pelos fit points)
+# ---------------------------------------------------------------------- #
+def catmull_rom_bezier(points: list[Point], closed: bool) -> list[tuple[Point, Point, Point, Point]]:
+    """Converte uma sequência de fit points numa lista de segmentos de Bézier
+    cúbica (p0, ctrl1, ctrl2, p3) que passam exatamente por esses pontos —
+    interpolação Catmull-Rom uniforme (tensão 0). Não é o mesmo algoritmo de
+    uma NURBS (que o SPLINE de verdade do AutoCAD usa), mas produz uma curva
+    suave interpolante de verdade, não uma aproximação poligonal."""
+    n = len(points)
+    if n < 2:
+        return []
+    if n == 2:
+        # sem vizinhos suficientes pra Catmull-Rom: segmento reto, como uma
+        # Bézier degenerada (pontos de controle = próprios extremos).
+        return [(points[0], points[0], points[1], points[1])]
+
+    def neighbor(i: int) -> Point:
+        return points[i % n] if closed else points[max(0, min(n - 1, i))]
+
+    segments: list[tuple[Point, Point, Point, Point]] = []
+    count = n if closed else n - 1
+    for i in range(count):
+        p0, p1, p2, p3 = neighbor(i - 1), neighbor(i), neighbor(i + 1), neighbor(i + 2)
+        ctrl1 = Point(p1.x + (p2.x - p0.x) / 6.0, p1.y + (p2.y - p0.y) / 6.0)
+        ctrl2 = Point(p2.x - (p3.x - p1.x) / 6.0, p2.y - (p3.y - p1.y) / 6.0)
+        segments.append((p1, ctrl1, ctrl2, p2))
+    return segments
+
+
+# ---------------------------------------------------------------------- #
 # clonagem
 # ---------------------------------------------------------------------- #
 def clone_entity(entity: Entity) -> Entity:
@@ -112,7 +147,7 @@ def translate_entity(entity: Entity, dx: float, dy: float) -> None:
         entity.end = translate_point(entity.end, dx, dy)
     elif isinstance(entity, (Circle, Arc)):
         entity.center = translate_point(entity.center, dx, dy)
-    elif isinstance(entity, LWPolyline):
+    elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [translate_point(p, dx, dy) for p in entity.points]
     elif isinstance(entity, (BlockReference, ImageReference)):
         entity.insertion_point = translate_point(entity.insertion_point, dx, dy)
@@ -124,8 +159,16 @@ def translate_entity(entity: Entity, dx: float, dy: float) -> None:
         entity.dim_line_point = translate_point(entity.dim_line_point, dx, dy)
         entity.center = translate_point(entity.center, dx, dy)
         entity.leader_point = translate_point(entity.leader_point, dx, dy)
+        entity.break_points = [translate_point(p, dx, dy) for p in entity.break_points]
     elif isinstance(entity, Hatch):
         entity.boundary_points = [translate_point(p, dx, dy) for p in entity.boundary_points]
+        entity.boundary_paths = [[translate_point(p, dx, dy) for p in path] for path in entity.boundary_paths]
+    elif isinstance(entity, PointEntity):
+        entity.location = translate_point(entity.location, dx, dy)
+    elif isinstance(entity, (XLine, Ray)):
+        entity.point = translate_point(entity.point, dx, dy)
+    elif isinstance(entity, Table):
+        entity.insertion_point = translate_point(entity.insertion_point, dx, dy)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -140,7 +183,7 @@ def rotate_entity(entity: Entity, base: Point, angle_rad: float) -> None:
         entity.center = rotate_point(entity.center, base, angle_rad)
         entity.start_angle = (entity.start_angle + angle_rad) % (2 * math.pi)
         entity.end_angle = (entity.end_angle + angle_rad) % (2 * math.pi)
-    elif isinstance(entity, LWPolyline):
+    elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [rotate_point(p, base, angle_rad) for p in entity.points]
     elif isinstance(entity, BlockReference):
         entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
@@ -158,9 +201,19 @@ def rotate_entity(entity: Entity, base: Point, angle_rad: float) -> None:
         entity.dim_line_point = rotate_point(entity.dim_line_point, base, angle_rad)
         entity.center = rotate_point(entity.center, base, angle_rad)
         entity.leader_point = rotate_point(entity.leader_point, base, angle_rad)
+        entity.break_points = [rotate_point(p, base, angle_rad) for p in entity.break_points]
     elif isinstance(entity, Hatch):
         entity.boundary_points = [rotate_point(p, base, angle_rad) for p in entity.boundary_points]
+        entity.boundary_paths = [[rotate_point(p, base, angle_rad) for p in path] for path in entity.boundary_paths]
         entity.angle = (entity.angle + angle_rad) % math.pi
+    elif isinstance(entity, PointEntity):
+        entity.location = rotate_point(entity.location, base, angle_rad)
+    elif isinstance(entity, (XLine, Ray)):
+        entity.point = rotate_point(entity.point, base, angle_rad)
+        entity.angle = (entity.angle + angle_rad) % (2 * math.pi)
+    elif isinstance(entity, Table):
+        entity.insertion_point = rotate_point(entity.insertion_point, base, angle_rad)
+        entity.rotation = (entity.rotation + angle_rad) % (2 * math.pi)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -172,14 +225,20 @@ def scale_entity(entity: Entity, base: Point, factor: float) -> None:
     elif isinstance(entity, Circle):
         entity.center = scale_point(entity.center, base, factor)
         entity.radius *= factor
+        entity.inner_radius *= factor
     elif isinstance(entity, Arc):
         entity.center = scale_point(entity.center, base, factor)
         entity.radius *= factor
-    elif isinstance(entity, LWPolyline):
+    elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [scale_point(p, base, factor) for p in entity.points]
     elif isinstance(entity, BlockReference):
         entity.insertion_point = scale_point(entity.insertion_point, base, factor)
         entity.scale *= factor
+        if entity.scale_y is not None:
+            # Escala não-uniforme (bloco dinâmico importado): o SCALE
+            # uniforme multiplica os dois eixos igualmente, preservando a
+            # proporção original da instância.
+            entity.scale_y *= factor
     elif isinstance(entity, ImageReference):
         entity.insertion_point = scale_point(entity.insertion_point, base, factor)
         entity.width *= factor
@@ -194,8 +253,19 @@ def scale_entity(entity: Entity, base: Point, factor: float) -> None:
         entity.center = scale_point(entity.center, base, factor)
         entity.leader_point = scale_point(entity.leader_point, base, factor)
         entity.radius *= factor
+        entity.break_points = [scale_point(p, base, factor) for p in entity.break_points]
     elif isinstance(entity, Hatch):
         entity.boundary_points = [scale_point(p, base, factor) for p in entity.boundary_points]
+        entity.boundary_paths = [[scale_point(p, base, factor) for p in path] for path in entity.boundary_paths]
+    elif isinstance(entity, PointEntity):
+        entity.location = scale_point(entity.location, base, factor)
+    elif isinstance(entity, (XLine, Ray)):
+        entity.point = scale_point(entity.point, base, factor)
+    elif isinstance(entity, Table):
+        entity.insertion_point = scale_point(entity.insertion_point, base, factor)
+        entity.col_width *= factor
+        entity.row_height *= factor
+        entity.text_height *= factor
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -227,14 +297,22 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.radius = radius
         mirrored.start_angle = start_angle
         mirrored.end_angle = end_angle
-    elif isinstance(mirrored, LWPolyline):
+    elif isinstance(mirrored, (LWPolyline, Spline)):
         mirrored.points = [mirror_point(p, p1, p2) for p in entity.points]
     elif isinstance(mirrored, BlockReference):
-        # Simplificação: espelha o ponto de inserção e o ângulo, mas não
-        # inverte o conteúdo do bloco em si (exigiria escala negativa por
-        # eixo, que BlockReference não modela — ver README).
+        # Espelhamento EXATO da instância (não mais a simplificação antiga
+        # que só movia o ponto de inserção): pra qualquer eixo de espelho em
+        # ângulo α, vale a identidade refl(α)·rot(θ)·scale(sx,sy) =
+        # rot(2α−θ)·scale(sx,−sy) — ou seja, basta espelhar o ponto de
+        # inserção, refletir a rotação em torno do eixo e inverter o sinal
+        # da escala Y. Possível desde que BlockReference modela escala por
+        # eixo (scale_y, auditoria 2026-08-28).
+        sx, sy = entity.scale_xy()
+        line_angle = p1.angle_to(p2)
         mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
-        mirrored.rotation = (-entity.rotation) % (2 * math.pi)
+        mirrored.rotation = (2 * line_angle - entity.rotation) % (2 * math.pi)
+        mirrored.scale = sx
+        mirrored.scale_y = -sy
     elif isinstance(mirrored, ImageReference):
         mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
     elif isinstance(mirrored, Text):
@@ -247,8 +325,23 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.dim_line_point = mirror_point(entity.dim_line_point, p1, p2)
         mirrored.center = mirror_point(entity.center, p1, p2)
         mirrored.leader_point = mirror_point(entity.leader_point, p1, p2)
+        mirrored.break_points = [mirror_point(p, p1, p2) for p in entity.break_points]
     elif isinstance(mirrored, Hatch):
         mirrored.boundary_points = [mirror_point(p, p1, p2) for p in entity.boundary_points]
+        mirrored.boundary_paths = [[mirror_point(p, p1, p2) for p in path] for path in entity.boundary_paths]
+    elif isinstance(mirrored, PointEntity):
+        mirrored.location = mirror_point(entity.location, p1, p2)
+    elif isinstance(mirrored, (XLine, Ray)):
+        mirrored.point = mirror_point(entity.point, p1, p2)
+        line_angle = p1.angle_to(p2)
+        mirrored.angle = (2 * line_angle - entity.angle) % (2 * math.pi)
+    elif isinstance(mirrored, Table):
+        # Simplificação: espelha só posição/ângulo (igual a BlockReference)
+        # — não inverte a ORDEM das colunas/conteúdo das células, que um
+        # espelhamento "de verdade" de uma tabela também deveria fazer.
+        mirrored.insertion_point = mirror_point(entity.insertion_point, p1, p2)
+        line_angle = p1.angle_to(p2)
+        mirrored.rotation = (2 * line_angle - entity.rotation) % (2 * math.pi)
     else:
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
@@ -283,28 +376,79 @@ def _arrow_ticks(a: Point, b: Point, size: float = 0.6) -> list[tuple[Point, Poi
     return ticks
 
 
-def dimension_geometry(dim: Dimension) -> tuple[list[tuple[Point, Point]], Point]:
-    """Retorna (segmentos de linha, ponto de ancoragem do texto) em
-    coordenadas CAD, para desenhar/hit-testar uma Dimension sem duplicar a
-    geometria entre newsicad/ui/canvas.py e a seleção."""
+def dimension_line_segment(dim: Dimension) -> tuple[Point, Point] | None:
+    """Só a linha de cota em si (sem linhas de extensão/setas/texto) —
+    usada pelo DIMBREAK (annotation_commands.py) pra achar onde ela cruza
+    outros objetos. None pra kind sem uma reta simples (radius/diameter/
+    angular, onde "a linha de cota" não é um segmento reto único)."""
     if dim.kind == "linear":
         p1, p2, dl = dim.point1, dim.point2, dim.dim_line_point
         if dim.is_horizontal():
-            d1, d2 = Point(p1.x, dl.y), Point(p2.x, dl.y)
-        else:
-            d1, d2 = Point(dl.x, p1.y), Point(dl.x, p2.y)
-        segments = [(p1, d1), (p2, d2), (d1, d2), *_arrow_ticks(d1, d2)]
-        text_anchor = Point((d1.x + d2.x) / 2, (d1.y + d2.y) / 2)
-        return segments, text_anchor
-
+            return Point(p1.x, dl.y), Point(p2.x, dl.y)
+        return Point(dl.x, p1.y), Point(dl.x, p2.y)
     if dim.kind == "aligned":
         p1, p2, dl = dim.point1, dim.point2, dim.dim_line_point
         ux, uy = _unit_direction(p1, p2)
         nx, ny = -uy, ux
         offset = (dl.x - p1.x) * nx + (dl.y - p1.y) * ny
-        d1 = Point(p1.x + nx * offset, p1.y + ny * offset)
-        d2 = Point(p2.x + nx * offset, p2.y + ny * offset)
-        segments = [(p1, d1), (p2, d2), (d1, d2), *_arrow_ticks(d1, d2)]
+        return (
+            Point(p1.x + nx * offset, p1.y + ny * offset),
+            Point(p2.x + nx * offset, p2.y + ny * offset),
+        )
+    return None
+
+
+_DIM_BREAK_GAP = 0.4
+
+
+def split_segment_with_gaps(
+    a: Point, b: Point, break_points: list[Point], gap: float = _DIM_BREAK_GAP
+) -> list[tuple[Point, Point]]:
+    """Divide o segmento a-b em pedaços, abrindo uma folga de `gap` (metade
+    pra cada lado) centrada em cada ponto de `break_points` projetado sobre
+    a reta — usada pelo DIMBREAK pra "cortar" a linha de cota. Folgas que se
+    sobrepõem são mescladas; sem break_points, retorna o segmento inteiro."""
+    length = a.distance_to(b)
+    if length < 1e-9 or not break_points:
+        return [(a, b)]
+    ux, uy = (b.x - a.x) / length, (b.y - a.y) / length
+
+    def t_of(p: Point) -> float:
+        return max(0.0, min(length, (p.x - a.x) * ux + (p.y - a.y) * uy))
+
+    intervals: list[list[float]] = []
+    for t in sorted(t_of(p) for p in break_points):
+        lo, hi = t - gap, t + gap
+        if intervals and lo <= intervals[-1][1]:
+            intervals[-1][1] = max(intervals[-1][1], hi)
+        else:
+            intervals.append([lo, hi])
+
+    def point_at(t: float) -> Point:
+        return Point(a.x + ux * t, a.y + uy * t)
+
+    pieces: list[tuple[Point, Point]] = []
+    prev = 0.0
+    for lo, hi in intervals:
+        if lo > prev:
+            pieces.append((point_at(prev), point_at(min(lo, length))))
+        prev = max(prev, hi)
+    if prev < length:
+        pieces.append((point_at(prev), point_at(length)))
+    return pieces if pieces else [(a, b)]
+
+
+def dimension_geometry(dim: Dimension, tick_size: float = 0.6) -> tuple[list[tuple[Point, Point]], Point]:
+    """Retorna (segmentos de linha, ponto de ancoragem do texto) em
+    coordenadas CAD, para desenhar/hit-testar uma Dimension sem duplicar a
+    geometria entre newsicad/ui/canvas.py e a seleção. `tick_size` é o
+    tamanho da marca de seta (unidades de desenho) — o canvas passa o
+    `Document.dim_style.arrow_size`, pra uma cota numa planta em metros não
+    ganhar marcas de 0.6 m (WP-B 2026-09)."""
+    if dim.kind in ("linear", "aligned"):
+        d1, d2 = dimension_line_segment(dim)
+        dim_line_pieces = split_segment_with_gaps(d1, d2, dim.break_points)
+        segments = [(dim.point1, d1), (dim.point2, d2), *dim_line_pieces, *_arrow_ticks(d1, d2, tick_size)]
         text_anchor = Point((d1.x + d2.x) / 2, (d1.y + d2.y) / 2)
         return segments, text_anchor
 
@@ -381,6 +525,25 @@ def point_arc_distance(p: Point, arc: Arc) -> float | None:
     return radial if _angle_in_arc(angle, arc.start_angle, arc.end_angle) else None
 
 
+def point_infinite_line_distance(p: Point, origin: Point, angle_rad: float) -> float:
+    """Distância perpendicular de `p` até a reta infinita que passa por
+    `origin` na direção `angle_rad` — usada por XLine."""
+    ux, uy = math.cos(angle_rad), math.sin(angle_rad)
+    dx, dy = p.x - origin.x, p.y - origin.y
+    return abs(dx * (-uy) + dy * ux)
+
+
+def point_ray_distance(p: Point, origin: Point, angle_rad: float) -> float:
+    """Distância de `p` até o Ray com origem em `origin` na direção
+    `angle_rad` (só a metade positiva da reta, ao contrário de XLine)."""
+    ux, uy = math.cos(angle_rad), math.sin(angle_rad)
+    dx, dy = p.x - origin.x, p.y - origin.y
+    t = dx * ux + dy * uy
+    if t < 0:
+        return p.distance_to(origin)
+    return abs(dx * (-uy) + dy * ux)
+
+
 def point_entity_distance(p: Point, entity: Entity) -> float | None:
     """Versão pura (sem Qt) da distância ponto->entidade — usada pelos
     comandos TRIM/EXTEND para localizar a entidade sob o clique quando não
@@ -399,6 +562,12 @@ def point_entity_distance(p: Point, entity: Entity) -> float | None:
             if best is None or d < best:
                 best = d
         return best
+    if isinstance(entity, PointEntity):
+        return p.distance_to(entity.location)
+    if isinstance(entity, XLine):
+        return point_infinite_line_distance(p, entity.point, entity.angle)
+    if isinstance(entity, Ray):
+        return point_ray_distance(p, entity.point, entity.angle)
     return None
 
 
@@ -678,6 +847,26 @@ def offset_polyline(poly: LWPolyline, distance: float, side_point: Point) -> LWP
         if joint is not None:
             new_points[0] = joint
         new_points = new_points[:-1]
+        result_chords = list(zip(new_points, new_points[1:] + [new_points[0]]))
+    else:
+        result_chords = list(zip(new_points, new_points[1:]))
+
+    # Distância maior que o menor raio de curvatura da forma faz a
+    # interseção de retas suporte "passar direto" pelo lado oposto do
+    # segmento em vez de simplesmente encolher até ele: o trecho realizado
+    # (chord entre dois pontos consecutivos do resultado) acaba **na direção
+    # contrária** ao segmento deslocado que deveria representar. Comparar o
+    # produto escalar das duas direções pega exatamente essa inversão —
+    # sem isso o OFFSET devolvia silenciosamente uma polilinha "inflada"/
+    # espelhada em vez de avisar que a distância pedida não cabe na forma
+    # (bug real de auditoria, 2026-08-22).
+    for (a, b), (oa, ob) in zip(result_chords, offset_segs):
+        realized_dx, realized_dy = b.x - a.x, b.y - a.y
+        intended_dx, intended_dy = ob.x - oa.x, ob.y - oa.y
+        if realized_dx * intended_dx + realized_dy * intended_dy <= 0:
+            raise ValueError(
+                "OFFSET colapsa a polilinha — a distância é maior do que a forma permite nesse trecho."
+            )
 
     return LWPolyline(points=new_points, closed=poly.closed, layer=poly.layer, color=poly.color)
 
@@ -813,3 +1002,101 @@ def polygon_perimeter(points: list[Point], closed: bool) -> float:
     if closed:
         pairs.append((points[-1], points[0]))
     return sum(a.distance_to(b) for a, b in pairs)
+
+
+# ---------------------------------------------------------------------- #
+# BOUNDARY (BO): contorno fechado a partir de um ponto interno
+# ---------------------------------------------------------------------- #
+def point_in_polygon(p: Point, points: list[Point]) -> bool:
+    """Ray casting padrão — mesmo algoritmo usado em newsicad/ui/canvas.py
+    pra Hatch, duplicado aqui porque core/ não pode depender de ui/."""
+    inside = False
+    n = len(points)
+    for i in range(n):
+        a, b = points[i], points[(i + 1) % n]
+        crosses = (a.y > p.y) != (b.y > p.y)
+        if crosses:
+            x_at_y = (b.x - a.x) * (p.y - a.y) / ((b.y - a.y) or 1e-12) + a.x
+            if p.x < x_at_y:
+                inside = not inside
+    return inside
+
+
+def _snap_key(p: Point, precision: int = 6) -> tuple[float, float]:
+    return (round(p.x, precision), round(p.y, precision))
+
+
+def trace_simple_line_loop(lines: list[Line], pick_point: Point) -> list[Point] | None:
+    """Encontra, entre um conjunto de Line, o menor laço fechado SIMPLES
+    (todo nó com grau exatamente 2 — sem bifurcações/junções em T) que
+    envolve `pick_point`. Usado pelo comando BOUNDARY pra gerar o contorno
+    de um ambiente desenhado como paredes soltas (Line) em vez de já ser uma
+    LWPolyline fechada. Se houver mais de um laço simples desconectado no
+    desenho (vários ambientes), fica com o de menor área que contém o ponto.
+    Simplificação documentada: laços com bifurcação/junção em T (ex.: parede
+    interna encostando numa externa) não são resolvidos — nesse caso o nó da
+    junção tem grau 3+ e o componente inteiro é descartado."""
+    if not lines:
+        return None
+
+    nodes: list[Point] = []
+    node_index: dict[tuple[float, float], int] = {}
+
+    def node_id(p: Point) -> int:
+        key = _snap_key(p)
+        if key not in node_index:
+            node_index[key] = len(nodes)
+            nodes.append(p)
+        return node_index[key]
+
+    adjacency: dict[int, set[int]] = {}
+    for line in lines:
+        a, b = node_id(line.start), node_id(line.end)
+        if a == b:
+            continue
+        adjacency.setdefault(a, set()).add(b)
+        adjacency.setdefault(b, set()).add(a)
+
+    visited: set[int] = set()
+    best_loop: list[Point] | None = None
+    best_area: float | None = None
+
+    for start in list(adjacency):
+        if start in visited:
+            continue
+        component: set[int] = set()
+        stack = [start]
+        while stack:
+            node = stack.pop()
+            if node in component:
+                continue
+            component.add(node)
+            stack.extend(adjacency.get(node, ()))
+        visited |= component
+
+        if any(len(adjacency[n]) != 2 for n in component):
+            continue  # bifurcação/junção em T: não é um laço simples
+
+        ordered = [start]
+        prev, current = None, start
+        while True:
+            nxt = next(n for n in adjacency[current] if n != prev)
+            if nxt == start:
+                break
+            ordered.append(nxt)
+            prev, current = current, nxt
+            if len(ordered) > len(component):
+                ordered = []
+                break
+        if len(ordered) != len(component) or len(ordered) < 3:
+            continue
+
+        loop_points = [nodes[i] for i in ordered]
+        if not point_in_polygon(pick_point, loop_points):
+            continue
+        area = polygon_area(loop_points)
+        if best_area is None or area < best_area:
+            best_area = area
+            best_loop = loop_points
+
+    return best_loop

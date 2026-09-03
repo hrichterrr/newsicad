@@ -12,7 +12,7 @@ from PyInstaller.utils.hooks import collect_all
 datas = []
 binaries = []
 hiddenimports = []
-for pkg in ("PySide6", "ezdxf"):
+for pkg in ("PySide6", "ezdxf", "pymupdf", "requests"):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries
@@ -23,6 +23,10 @@ for pkg in ("PySide6", "ezdxf"):
 # bundle, ou seja sys._MEIPASS) precisa bater com o que
 # dwg_bridge._bundled_bin_dir() resolve em modo "frozen".
 datas += [("newsicad/resources/libredwg/windows", "resources/libredwg/windows")]
+
+# Ícone (logo NewSI) usado como QIcon em tempo de execução (newsicad/main.py
+# _icon_path) — mesmo raciocínio de "resources/" solto na raiz do bundle.
+datas += [("newsicad/resources/newsi_icon.ico", "resources")]
 
 a = Analysis(
     ["newsicad/main.py"],
@@ -48,6 +52,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon="newsicad/resources/newsi_icon.ico",
 )
 
 coll = COLLECT(

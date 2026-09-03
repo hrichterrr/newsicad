@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import tempfile
 from pathlib import Path
 
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from newsicad.core.entities import Circle, Line, Point  # noqa: E402
@@ -64,6 +66,68 @@ def test_select_all_selects_every_entity():
     assert window.selection.ids == {a.id, b.id}
 
 
+def test_delete_erases_selected_entities():
+    """Bug real reportado: Del "não fazia nada" — não havia nenhum handler
+    pra essa tecla no app inteiro."""
+    _app()
+    window = MainWindow()
+    line = window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    window.selection.add(line.id)
+
+    window._delete_selected()
+
+    assert len(window.document.entities) == 0
+    assert window.selection.ids == set()
+
+
+def test_delete_does_nothing_without_selection():
+    _app()
+    window = MainWindow()
+    window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+
+    window._delete_selected()
+
+    assert len(window.document.entities) == 1
+
+
+def test_delete_does_nothing_during_active_command():
+    _app()
+    window = MainWindow()
+    line = window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    window.selection.add(line.id)
+    window._start_command("LINE")
+
+    window._delete_selected()
+
+    assert len(window.document.entities) == 1
+
+
+def test_delete_undoable():
+    _app()
+    window = MainWindow()
+    line = window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    window.selection.add(line.id)
+
+    window._delete_selected()
+    assert len(window.document.entities) == 0
+
+    window._do_undo()
+    assert len(window.document.entities) == 1
+
+
+def test_delete_key_press_on_canvas_erases_selection():
+    app = _app()
+    window = MainWindow()
+    window.show()
+    line = window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    window.selection.add(line.id)
+
+    QTest.keyClick(window.canvas, Qt.Key.Key_Delete)
+    app.processEvents()
+
+    assert len(window.document.entities) == 0
+
+
 def test_save_creates_bak_when_file_already_exists():
     _app()
     window = MainWindow()
@@ -112,9 +176,12 @@ def test_units_command_opens_and_applies_via_direct_call():
 
 def test_planned_command_from_new_list_gives_friendly_message():
     # TRIM/EXTEND/OFFSET/FILLET/CHAMFER/JOIN/EXPLODE/STRETCH/DIVIDE/MEASURE
-    # foram implementados (feature/geometry-editing) — ALIGN continua
-    # reconhecido-mas-não-implementado, então serve pra este teste genérico.
+    # foram implementados (feature/geometry-editing), e depois também
+    # POLYGON/ALIGN/ARRAY/MATCHPROP/SELECTSIMILAR/SPLINE/BOUNDARY/PEDIT/
+    # HATCHEDIT (feedback do grupo de testers) e por fim TABLE (marco C) —
+    # REGION continua reconhecido-mas-não-implementado, então serve pra
+    # este teste genérico.
     _app()
     window = MainWindow()
-    window._start_command("ALIGN")
-    assert any("reconhecido" in line and "ALIGN" in line for line in window.interpreter.log)
+    window._start_command("REGION")
+    assert any("reconhecido" in line and "REGION" in line for line in window.interpreter.log)

@@ -323,3 +323,54 @@ def test_dimension_and_hatch_coexist_with_other_entity_types():
 
     assert skipped == 0
     assert len(loaded.all_entities()) == len(original.all_entities()) == 8
+
+
+def test_load_dxf_reads_classic_polyline_as_lwpolyline():
+    """Entidade POLYLINE "clássica" (pré-LWPOLYLINE, ainda comum em .dwg
+    reais/mais antigos — não algo que o próprio save_dxf do NewSIcad emite,
+    então precisa ser montada com ezdxf puro para existir no arquivo de
+    teste). Bug real reportado pelos testers 2026-08-24: um .dwg de cliente
+    convertido tinha dezenas dessas ignoradas como "não suportada"."""
+    import ezdxf
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "classic_polyline.dxf"
+        doc = ezdxf.new(setup=False)
+        msp = doc.modelspace()
+        msp.add_polyline2d([(0, 0), (10, 0), (10, 10), (0, 10)], close=True, dxfattribs={"layer": "0"})
+        doc.saveas(path)
+
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    polylines = [e for e in loaded.all_entities() if isinstance(e, LWPolyline)]
+    assert len(polylines) == 1
+    assert polylines[0].closed is True
+    assert [(p.x, p.y) for p in polylines[0].points] == [(0, 0), (10, 0), (10, 10), (0, 10)]
+
+
+def test_load_dxf_skipped_count_has_per_type_breakdown():
+    """`skipped` continua se comportando como um int puro (comparações,
+    interpolação em string) mas carrega `.by_type` com a contagem por
+    dxftype — é isso que vira o "(Nx TIPO, ...)" na mensagem de aviso do
+    File > Open em vez de só um número sem contexto nenhum."""
+    import ezdxf
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "unsupported_entities.dxf"
+        doc = ezdxf.new(setup=False)
+        msp = doc.modelspace()
+        # 3DFACE (face de malha 3D) continua sem suporte — SOLID, que este
+        # teste usava antes, passou a ser lido como Hatch sólida em 2026-09.
+        msp.add_3dface([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], dxfattribs={"layer": "0"})
+        msp.add_3dface([(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)], dxfattribs={"layer": "0"})
+        msp.add_line((0, 0), (1, 1), dxfattribs={"layer": "0"})
+        doc.saveas(path)
+
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 2
+    assert skipped > 0
+    assert f"{skipped} entidade(s)" == "2 entidade(s)"
+    assert skipped.by_type == {"3DFACE": 2}
+    assert len(loaded.all_entities()) == 1

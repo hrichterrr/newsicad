@@ -41,11 +41,12 @@ def test_draw_button_starts_matching_command():
     assert window.interpreter.last_command_name == "CIRCLE"
 
 
-def test_modify_button_disabled_without_implementation():
+def test_match_prop_button_starts_matchprop_command():
     _app()
     window = MainWindow()
-    button = _find_button(window, "Match Prop")
-    assert not button.isEnabled()
+    _find_button(window, "Match Prop").click()
+    assert window.interpreter.active
+    assert window.interpreter.last_command_name == "MATCHPROP"
 
 
 def test_view_tab_zoom_buttons_call_canvas_methods():

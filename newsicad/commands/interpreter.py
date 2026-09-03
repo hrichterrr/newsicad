@@ -147,6 +147,18 @@ class CommandInterpreter:
                 self.log.append(f"Valor numérico inválido: \"{raw}\"")
                 return prompt
         elif prompt.kind == "keyword":
+            # Se o prompt define `options`, só chegamos aqui quando `raw` NÃO
+            # bateu com nenhuma delas (o match já teria retornado lá em cima)
+            # — sem essa checagem, qualquer texto era aceito como se fosse
+            # uma opção válida (bug real encontrado em auditoria: FIELD
+            # aceitava um tipo inexistente e virava um campo `#REF!` pra
+            # sempre). Prompt sem `options` definidas continua aceitando
+            # qualquer palavra, como sempre.
+            if prompt.options:
+                self.log.append(
+                    f"Opção inválida: \"{raw}\" — escolha uma de [{'/'.join(prompt.options)}]."
+                )
+                return prompt
             value = raw.upper()
         else:
             value = raw
@@ -165,6 +177,20 @@ class CommandInterpreter:
         except StopIteration:
             self._generator = None
             self._current_prompt = None
+            return None
+        except Exception as exc:
+            # Qualquer erro não previsto dentro do generator do comando (ex.:
+            # geometria degenerada que a validação de entrada não pegou)
+            # cancela SÓ o comando atual com uma mensagem clara, em vez de
+            # deixar a exceção subir e travar o app inteiro — auditoria
+            # encontrou vários comandos (ARC com pontos colineares, ARRAY/
+            # DIVIDE/MEASURE com Enter em branco num prompt sem guarda)
+            # crashando por essa falta de rede de segurança.
+            self._generator = None
+            self._current_prompt = None
+            self.log.append(
+                f"{self.last_command_name or 'Comando'}: erro inesperado ({exc}) — comando cancelado."
+            )
             return None
         self._current_prompt = prompt
         self.log.append(prompt.message)

@@ -1,15 +1,30 @@
-"""Canvas 2D estilo AutoCAD: fundo escuro, grid adaptativo, crosshair cobrindo
-a viewport, zoom no scroll, pan no botão do meio, preview ao vivo dos
-comandos de desenho, dynamic input (distância/ângulo) perto do cursor, e
-seleção de objetos (clique único + janela/crossing) para os comandos MODIFY."""
+"""Canvas 2D estilo AutoCAD: fundo escuro, grid adaptativo, crosshair curto
+(tamanho configurável, igual ao CURSORSIZE do AutoCAD), zoom no scroll, pan no
+botão do meio, preview ao vivo dos comandos de desenho, dynamic input
+(distância/ângulo) perto do cursor, e seleção de objetos (clique único +
+janela/crossing) para os comandos MODIFY."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPageSize, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QFontMetricsF,
+    QPageSize,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QRegion,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -26,6 +41,7 @@ from PySide6.QtWidgets import (
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.core.document import Document
 from newsicad.core.entities import (
+    BYBLOCK,
     Arc,
     BlockReference,
     Circle,
@@ -37,9 +53,22 @@ from newsicad.core.entities import (
     Line,
     LWPolyline,
     Point,
+    PointEntity,
+    Ray,
+    Spline,
+    Table,
     Text,
+    XLine,
 )
-from newsicad.core.geometry_ops import as_intersectable_pieces, dimension_geometry, entity_intersections
+from newsicad.core.fields import resolve_field_text
+from newsicad.core.geometry_ops import (
+    as_intersectable_pieces,
+    catmull_rom_bezier,
+    dimension_geometry,
+    entity_intersections,
+    point_infinite_line_distance,
+    point_ray_distance,
+)
 
 # Limite de profundidade para blocos aninhados (bloco cujo conteúdo referencia
 # outro bloco) — evita recursão infinita se um desenho malformado tiver um
@@ -50,7 +79,34 @@ BACKGROUND_COLOR = "#1e1e1e"
 GRID_MINOR_COLOR = "#3a3a3a"
 GRID_AXIS_COLOR = "#5a5a5a"
 CROSSHAIR_COLOR = "#d0d0d0"
+# Tamanho do crosshair como % da viewport (mesma semântica da variável
+# CURSORSIZE do AutoCAD, que por padrão é 5 — uma cruz curta perto do cursor,
+# não cobrindo a tela inteira). Antes o crosshair sempre ia de borda a borda
+# da viewport (100%); Albert (grupo de testers) pediu um cursor menor, "tipo
+# o do AutoCad".
+CROSSHAIR_SIZE_PERCENT = 5
 ENTITY_COLOR = "#e8e8e8"
+# Chave arbitrária pra QGraphicsItem.setData/.data — QGraphicsItem não é um
+# QObject (diferente da maioria dos outros widgets Qt), então não tem
+# setProperty/property; setData(key, value) é o mecanismo de dado genérico
+# equivalente. Usado só pra guardar a cor "de base" de cada item, restaurada
+# ao desselecionar (ver CanvasView._restore_base_pen).
+_BASE_COLOR_DATA_KEY = 0
+# Ordem de desenho: cada entidade do modelspace recebe zValue = (posição no
+# dict do Document) x este passo, então a cena empilha na mesma ordem em que
+# as entidades estão no documento (= ordem de criação, ou a ordem de desenho
+# do AutoCAD ao abrir um .dxf — ver dxf_io.load_dxf). É isso que faz um
+# WIPEOUT (Hatch.wipeout) cobrir só o que já existia quando ele foi criado
+# — antes o WIPEOUT tinha zValue fixo 100 "por cima de tudo", e TODA hachura
+# sólida era tratada como WIPEOUT. O passo é minúsculo pra nunca passar dos
+# zValues das camadas de UI (dynamic input = 1000).
+_DRAW_ORDER_Z_STEP = 1e-6
+# Máximo de linhas do padrão geradas por hachura no canvas: acima disso o
+# espaçamento é aumentado proporcionalmente (fidelidade visual, não exata).
+# Um .dwg real de 2026-09-01 tem milhares de hachuras — sem limite, uma única
+# hachura grande com espaçamento pequeno geraria centenas de milhares de
+# segmentos e travaria o refresh.
+_MAX_HATCH_LINES = 2000
 PREVIEW_COLOR = "#4da3ff"
 DYNAMIC_INPUT_COLOR = "#ffd479"
 SELECTION_COLOR = "#ff9f1c"
@@ -60,12 +116,22 @@ OSNAP_MARKER_COLOR = "#39ff14"
 
 _GRID_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 _HIT_TOLERANCE_PX = 6.0
+# Altura histórica do texto das cotas nativas (desenho em mm). Só um padrão:
+# o valor usado de verdade é `Document.dim_style.text_height` (mesmo default,
+# ver DimStyle em core/document.py), lido do .dxf ao abrir.
 DIM_TEXT_HEIGHT = 2.0
 HATCH_LINE_COLOR = "#5a7fa8"
 _OSNAP_TOLERANCE_PX = 10.0
 _OSNAP_MARKER_SIZE_PX = 9.0
+_PICKBOX_SIZE_PX = 8.0
 _POLAR_STEP_DEG = 15.0
 _POLAR_TOLERANCE_DEG = 3.0
+# XLine/Ray guardam ponto+ângulo (semântica "infinita" real, ver
+# core/entities.py) — o canvas desenha um segmento bem comprido (dentro do
+# sceneRect de ±100000, ver CanvasView.__init__) só pra fins de renderização;
+# bbox/zoom-extents ignoram esse comprimento (ver _entity_bbox_scene).
+_CONSTRUCTION_LINE_RENDER_LENGTH = 100000.0
+_POINT_MARKER_SIZE_PX = 6.0
 
 # Tamanhos de folha padrão pra Export PDF (série ISO 216, do menor A4 até o
 # A0 usado em pranchas arquitetônicas de verdade) — nome exibido na UI -> id
@@ -95,8 +161,8 @@ def _pick_grid_step(scale: float, min_px: float = 20.0) -> float:
     return _GRID_STEPS[-1]
 
 
-def _entity_pen() -> QPen:
-    pen = QPen(QColor(ENTITY_COLOR))
+def _entity_pen(color: str = ENTITY_COLOR) -> QPen:
+    pen = QPen(QColor(color))
     pen.setWidth(0)
     return pen
 
@@ -157,13 +223,252 @@ def _point_in_polygon(p: Point, points: list[Point]) -> bool:
     return inside
 
 
-def _text_local_extent(entity: Text) -> tuple[float, float]:
-    """Retângulo local aproximado (largura, altura) do texto, em unidades
-    CAD, ancorado no canto superior-esquerdo (insertion_point)."""
-    lines = entity.content.split("\n") or [""]
-    width = entity.height * 0.6 * max((len(line) for line in lines), default=1)
-    height = entity.height * 1.3 * max(len(lines), 1)
-    return max(width, 1e-6), max(height, 1e-6)
+# ---------------------------------------------------------------------- #
+# Texto: fonte de referência, métricas reais e layout
+# ---------------------------------------------------------------------- #
+# A altura CAD de um texto NÃO é um tamanho de fonte em pontos. A fonte é
+# sempre criada num tamanho fixo de referência em pixels (grande o bastante
+# pra métricas estáveis) e o item é ESCALADO pra que a altura de caixa-alta
+# (capHeight) da tinta seja exatamente `Text.height` em unidades de desenho
+# — razão tinta/altura medida em 1.03 (Arial/Tahoma) de h=2.5 até h=0.001.
+# Antes, `font.setPointSizeF(height)` tratava 0.18 m como 0.18 pt: no
+# Windows (GDI/DirectWrite) uma fonte com menos de 1 px não pinta NADA e o
+# boundingRect fica 0x0 (não seleciona, não entra no zoom extents); de 0.5 a
+# 1 pt vira 1 px; e em mm (1.8 pt) o hinting quebrava os avanços ("LEG
+# ENDA"). Numa planta em metros isso deixava 84-88% dos textos invisíveis
+# (achado text-invisivel-windows-pointsize, WP-B 2026-09). A plataforma
+# offscreen (onde a suíte roda) e o macOS clampam em ~1 px e escalam, por
+# isso passou despercebido nos testes.
+_TEXT_REF_PX = 100
+# Espaçamento simples entre linhas de MTEXT no AutoCAD = 5/3 da altura.
+_TEXT_LINE_PITCH = 5.0 / 3.0
+# Fontes .shx (romans/txt/simplex/isocp...) são fontes de traço do próprio
+# AutoCAD, nunca instaladas no sistema. O Qt cai então na fonte padrão da
+# plataforma (Tahoma no Windows), 30-50% mais larga que o romans.shx —
+# textos que cabiam numa célula de legenda passam a invadir a vizinha.
+# Substituímos por uma TTF garantida e "estreitada" (stretch 85%).
+_SHX_STRETCH = 85
+_SHX_FAMILIES = frozenset({
+    "txt", "simplex", "romans", "romand", "romanc", "romant", "italic", "italicc",
+    "italict", "monotxt", "complex", "scripts", "scriptc", "gothice", "gothicg",
+    "gothici", "greeks", "greekc", "isocp", "isocp2", "isocp3", "isocpeur",
+    "isocpeui", "isoct", "isoct2", "isoct3", "iso", "cibt", "cobt", "rom", "romb",
+    "romi", "sas", "sasb", "sasbo", "saso", "txtb", "stylu", "standard",
+})
+_FALLBACK_FAMILIES = ("Arial", "Liberation Sans", "Helvetica", "DejaVu Sans")
+# "Menlo" é o padrão histórico do NewSIcad (fonte mono do macOS): no
+# Windows preferimos outra mono instalada a deixar o Qt escolher Tahoma.
+_MONO_FAMILIES = ("Menlo", "Consolas", "DejaVu Sans Mono", "Courier New")
+_installed_families: dict[str, str] | None = None
+_font_cache: dict[tuple[str, str, int], QFont] = {}
+_metrics_cache: dict[str, QFontMetricsF] = {}
+
+
+def _installed() -> dict[str, str]:
+    """Famílias instaladas (minúsculas -> nome real), lidas uma única vez
+    do QFontDatabase (precisa de QApplication viva — só é chamada de dentro
+    do canvas). Vazio na plataforma offscreen desta máquina: tudo cai na
+    fonte padrão do Qt, que ainda pinta e mede."""
+    global _installed_families
+    if _installed_families is None:
+        try:
+            _installed_families = {f.lower(): f for f in QFontDatabase.families()}
+        except Exception:  # sem QApplication: não cacheia, tenta de novo depois
+            return {}
+    return _installed_families
+
+
+def _first_installed(candidates: tuple[str, ...]) -> str | None:
+    installed = _installed()
+    for name in candidates:
+        real = installed.get(name.lower())
+        if real:
+            return real
+    return None
+
+
+def resolve_font_family(family: str, font_file: str = "") -> tuple[str, int]:
+    """(família de fonte instalada, stretch base em %) pra um STYLE do
+    desenho — tabela de substituição SHX/desconhecida do achado
+    fontes-shx-fallback-e-metricas: TTF instalada (arial.ttf -> Arial) é
+    mantida; .shx ou nome de fonte SHX conhecido vira a primeira de
+    `_FALLBACK_FAMILIES` com `_SHX_STRETCH`; "Menlo" (padrão do NewSIcad)
+    tenta as monoespaçadas; qualquer outra desconhecida vira Arial (ou a
+    fonte padrão do Qt se nem Arial existir)."""
+    key = (family or "").strip().lower()
+    file_key = (font_file or "").strip().lower()
+    installed = _installed()
+    if key in installed and not file_key.endswith(".shx"):
+        return installed[key], 100
+    if file_key.endswith(".shx") or key in _SHX_FAMILIES:
+        return _first_installed(_FALLBACK_FAMILIES) or QFont().family(), _SHX_STRETCH
+    if key == "menlo":
+        return _first_installed(_MONO_FAMILIES) or _first_installed(_FALLBACK_FAMILIES) or QFont().family(), 100
+    return _first_installed(_FALLBACK_FAMILIES) or QFont().family(), 100
+
+
+def text_font(style, width_factor: float = 1.0) -> QFont:
+    """QFont de referência (`_TEXT_REF_PX` px) pro `TextStyle` dado (None =
+    padrão "Menlo"), com o fator de largura do estilo × o da entidade
+    aplicado via `setStretch`. Cacheada por (família, arquivo, stretch)."""
+    family = style.font_family if style is not None else "Menlo"
+    font_file = getattr(style, "font_file", "") if style is not None else ""
+    style_width = getattr(style, "width", 1.0) if style is not None else 1.0
+    real, base_stretch = resolve_font_family(family, font_file)
+    stretch = int(round(base_stretch * (style_width or 1.0) * (width_factor or 1.0)))
+    stretch = max(1, min(4000, stretch))
+    cache_key = (real, font_file, stretch)
+    cached = _font_cache.get(cache_key)
+    if cached is not None:
+        return QFont(cached)
+    font = QFont(real)
+    font.setPixelSize(_TEXT_REF_PX)
+    font.setStretch(stretch)
+    # Contornos sem hinting: o glifo é escalado depois, então qualquer
+    # arredondamento a pixel inteiro da fonte de referência viraria erro.
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    _font_cache[cache_key] = QFont(font)
+    return font
+
+
+def _metrics(font: QFont) -> QFontMetricsF:
+    key = font.key()
+    metrics = _metrics_cache.get(key)
+    if metrics is None:
+        metrics = QFontMetricsF(font)
+        _metrics_cache[key] = metrics
+    return metrics
+
+
+@dataclass
+class TextLayout:
+    """Resultado de `text_layout`: linhas já quebradas e as medidas REAIS do
+    bloco de texto em unidades CAD. A caixa local tem origem no canto
+    superior-esquerdo, `width` x `height`; o topo é a linha de caixa-alta da
+    primeira linha (baseline + `cap`), a base é a última baseline menos
+    `descent`; baselines a cada `pitch`."""
+
+    font: QFont
+    lines: list[str]
+    scale: float  # unidades CAD por px da fonte de referência
+    line_widths: list[float]
+    width: float
+    height: float
+    pitch: float
+    cap: float
+    descent: float
+
+    def baseline_offset(self, index: int) -> float:
+        """Distância (CAD, positiva pra baixo) do topo da caixa até a
+        baseline da linha `index`."""
+        return self.cap + index * self.pitch
+
+
+def _wrap_paragraph(paragraph: str, metrics: QFontMetricsF, max_px: float) -> list[str]:
+    words = paragraph.split(" ")
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if current and metrics.horizontalAdvance(candidate) > max_px:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    lines.append(current)
+    return lines
+
+
+def text_layout(entity: Text, font: QFont) -> TextLayout:
+    """Mede o texto com as métricas reais da fonte de referência e devolve
+    o layout em unidades CAD (ver `TextLayout`). Com `entity.width` > 0
+    (caixa do MTEXT) cada parágrafo é quebrado por palavras nessa largura
+    ANTES de justificar — uma palavra maior que a caixa fica sozinha na
+    linha, como no AutoCAD."""
+    metrics = _metrics(font)
+    cap_px = max(metrics.capHeight(), 1e-6)
+    scale = max(entity.height, 0.0) / cap_px
+    paragraphs = entity.content.split("\n")
+    if entity.width > 0 and scale > 0:
+        lines: list[str] = []
+        for paragraph in paragraphs:
+            lines.extend(_wrap_paragraph(paragraph, metrics, entity.width / scale))
+    else:
+        lines = paragraphs
+    widths = [metrics.horizontalAdvance(line) * scale for line in lines]
+    pitch = _TEXT_LINE_PITCH * entity.height * (entity.line_spacing_factor or 1.0)
+    descent = metrics.descent() * scale
+    width = max(widths) if widths else 0.0
+    height = (len(lines) - 1) * pitch + entity.height + descent
+    return TextLayout(
+        font=font,
+        lines=lines,
+        scale=scale,
+        line_widths=widths,
+        width=width,
+        height=height,
+        pitch=pitch,
+        cap=entity.height,
+        descent=descent,
+    )
+
+
+def _text_local_extent(entity: Text, layout: TextLayout) -> tuple[float, float]:
+    """Retângulo local (largura, altura) do texto, em unidades CAD, ancorado
+    no canto superior-esquerdo (ver `_text_top_left_world`) — medido com as
+    métricas reais da fonte, não mais a estimativa 0.6·h por caractere."""
+    return max(layout.width, 1e-6), max(layout.height, 1e-6)
+
+
+_JUSTIFY_COL_FRAC = {"L": 0.0, "C": 0.5, "R": 1.0}
+_JUSTIFY_ROW_FRAC = {"T": 0.0, "M": 0.5, "B": 1.0}
+
+
+def _text_anchor_local(entity: Text, layout: TextLayout) -> tuple[float, float]:
+    """Posição do `insertion_point` dentro da caixa local do texto (origem
+    no canto superior-esquerdo, Y pra cima, sem rotação), segundo
+    `entity.justify`. Linha "B?" = baseline da última linha de texto
+    (convenção do TEXT/ATTRIB do DXF — ver Text em core/entities.py), não a
+    borda inferior da caixa."""
+    width, height = _text_local_extent(entity, layout)
+    row = entity.justify[0] if entity.justify else "T"
+    col = entity.justify[1] if len(entity.justify) > 1 else "L"
+    jx = width * _JUSTIFY_COL_FRAC.get(col, 0.0)
+    if row == "B":
+        jy = -layout.baseline_offset(max(len(layout.lines) - 1, 0))
+    else:
+        jy = -height * _JUSTIFY_ROW_FRAC.get(row, 0.0)
+    return jx, jy
+
+
+def _text_top_left_world(entity: Text, layout: TextLayout) -> Point:
+    """Canto superior-esquerdo real do bloco de texto em coordenadas CAD,
+    considerando `entity.justify` (ver TEXT_JUSTIFY_OPTIONS em
+    core/entities.py) — para "TL" (padrão) é o próprio `insertion_point`;
+    para as outras 8 opções, `insertion_point` ancora um ponto diferente do
+    retângulo do texto (ex.: "MC" = centro, "BL" = baseline), então o canto
+    superior-esquerdo precisa ser deslocado (e rotacionado) a partir dele
+    antes de desenhar/hit-testar — todo o resto do código (_create_item,
+    _distance_to_entity, _entity_bbox_scene) trata esse canto como origem
+    local."""
+    jx, jy = _text_anchor_local(entity, layout)
+    dx, dy = -jx, -jy
+    cos_a, sin_a = math.cos(entity.rotation), math.sin(entity.rotation)
+    return Point(
+        entity.insertion_point.x + dx * cos_a - dy * sin_a,
+        entity.insertion_point.y + dx * sin_a + dy * cos_a,
+    )
+
+
+def _scaled_text_path(font: QFont, text: str, scale: float) -> tuple[QPainterPath, float]:
+    """(path do texto com a baseline em y=0 e o início em x=0, já escalado
+    pra unidades CAD de cena; largura em unidades CAD) — usado pelo texto da
+    cota e das células de tabela, que não passam por `TextLayout`."""
+    path = QPainterPath()
+    path.addText(0.0, 0.0, font, text)
+    transform = QTransform()
+    transform.scale(scale, scale)
+    return transform.map(path), _metrics(font).horizontalAdvance(text) * scale
 
 
 class _HatchItem(QGraphicsPathItem):
@@ -216,13 +521,61 @@ def _hatch_fill_lines(boundary_scene: list[QPointF], angle_rad: float, spacing_w
 
     cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
     lines: list[tuple[QPointF, QPointF]] = []
-    n_steps = min(int(diag / spacing_scene) + 2, 500)  # limite de segurança p/ contornos grandes
+    n_steps = int(diag / spacing_scene) + 2
+    if 2 * n_steps + 1 > _MAX_HATCH_LINES:
+        # Contorno grande demais pro espaçamento pedido: abre o espaçamento
+        # até caber em _MAX_HATCH_LINES (ver comentário da constante).
+        n_steps = _MAX_HATCH_LINES // 2
+        spacing_scene = diag / max(n_steps - 2, 1)
     for i in range(-n_steps, n_steps + 1):
         ox, oy = cx + px * spacing_scene * i, cy + py * spacing_scene * i
         a = QPointF(ox - ux * diag, oy - uy * diag)
         b = QPointF(ox + ux * diag, oy + uy * diag)
         lines.append((a, b))
     return lines
+
+
+def _hatch_boundary_path(entity: Hatch) -> tuple[QPainterPath, list[QPointF]]:
+    """QPainterPath com TODOS os anéis da hachura (`Hatch.fill_paths()`:
+    externo + furos/ilhas) e regra even-odd, pra que o preenchimento — sólido
+    ou por linhas recortadas via setClipPath — deixe os furos vazios.
+    Devolve também os pontos de cena do contorno externo (base das linhas do
+    padrão)."""
+    path = QPainterPath()
+    path.setFillRule(Qt.FillRule.OddEvenFill)
+    outer_scene: list[QPointF] = []
+    for index, ring in enumerate(entity.fill_paths()):
+        pts_scene = [cad_to_scene(p) for p in ring]
+        if index == 0:
+            outer_scene = pts_scene
+        if not pts_scene:
+            continue
+        path.moveTo(pts_scene[0])
+        for pt in pts_scene[1:]:
+            path.lineTo(pt)
+        path.closeSubpath()
+    return path, outer_scene
+
+
+class _ClippedGroup(QGraphicsItemGroup):
+    """QGraphicsItemGroup cujo shape()/boundingRect() é um contorno FIXO (não
+    a união dos filhos, como o QGraphicsItemGroup normal calcularia) —
+    combinado com o flag `ItemClipsChildrenToShape`, isso faz os filhos serem
+    literalmente recortados na tela fora desse contorno. Usado pelo comando
+    CLIP/XCLIP (ver `BlockReference.clip_boundary`/`ImageReference.
+    clip_boundary` em core/entities.py e `_create_block_reference_item`/
+    `_create_image_item` abaixo)."""
+
+    def __init__(self, clip_path: QPainterPath) -> None:
+        super().__init__()
+        self._clip_path = clip_path
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemClipsChildrenToShape, True)
+
+    def boundingRect(self) -> QRectF:
+        return self._clip_path.boundingRect()
+
+    def shape(self) -> QPainterPath:
+        return self._clip_path
 
 
 class CanvasView(QGraphicsView):
@@ -243,6 +596,22 @@ class CanvasView(QGraphicsView):
         self.scale(20, 20)
 
         self._entity_items: dict[str, QGraphicsItem] = {}
+        #: id da entidade -> "impressão digital" do estado com que o item
+        #: gráfico dela foi criado (ver refresh_entities) — permite pular a
+        #: recriação de itens cujas entidades não mudaram desde o último
+        #: refresh.
+        self._entity_fingerprints: dict[str, str] = {}
+        #: Cache ENTRE refreshes da impressão digital das definições de
+        #: bloco (nome -> digest) — elas são o grosso do custo num .dwg real
+        #: (milhares de entidades dentro das definições) e só mudam via
+        #: define_block/PURGE, que bumpam Document.block_defs_revision;
+        #: quando a revisão muda, o cache inteiro é descartado.
+        self._def_fp_cache: dict[str, str] = {}
+        self._def_fp_cache_revision: int = -1
+        #: Última posição do cursor no viewport (px) — usada pra invalidar
+        #: só a região do crosshair/pickbox no mouseMoveEvent em vez do
+        #: viewport inteiro (ver comentário lá).
+        self._last_cursor_viewport_pos = None
         self._mouse_scene_pos: QPointF | None = None
         self._preview_path: QPainterPath | None = None
         self._panning = False
@@ -272,8 +641,9 @@ class CanvasView(QGraphicsView):
         self.on_point: Callable[[Point], None] | None = None
         self.on_enter: Callable[[], None] | None = None
         self.on_cancel: Callable[[], None] | None = None
+        self.on_delete: Callable[[], None] | None = None
         self.on_selection_changed: Callable[[], None] | None = None
-        self.on_delete_pressed: Callable[[], None] | None = None
+        self.on_context_menu: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------ #
     # sincronização com o Document
@@ -284,35 +654,143 @@ class CanvasView(QGraphicsView):
 
         for stale_id in existing_ids - doc_ids:
             item = self._entity_items.pop(stale_id)
+            self._entity_fingerprints.pop(stale_id, None)
             self._scene.removeItem(item)
 
-        # Recria o item gráfico de toda entidade presente no documento.
-        # Necessário porque MOVE/ROTATE/SCALE mutam a entidade em memória
-        # sem trocar de id — não dá pra saber por diff de ids se a
-        # geometria mudou, então sempre reconstruímos a partir do estado
-        # atual (custo desprezível para o volume de entidades do NewSIcad).
-        for entity_id in doc_ids:
-            old_item = self._entity_items.pop(entity_id, None)
-            if old_item is not None:
-                self._scene.removeItem(old_item)
-            entity = self.document.entities[entity_id]
+        # MOVE/ROTATE/SCALE mutam a entidade em memória sem trocar de id —
+        # não dá pra saber por diff de ids se a geometria mudou. A versão
+        # antiga resolvia isso recriando TODOS os itens a cada chamada, com
+        # um comentário de "custo desprezível" que a medição desmentiu: num
+        # .dwg real de arquiteto (~7 mil entidades → ~35 mil QGraphicsItems),
+        # cada refresh custava 6-8s, e `_after_interpreter_step` chama isto
+        # a CADA passo de comando (auditoria 2026-08-28 — a "lentidão"
+        # reportada pelos testers). Agora cada entidade ganha uma "impressão
+        # digital" barata (repr do dataclass + cor efetiva + definição do
+        # bloco, se houver) e o item só é recriado quando ela muda — um
+        # refresh sem mudanças vira só o custo de calcular os reprs.
+        if self._def_fp_cache_revision != self.document.block_defs_revision:
+            self._def_fp_cache.clear()
+            self._def_fp_cache_revision = self.document.block_defs_revision
+
+        def definition_fp(block_name: str, _visiting: frozenset[str] = frozenset()) -> str:
+            if block_name in _visiting:
+                return ""  # definição cíclica: corta, igual ao render faz
+            cached = self._def_fp_cache.get(block_name)
+            if cached is not None:
+                return cached
+            parts: list[str] = []
+            for child in self.document.block_definitions.get(block_name, []):
+                parts.append(repr(child))
+                if isinstance(child, BlockReference):
+                    parts.append(definition_fp(child.block_name, _visiting | {block_name}))
+            # Guarda só um resumo (hash) — a string completa de uma definição
+            # grande (milhares de entidades) seria concatenada na impressão
+            # digital de CADA instância do bloco, custo real medido num .dwg
+            # de arquiteto. O cache vive ENTRE refreshes; qualquer mudança de
+            # definição (define_block/PURGE bumpam block_defs_revision)
+            # descarta ele inteiro logo acima.
+            fp = f"{hash(chr(0).join(parts)):x}"
+            self._def_fp_cache[block_name] = fp
+            return fp
+
+        # Mudança em qualquer camada (cor/visibilidade/trava) pode afetar a
+        # cor dos FILHOS de um bloco (resolvida na criação do item), então
+        # entra na impressão digital de tudo — na prática, mexer no painel
+        # de camadas volta a reconstruir tudo (raro e era o comportamento
+        # antigo de qualquer forma).
+        layers_fp = f"{hash(chr(0).join(f'{la.name}|{la.color}|{la.visible}|{la.locked}' for la in self.document.layers.values())):x}"
+
+        # Percorre na ORDEM do dict (ordem de criação / ordem de desenho do
+        # arquivo), não num set: a posição vira o zValue do item (ver
+        # _DRAW_ORDER_Z_STEP), então a cena empilha igual ao documento.
+        for index, (entity_id, entity) in enumerate(self.document.entities.items()):
+            if isinstance(entity, Text) and entity.field_type:
+                # FIELD (comando FIELD): recalcula o valor vivo a cada
+                # refresh, ANTES da impressão digital ser calculada (o
+                # conteúdo novo entra no repr) e antes de qualquer código
+                # ler `entity.content` — hit-test/bbox/render usam esse
+                # mesmo atributo (ver `_text_top_left_world`).
+                entity.content = resolve_field_text(entity, self.document)
             if not self.document.is_layer_visible(entity):
                 # Camada desligada no painel de camadas: a entidade some do
                 # canvas (não só fica "acinzentada") e também fica de fora
                 # de hit-test/seleção/zoom-extents — ver os outros métodos
                 # que checam `is_layer_visible`.
+                old_item = self._entity_items.pop(entity_id, None)
+                if old_item is not None:
+                    self._scene.removeItem(old_item)
+                self._entity_fingerprints.pop(entity_id, None)
                 continue
+
+            fingerprint = f"{entity!r}\x00{self._effective_color(entity)}\x00{layers_fp}"
+            if isinstance(entity, BlockReference):
+                fingerprint += "\x00" + definition_fp(entity.block_name)
+            z_value = index * _DRAW_ORDER_Z_STEP
+            if (
+                self._entity_fingerprints.get(entity_id) == fingerprint
+                and entity_id in self._entity_items
+            ):
+                self._entity_items[entity_id].setZValue(z_value)
+                continue
+
+            old_item = self._entity_items.pop(entity_id, None)
+            if old_item is not None:
+                self._scene.removeItem(old_item)
             item = self._create_item(entity)
+            item.setZValue(z_value)
             self._scene.addItem(item)
             self._entity_items[entity_id] = item
+            self._entity_fingerprints[entity_id] = fingerprint
 
         self.refresh_selection_highlight()
+
+    def _effective_color(self, entity: Entity, inherited: tuple[str, str] | None = None) -> str:
+        """Cor de verdade com que a entidade deve ser desenhada — regra do
+        AutoCAD, inclusive dentro de blocos:
+
+        - cor própria ("#RRGGBB") -> ela mesma;
+        - `BYBLOCK` (cor 0 do DXF) -> a cor efetiva do INSERT que a contém
+          (`inherited[0]`); fora de um bloco, cai na cor da camada;
+        - ByLayer (`None`) na camada "0" dentro de um bloco -> a cor da
+          CAMADA do INSERT (`inherited[1]`, já resolvida pra blocos
+          aninhados) — é assim que a biblioteca de símbolos da New SI muda
+          de cor conforme a camada em que o ícone é inserido;
+        - ByLayer nas demais camadas -> a cor da própria camada;
+        - `ENTITY_COLOR` só como último recurso (camada não encontrada).
+
+        `inherited` = (cor efetiva do INSERT, camada efetiva do INSERT) e só
+        é passado por `_create_block_reference_item`. Usado tanto na criação
+        do item (`_create_item`) quanto ao restaurar a cor de base ao
+        desselecionar (`_restore_base_pen`) — mesma fonte de verdade nos dois
+        lugares, pra nunca divergir. Antes disso, BYBLOCK era descartado na
+        leitura e filhos na camada "0" saíam na cor da camada 0 (branco): o
+        corpo de todo ícone de rack/legenda dos .dwg reais abria branco."""
+        if entity.color and entity.color != BYBLOCK:
+            return entity.color
+        layer_name = entity.layer
+        if inherited is not None:
+            if entity.color == BYBLOCK:
+                return inherited[0]
+            if layer_name == "0":
+                layer_name = inherited[1]
+        layer = self.document.layers.get(layer_name)
+        return layer.color if layer is not None else ENTITY_COLOR
+
+    def _block_child_visible(self, child: Entity, inherited_layer: str) -> bool:
+        """Visibilidade de um filho de bloco: na camada "0" ele segue a camada
+        (efetiva) do INSERT; em outra camada, some se ela estiver desligada
+        — igual ao AutoCAD."""
+        layer_name = inherited_layer if child.layer == "0" else child.layer
+        layer = self.document.layers.get(layer_name)
+        return layer is None or layer.visible
 
     def refresh_selection_highlight(self) -> None:
         selected_ids = self.interpreter.context.selection.ids
         for entity_id, item in self._entity_items.items():
-            pen = _selected_pen() if entity_id in selected_ids else _entity_pen()
-            self._apply_pen(item, pen)
+            if entity_id in selected_ids:
+                self._apply_pen(item, _selected_pen())
+            else:
+                self._restore_base_pen(item)
 
     def _apply_pen(self, item: QGraphicsItem, pen: QPen) -> None:
         """`QGraphicsItemGroup` (usado por BlockReference) e
@@ -326,19 +804,55 @@ class CanvasView(QGraphicsView):
         elif hasattr(item, "setPen"):
             item.setPen(pen)
 
-    def _create_item(self, entity: Entity) -> QGraphicsItem:
+    def _restore_base_pen(self, item: QGraphicsItem) -> None:
+        """Contraparte de `_apply_pen` pra desselecionar: cada item guarda a
+        própria cor "de base" (`baseColor`, setada em `_create_item`) como
+        propriedade Qt no momento em que foi criado — precisa ser por item
+        individual (não um pen único pro grupo inteiro) porque um
+        BlockReference pode ter filhos em camadas/cores diferentes entre si."""
+        if isinstance(item, QGraphicsItemGroup):
+            for child in item.childItems():
+                self._restore_base_pen(child)
+        elif hasattr(item, "setPen"):
+            color = item.data(_BASE_COLOR_DATA_KEY)
+            item.setPen(_entity_pen(color if color else ENTITY_COLOR))
+
+    def _create_item(self, entity: Entity, color: str | None = None) -> QGraphicsItem:
+        """QGraphicsItem de uma entidade. `color` = cor efetiva já resolvida
+        (passada por `_create_block_reference_item` pros filhos de bloco, que
+        herdam do INSERT); `None` = resolve pela regra de `_effective_color`
+        como entidade de topo."""
+        if color is None:
+            color = self._effective_color(entity)
+
         if isinstance(entity, Line):
             p1 = cad_to_scene(entity.start)
             p2 = cad_to_scene(entity.end)
             item = QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y())
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, Circle) and entity.inner_radius > 1e-9:
+            # DONUT: anel preenchido — even-odd fill entre o círculo externo
+            # e o interno (ver Circle.inner_radius em core/entities.py).
+            c = cad_to_scene(entity.center)
+            path = QPainterPath()
+            path.addEllipse(c, entity.radius, entity.radius)
+            path.addEllipse(c, entity.inner_radius, entity.inner_radius)
+            path.setFillRule(Qt.FillRule.OddEvenFill)
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setBrush(QBrush(QColor(color)))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, Circle):
             c = cad_to_scene(entity.center)
             r = entity.radius
             item = QGraphicsEllipseItem(c.x() - r, c.y() - r, 2 * r, 2 * r)
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, Arc):
@@ -351,7 +865,8 @@ class CanvasView(QGraphicsView):
             path.arcMoveTo(rect, start_deg)
             path.arcTo(rect, start_deg, -sweep_world_deg)
             item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, Ellipse):
@@ -362,7 +877,8 @@ class CanvasView(QGraphicsView):
             transform.translate(c.x(), c.y())
             transform.rotate(-math.degrees(entity.rotation))
             item = QGraphicsPathItem(transform.map(path))
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, LWPolyline):
@@ -375,7 +891,25 @@ class CanvasView(QGraphicsView):
                 if entity.closed:
                     path.closeSubpath()
             item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, Spline):
+            path = QPainterPath()
+            pts = entity.points
+            if len(pts) == 1:
+                path.moveTo(cad_to_scene(pts[0]))
+            elif pts:
+                segments = catmull_rom_bezier(pts, entity.closed)
+                path.moveTo(cad_to_scene(segments[0][0]))
+                for _p0, ctrl1, ctrl2, p3 in segments:
+                    path.cubicTo(cad_to_scene(ctrl1), cad_to_scene(ctrl2), cad_to_scene(p3))
+                if entity.closed:
+                    path.closeSubpath()
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, BlockReference):
@@ -384,79 +918,278 @@ class CanvasView(QGraphicsView):
         if isinstance(entity, ImageReference):
             return self._create_image_item(entity)
 
+        if isinstance(entity, Table):
+            return self._create_table_item(entity, color)
+
         if isinstance(entity, Text):
-            pos = cad_to_scene(entity.insertion_point)
-            item = QGraphicsSimpleTextItem(entity.content)
-            font = QFont("Menlo")
-            font.setPointSizeF(max(entity.height, 0.1))
-            item.setFont(font)
-            item.setPos(pos)
-            # inverte o ângulo: rotação anti-horária em CAD (Y pra cima) vira
-            # horária em coords de cena (Y pra baixo) — mesmo ajuste que
-            # Arc/Ellipse já fazem.
-            item.setRotation(-math.degrees(entity.rotation))
-            item.setBrush(QBrush(QColor(ENTITY_COLOR)))
-            item.setPen(_entity_pen())
-            return item
+            return self._create_text_item(entity, color)
 
         if isinstance(entity, Dimension):
-            segments, text_anchor = dimension_geometry(entity)
+            dim_style = self.document.dim_style
+            segments, text_anchor = dimension_geometry(entity, tick_size=dim_style.arrow_size)
             path = QPainterPath()
             for a, b in segments:
                 path.moveTo(cad_to_scene(a))
                 path.lineTo(cad_to_scene(b))
-            font = QFont("Menlo")
-            font.setPointSizeF(DIM_TEXT_HEIGHT)
-            anchor_scene = cad_to_scene(text_anchor)
-            path.addText(
-                anchor_scene.x() - DIM_TEXT_HEIGHT * 0.3 * len(entity.measurement_text()),
-                anchor_scene.y() - DIM_TEXT_HEIGHT * 0.4,
-                font,
-                entity.measurement_text(),
-            )
+            # Texto da medida com a mesma receita do Text (fonte de
+            # referência escalada pela altura de caixa-alta) e tamanho vindo
+            # do DimStyle do documento — não mais os 2.0 fixos de
+            # DIM_TEXT_HEIGHT, que numa planta em metros davam um texto 20x
+            # maior que a própria cota.
+            text_height = dim_style.text_height
+            if text_height > 1e-6:
+                font = text_font(self.document.text_styles.get("Standard"))
+                scale = text_height / max(_metrics(font).capHeight(), 1e-6)
+                text_path, text_width = _scaled_text_path(font, entity.measurement_text(), scale)
+                anchor_scene = cad_to_scene(text_anchor)
+                text_path.translate(anchor_scene.x() - text_width / 2, anchor_scene.y() - text_height * 0.4)
+                path.addPath(text_path)
             item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, Hatch) and entity.wipeout:
+            # WIPEOUT (comando WIPEOUT ou entidade WIPEOUT do .dxf):
+            # preenchimento sólido na cor de fundo do canvas. Fica por cima
+            # só do que vem ANTES dele no documento — a ordem de desenho é o
+            # zValue dado em refresh_entities (dentro de um bloco, a ordem
+            # dos filhos no grupo), igual ao AutoCAD.
+            path, _outer = _hatch_boundary_path(entity)
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setBrush(QBrush(QColor(BACKGROUND_COLOR)))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, Hatch) and entity.solid_fill:
+            # HATCH sólida (ou SOLID/TRACE do .dxf): preenchimento na cor
+            # efetiva da entidade, furos vazios (even-odd), contorno fino na
+            # mesma cor. Antes TODA hachura sólida era tratada como WIPEOUT
+            # (pintada na cor do fundo, por cima de tudo) — o corpo de cada
+            # ícone de legenda/rack dos .dwg reais sumia e ainda cobria as
+            # linhas e textos do próprio bloco.
+            path, _outer = _hatch_boundary_path(entity)
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setBrush(QBrush(QColor(color)))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         if isinstance(entity, Hatch):
-            path = QPainterPath()
-            pts_scene = [cad_to_scene(p) for p in entity.boundary_points]
-            if pts_scene:
-                path.moveTo(pts_scene[0])
-                for pt in pts_scene[1:]:
-                    path.lineTo(pt)
-                path.closeSubpath()
+            path, outer_scene = _hatch_boundary_path(entity)
             item = _HatchItem(path)
-            item.setPen(_entity_pen())
-            item.set_hatch_lines(_hatch_fill_lines(pts_scene, entity.angle, entity.spacing))
+            item.setPen(_entity_pen(color))
+            item.set_hatch_lines(_hatch_fill_lines(outer_scene, entity.angle, entity.spacing))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, PointEntity):
+            # Cruz de tamanho constante em pixels de tela, estilo marcador
+            # OSNAP — não um Circle minúsculo (ver core/entities.py).
+            c = cad_to_scene(entity.location)
+            path = QPainterPath()
+            half = _POINT_MARKER_SIZE_PX / (2 * max(self.transform().m11(), 1e-6))
+            path.moveTo(c.x() - half, c.y())
+            path.lineTo(c.x() + half, c.y())
+            path.moveTo(c.x(), c.y() - half)
+            path.lineTo(c.x(), c.y() + half)
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            return item
+
+        if isinstance(entity, (XLine, Ray)):
+            c = cad_to_scene(entity.point)
+            ux, uy = math.cos(entity.angle), math.sin(entity.angle)
+            length = _CONSTRUCTION_LINE_RENDER_LENGTH
+            if isinstance(entity, XLine):
+                p1 = QPointF(c.x() - ux * length, c.y() + uy * length)
+                p2 = QPointF(c.x() + ux * length, c.y() - uy * length)
+            else:
+                p1 = c
+                p2 = QPointF(c.x() + ux * length, c.y() - uy * length)
+            item = QGraphicsLineItem(p1.x(), p1.y(), p2.x(), p2.y())
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
         raise TypeError(f"Tipo de entidade não suportado: {type(entity)!r}")
 
-    def _create_block_reference_item(self, entity: BlockReference, _depth: int = 0) -> QGraphicsItem:
+    # ------------------------------------------------------------------ #
+    # texto (ver o bloco "Texto: fonte de referência..." no topo do módulo)
+    # ------------------------------------------------------------------ #
+    def _text_font(self, entity: Text) -> QFont:
+        return text_font(self.document.text_styles.get(entity.style), entity.width_factor)
+
+    def _text_layout(self, entity: Text) -> TextLayout:
+        return text_layout(entity, self._text_font(entity))
+
+    def _create_text_item(self, entity: Text, color: str) -> QGraphicsItem:
+        """Texto como QGraphicsPathItem: contornos dos glifos da fonte de
+        referência (`_TEXT_REF_PX`), uma linha por baseline, com a escala
+        altura/capHeight e a rotação compostas num único QTransform e o
+        canto superior-esquerdo da caixa em `_text_top_left_world`. Linhas
+        de um bloco justificado ao centro/direita são alinhadas dentro da
+        caixa (o QGraphicsSimpleTextItem de antes só alinhava à esquerda).
+        Altura <= 1e-6 ou conteúdo vazio: item vazio (o AutoCAD também não
+        desenha) — sem o piso `max(h, 0.1)` antigo, que virava um texto de
+        tamanho arbitrário."""
+        path = QPainterPath()
+        transform: QTransform | None = None
+        pos = cad_to_scene(entity.insertion_point)
+        if entity.height > 1e-6 and entity.content.strip():
+            layout = self._text_layout(entity)
+            col = entity.justify[1] if len(entity.justify) > 1 else "L"
+            col_frac = _JUSTIFY_COL_FRAC.get(col, 0.0)
+            for index, (line, line_width) in enumerate(zip(layout.lines, layout.line_widths)):
+                if not line.strip():
+                    continue
+                x_px = (layout.width - line_width) * col_frac / layout.scale
+                y_px = layout.baseline_offset(index) / layout.scale
+                path.addText(x_px, y_px, layout.font, line)
+            transform = QTransform()
+            # inverte o ângulo: rotação anti-horária em CAD (Y pra cima) vira
+            # horária em coords de cena (Y pra baixo) — mesmo ajuste que
+            # Arc/Ellipse já fazem.
+            transform.rotate(-math.degrees(entity.rotation))
+            transform.scale(layout.scale, layout.scale)
+            pos = cad_to_scene(_text_top_left_world(entity, layout))
+        item = QGraphicsPathItem(path)
+        if transform is not None:
+            item.setTransform(transform)
+        item.setPos(pos)
+        item.setBrush(QBrush(QColor(color)))
+        item.setPen(_entity_pen(color))
+        item.setData(_BASE_COLOR_DATA_KEY, color)
+        return item
+
+    def _create_table_item(self, entity: Table, color: str) -> QGraphicsItem:
+        """Grade (linhas) + texto de cada célula não-vazia, num
+        QGraphicsItemGroup posicionado/rotacionado como um todo — mesmo
+        padrão de `_create_block_reference_item`. Coordenadas locais dos
+        filhos já em convenção de cena (Y cresce pra baixo = linha seguinte
+        pra baixo), não precisam de `cad_to_scene` individual; só o grupo
+        inteiro é que vai de CAD pra cena via `entity.insertion_point`."""
+        group = QGraphicsItemGroup()
+        total_w = entity.cols * entity.col_width
+        total_h = entity.rows * entity.row_height
+
+        if entity.show_borders:
+            grid_path = QPainterPath()
+            grid_path.addRect(0, 0, total_w, total_h)
+            for r in range(1, entity.rows):
+                y = r * entity.row_height
+                grid_path.moveTo(0, y)
+                grid_path.lineTo(total_w, y)
+            for c in range(1, entity.cols):
+                x = c * entity.col_width
+                grid_path.moveTo(x, 0)
+                grid_path.lineTo(x, total_h)
+            grid_item = QGraphicsPathItem(grid_path)
+            grid_item.setPen(_entity_pen(color))
+            grid_item.setData(_BASE_COLOR_DATA_KEY, color)
+            group.addToGroup(grid_item)
+
+        # Texto das células com a mesma receita do Text (fonte de referência
+        # escalada pela altura de caixa-alta, ver `text_layout`) — o
+        # `setPointSizeF(text_height)` antigo sumia no Windows pra qualquer
+        # tabela em metros.
+        font = text_font(self.document.text_styles.get("Standard"))
+        metrics = _metrics(font)
+        scale = entity.text_height / max(metrics.capHeight(), 1e-6)
+        pad = min(entity.col_width, entity.row_height) * 0.1
+        for r, row_cells in enumerate(entity.cells[: entity.rows]):
+            for c, text in enumerate(row_cells[: entity.cols]):
+                if not text or entity.text_height <= 1e-6:
+                    continue
+                text_path, _width = _scaled_text_path(font, text, scale)
+                # baseline em y=0 no path: desce uma altura de caixa-alta pra
+                # o topo das maiúsculas ficar no canto superior-esquerdo da
+                # célula (+ pad), como o QGraphicsSimpleTextItem de antes.
+                text_path.translate(c * entity.col_width + pad, r * entity.row_height + pad + entity.text_height)
+                text_item = QGraphicsPathItem(text_path)
+                text_item.setPen(_entity_pen(color))
+                text_item.setBrush(QBrush(QColor(color)))
+                text_item.setData(_BASE_COLOR_DATA_KEY, color)
+                group.addToGroup(text_item)
+
+        pos = cad_to_scene(entity.insertion_point)
+        group.setPos(pos)
+        group.setRotation(-math.degrees(entity.rotation))
+        group.setData(_BASE_COLOR_DATA_KEY, color)
+        return group
+
+    def _create_block_reference_item(
+        self,
+        entity: BlockReference,
+        _depth: int = 0,
+        ctx: tuple[str, str] | None = None,
+    ) -> QGraphicsItem:
         """Renderiza a instância criando os QGraphicsItem de cada entidade da
         definição do bloco (coordenadas relativas ao ponto base) dentro de um
         QGraphicsItemGroup, e aplicando a transformação de inserção no grupo
-        (translação/escala/rotação) — não achata a geometria em memória."""
-        group = QGraphicsItemGroup()
+        (translação/escala/rotação) — não achata a geometria em memória.
+
+        `ctx` = (cor efetiva, camada efetiva) do INSERT PAI quando esta
+        instância é um bloco aninhado (None no topo). Cada filho recebe a cor
+        já resolvida por `_effective_color(child, (cor do INSERT, camada do
+        INSERT))` — BYBLOCK e "camada 0 ByLayer" herdam da instância — e só
+        é desenhado se `_block_child_visible`; a recursão propaga o mesmo par
+        pros blocos aninhados.
+
+        Se `entity.clip_boundary` estiver setado (comando CLIP), o grupo é um
+        `_ClippedGroup`: o contorno já está no mesmo referencial LOCAL do
+        bloco (ver `clip_command`/`_world_point_to_block_local` em
+        modify_commands.py), então basta passar cada ponto por `cad_to_scene`
+        sem nenhum ajuste extra — o `group.setPos/.setRotation/.setScale`
+        logo abaixo cuida do resto, igual já faz pros filhos."""
+        if entity.clip_boundary:
+            path = QPainterPath()
+            scene_pts = [cad_to_scene(p) for p in entity.clip_boundary]
+            path.moveTo(scene_pts[0])
+            for pt in scene_pts[1:]:
+                path.lineTo(pt)
+            path.closeSubpath()
+            group: QGraphicsItemGroup = _ClippedGroup(path)
+        else:
+            group = QGraphicsItemGroup()
         if _depth >= _MAX_BLOCK_NESTING:
             return group
 
+        insert_color = self._effective_color(entity, ctx)
+        insert_layer = ctx[1] if (ctx is not None and entity.layer == "0") else entity.layer
+        child_ctx = (insert_color, insert_layer)
+
         definition = self.document.block_definitions.get(entity.block_name, [])
         for child_entity in definition:
+            if not self._block_child_visible(child_entity, insert_layer):
+                continue
             try:
                 if isinstance(child_entity, BlockReference):
-                    child_item = self._create_block_reference_item(child_entity, _depth + 1)
+                    child_item = self._create_block_reference_item(child_entity, _depth + 1, child_ctx)
                 else:
-                    child_item = self._create_item(child_entity)
+                    child_item = self._create_item(child_entity, self._effective_color(child_entity, child_ctx))
             except TypeError:
                 continue
             group.addToGroup(child_item)
 
         pos = cad_to_scene(entity.insertion_point)
         group.setPos(pos)
-        group.setRotation(-math.degrees(entity.rotation))
-        group.setScale(entity.scale if entity.scale else 1.0)
+        # setRotation+setScale só cobrem escala uniforme; escala por eixo
+        # (blocos dinâmicos importados, inclusive negativa = espelhado)
+        # precisa de um QTransform explícito. Ordem: rotação POR FORA da
+        # escala (rot·scale aplicado ao ponto local), igual ao INSERT do
+        # DXF define — com escala não-uniforme essa ordem deixa de comutar,
+        # então trocar as chamadas abaixo quebraria blocos esticados. O eixo
+        # Y da cena é invertido (cad_to_scene), mas como o flip é diagonal
+        # ele conjuga rot(θ)→rot(−θ) e mantém scale(sx,sy) — daí o ângulo
+        # negativo, mesma convenção do resto do canvas.
+        sx, sy = entity.scale_xy()
+        transform = QTransform()
+        transform.rotate(-math.degrees(entity.rotation))
+        transform.scale(sx, sy)
+        group.setTransform(transform)
         return group
 
     def _create_image_item(self, entity: ImageReference) -> QGraphicsItem:
@@ -474,17 +1207,36 @@ class CanvasView(QGraphicsView):
             pen.setStyle(Qt.PenStyle.DashLine)
             pen.setWidth(0)
             item.setPen(pen)
+        else:
+            item = QGraphicsPixmapItem(pixmap)
+            item.setPos(pos)
+            item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+            if pixmap.width() > 0 and pixmap.height() > 0:
+                item.setScale(1.0)
+                transform = QTransform()
+                transform.scale(entity.width / pixmap.width(), entity.height / pixmap.height())
+                item.setTransform(transform)
+
+        if not entity.clip_boundary:
             return item
 
-        pixmap_item = QGraphicsPixmapItem(pixmap)
-        pixmap_item.setPos(pos)
-        pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-        if pixmap.width() > 0 and pixmap.height() > 0:
-            pixmap_item.setScale(1.0)
-            transform = QTransform()
-            transform.scale(entity.width / pixmap.width(), entity.height / pixmap.height())
-            pixmap_item.setTransform(transform)
-        return pixmap_item
+        # ImageReference não tem transformação própria de grupo (ao
+        # contrário de BlockReference) — o `_ClippedGroup` fica com pos/
+        # rotação identidade, então o contorno precisa estar em coordenadas
+        # de CENA absolutas (ponto de inserção + offset local, ver
+        # `_world_point_to_image_local` em modify_commands.py).
+        path = QPainterPath()
+        scene_pts = [
+            cad_to_scene(Point(entity.insertion_point.x + p.x, entity.insertion_point.y + p.y))
+            for p in entity.clip_boundary
+        ]
+        path.moveTo(scene_pts[0])
+        for pt in scene_pts[1:]:
+            path.lineTo(pt)
+        path.closeSubpath()
+        group = _ClippedGroup(path)
+        group.addToGroup(item)
+        return group
 
     # ------------------------------------------------------------------ #
     # hit-testing / seleção
@@ -534,13 +1286,28 @@ class CanvasView(QGraphicsView):
                 if best is None or d < best:
                     best = d
             return best
+        if isinstance(entity, Spline):
+            # Aproximação: distância até o polígono de controle (pontos de
+            # ajuste ligados por retas), não até a curva suave de verdade —
+            # tolerância boa o bastante pro clique/hit-test, já que a curva
+            # não se afasta muito dos fit points.
+            pts = entity.points
+            segments = list(zip(pts, pts[1:])) + ([(pts[-1], pts[0])] if entity.closed and len(pts) > 2 else [])
+            best_spline: float | None = None
+            for seg_a, seg_b in segments:
+                d = _point_segment_distance(p, seg_a, seg_b)
+                if best_spline is None or d < best_spline:
+                    best_spline = d
+            return best_spline
         if isinstance(entity, BlockReference):
             return self._distance_to_block_reference(p, entity)
         if isinstance(entity, ImageReference):
             return self._distance_to_image(p, entity)
         if isinstance(entity, Text):
-            width, height = _text_local_extent(entity)
-            dx, dy = p.x - entity.insertion_point.x, p.y - entity.insertion_point.y
+            layout = self._text_layout(entity)
+            width, height = _text_local_extent(entity, layout)
+            top_left = _text_top_left_world(entity, layout)
+            dx, dy = p.x - top_left.x, p.y - top_left.y
             cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
             lx = dx * cos_a - dy * sin_a
             ly = dx * sin_a + dy * cos_a
@@ -550,7 +1317,7 @@ class CanvasView(QGraphicsView):
             cy = min(max(ly, -height), 0.0)
             return math.hypot(lx - cx, ly - cy)
         if isinstance(entity, Dimension):
-            segments, _ = dimension_geometry(entity)
+            segments, _ = dimension_geometry(entity, tick_size=self.document.dim_style.arrow_size)
             if not segments:
                 return None
             return min(_point_segment_distance(p, a, b) for a, b in segments)
@@ -561,20 +1328,42 @@ class CanvasView(QGraphicsView):
                 _point_segment_distance(p, a, b)
                 for a, b in _polygon_segments(entity.boundary_points)
             )
+        if isinstance(entity, PointEntity):
+            return p.distance_to(entity.location)
+        if isinstance(entity, XLine):
+            return point_infinite_line_distance(p, entity.point, entity.angle)
+        if isinstance(entity, Ray):
+            return point_ray_distance(p, entity.point, entity.angle)
+        if isinstance(entity, Table):
+            total_w = entity.cols * entity.col_width
+            total_h = entity.rows * entity.row_height
+            dx, dy = p.x - entity.insertion_point.x, p.y - entity.insertion_point.y
+            cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
+            lx = dx * cos_a - dy * sin_a
+            ly = dx * sin_a + dy * cos_a
+            if 0.0 <= lx <= total_w and -total_h <= ly <= 0.0:
+                return 0.0
+            cx = min(max(lx, 0.0), total_w)
+            cy = min(max(ly, -total_h), 0.0)
+            return math.hypot(lx - cx, ly - cy)
         return None
 
     def _distance_to_block_reference(self, p: Point, entity: BlockReference, _depth: int = 0) -> float | None:
         """Aproxima a distância transformando o ponto de teste para o espaço
         local da definição (desfaz translação/rotação/escala da inserção) e
         reaproveita `_distance_to_entity` em cada entidade do bloco, depois
-        reescala o resultado de volta pra unidades do mundo (só correto para
-        escala uniforme, que é o único modo que BlockReference suporta)."""
+        reescala o resultado de volta pra unidades do mundo. Exato para
+        escala uniforme; para escala por eixo (bloco dinâmico importado) a
+        volta usa a média dos módulos das escalas — aproximação boa o
+        suficiente pra tolerância de clique, documentada aqui de propósito."""
         if _depth >= _MAX_BLOCK_NESTING:
             return None
-        scale = entity.scale if entity.scale else 1.0
+        sx, sy = entity.scale_xy()
         dx, dy = p.x - entity.insertion_point.x, p.y - entity.insertion_point.y
         cos_a, sin_a = math.cos(-entity.rotation), math.sin(-entity.rotation)
-        local = Point((dx * cos_a - dy * sin_a) / scale, (dx * sin_a + dy * cos_a) / scale)
+        # Dividir pelo valor COM SINAL desfaz o espelhamento corretamente.
+        local = Point((dx * cos_a - dy * sin_a) / sx, (dx * sin_a + dy * cos_a) / sy)
+        back_scale = (abs(sx) + abs(sy)) / 2
 
         best: float | None = None
         for child in self.document.block_definitions.get(entity.block_name, []):
@@ -584,7 +1373,7 @@ class CanvasView(QGraphicsView):
                 d = self._distance_to_entity(local, child)
             if d is None:
                 continue
-            d_world = d * scale
+            d_world = d * back_scale
             if best is None or d_world < best:
                 best = d_world
         return best
@@ -620,14 +1409,68 @@ class CanvasView(QGraphicsView):
             xs = [pt.x() for pt in pts]
             ys = [pt.y() for pt in pts]
             return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, Spline) and entity.points:
+            pts = [cad_to_scene(p) for p in entity.points]
+            xs = [pt.x() for pt in pts]
+            ys = [pt.y() for pt in pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
         if isinstance(entity, BlockReference):
             return self._block_reference_bbox_scene(entity)
         if isinstance(entity, ImageReference):
             pos = cad_to_scene(Point(entity.insertion_point.x, entity.insertion_point.y + entity.height))
             return QRectF(pos.x(), pos.y(), entity.width, entity.height)
         if isinstance(entity, Text):
-            width, height = _text_local_extent(entity)
+            layout = self._text_layout(entity)
+            width, height = _text_local_extent(entity, layout)
+            top_left = _text_top_left_world(entity, layout)
             local_corners = [(0.0, 0.0), (width, 0.0), (width, -height), (0.0, -height)]
+            cos_a, sin_a = math.cos(entity.rotation), math.sin(entity.rotation)
+            world_pts = [
+                cad_to_scene(
+                    Point(
+                        top_left.x + lx * cos_a - ly * sin_a,
+                        top_left.y + lx * sin_a + ly * cos_a,
+                    )
+                )
+                for lx, ly in local_corners
+            ]
+            xs = [pt.x() for pt in world_pts]
+            ys = [pt.y() for pt in world_pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, Dimension):
+            segments, text_anchor = dimension_geometry(entity, tick_size=self.document.dim_style.arrow_size)
+            pts = [text_anchor] + [pt for seg in segments for pt in seg]
+            if not pts:
+                return QRectF()
+            scene_pts = [cad_to_scene(pt) for pt in pts]
+            xs = [pt.x() for pt in scene_pts]
+            ys = [pt.y() for pt in scene_pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, Hatch) and entity.boundary_points:
+            pts = [cad_to_scene(p) for p in entity.boundary_points]
+            xs = [pt.x() for pt in pts]
+            ys = [pt.y() for pt in pts]
+            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+        if isinstance(entity, PointEntity):
+            # Pequena margem (não um retângulo de área zero) pra
+            # zoom_extents não colapsar quando o desenho só tem PointEntity —
+            # QRectF.isEmpty() (usado por compute_extents_rect) é True para
+            # largura OU altura zero.
+            c = cad_to_scene(entity.location)
+            eps = 1e-2
+            return QRectF(c.x() - eps, c.y() - eps, 2 * eps, 2 * eps)
+        if isinstance(entity, (XLine, Ray)):
+            # Zoom-extents/seleção por janela consideram só o ponto de
+            # ancoragem, não o comprimento de renderização artificial (ver
+            # _CONSTRUCTION_LINE_RENDER_LENGTH) — senão qualquer XLine/Ray
+            # "explodiria" o zoom extents do desenho inteiro.
+            c = cad_to_scene(entity.point)
+            eps = 1e-2
+            return QRectF(c.x() - eps, c.y() - eps, 2 * eps, 2 * eps)
+        if isinstance(entity, Table):
+            total_w = entity.cols * entity.col_width
+            total_h = entity.rows * entity.row_height
+            local_corners = [(0.0, 0.0), (total_w, 0.0), (total_w, -total_h), (0.0, -total_h)]
             cos_a, sin_a = math.cos(entity.rotation), math.sin(entity.rotation)
             world_pts = [
                 cad_to_scene(
@@ -640,20 +1483,6 @@ class CanvasView(QGraphicsView):
             ]
             xs = [pt.x() for pt in world_pts]
             ys = [pt.y() for pt in world_pts]
-            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
-        if isinstance(entity, Dimension):
-            segments, text_anchor = dimension_geometry(entity)
-            pts = [text_anchor] + [pt for seg in segments for pt in seg]
-            if not pts:
-                return QRectF()
-            scene_pts = [cad_to_scene(pt) for pt in pts]
-            xs = [pt.x() for pt in scene_pts]
-            ys = [pt.y() for pt in scene_pts]
-            return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
-        if isinstance(entity, Hatch) and entity.boundary_points:
-            pts = [cad_to_scene(p) for p in entity.boundary_points]
-            xs = [pt.x() for pt in pts]
-            ys = [pt.y() for pt in pts]
             return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
         return QRectF()
 
@@ -677,8 +1506,8 @@ class CanvasView(QGraphicsView):
         pos = cad_to_scene(entity.insertion_point)
         transform.translate(pos.x(), pos.y())
         transform.rotate(-math.degrees(entity.rotation))
-        scale = entity.scale if entity.scale else 1.0
-        transform.scale(scale, scale)
+        sx, sy = entity.scale_xy()
+        transform.scale(sx, sy)
         return transform.mapRect(local_rect)
 
     def _handle_selection_press(self, event) -> None:
@@ -770,8 +1599,17 @@ class CanvasView(QGraphicsView):
             pen.setWidth(0)
             painter.setPen(pen)
             x, y = self._mouse_scene_pos.x(), self._mouse_scene_pos.y()
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            half_w = rect.width() * CROSSHAIR_SIZE_PERCENT / 100 / 2
+            half_h = rect.height() * CROSSHAIR_SIZE_PERCENT / 100 / 2
+            painter.drawLine(QPointF(x - half_w, y), QPointF(x + half_w, y))
+            painter.drawLine(QPointF(x, y - half_h), QPointF(x, y + half_h))
+
+            # Pickbox no centro do crosshair — igual ao cursor padrão do
+            # AutoCAD (mira + quadradinho de seleção), tamanho constante em
+            # pixels de tela independente do zoom.
+            scale = max(self.transform().m11(), 1e-6)
+            half = _PICKBOX_SIZE_PX / 2 / scale
+            painter.drawRect(QRectF(x - half, y - half, half * 2, half * 2))
 
         if self._preview_path is not None and not self._preview_path.isEmpty():
             pen = QPen(QColor(PREVIEW_COLOR))
@@ -822,6 +1660,17 @@ class CanvasView(QGraphicsView):
         elif kind == "intersection":
             painter.drawLine(QPointF(center.x() - half, center.y() - half), QPointF(center.x() + half, center.y() + half))
             painter.drawLine(QPointF(center.x() - half, center.y() + half), QPointF(center.x() + half, center.y() - half))
+        elif kind == "node":
+            painter.drawEllipse(center, half, half)
+            painter.drawLine(QPointF(center.x() - half, center.y()), QPointF(center.x() + half, center.y()))
+            painter.drawLine(QPointF(center.x(), center.y() - half), QPointF(center.x(), center.y() + half))
+        elif kind == "insert":
+            path = QPainterPath(QPointF(center.x(), center.y() - half))
+            path.lineTo(center.x() + half, center.y())
+            path.lineTo(center.x(), center.y() + half)
+            path.lineTo(center.x() - half, center.y())
+            path.closeSubpath()
+            painter.drawPath(path)
 
     def set_grid_visible(self, visible: bool) -> None:
         self.grid_visible = visible
@@ -962,9 +1811,15 @@ class CanvasView(QGraphicsView):
 
         # OSNAP tem prioridade sobre ORTHO/POLAR/SNAP — igual ao AutoCAD, o
         # cursor "gruda" no ponto de snap de objeto mesmo que isso quebre a
-        # restrição ortogonal/polar. OSNAP continua ativo mesmo em prompts de
-        # picking (ajuda a clicar com precisão perto de um endpoint/midpoint).
-        if self.osnap_enabled and active_point_prompt:
+        # restrição ortogonal/polar. Mas só faz sentido quando o ponto está
+        # DEFININDO geometria nova (connect_prompt) — em prompts que só
+        # *identificam* uma entidade/lado já existente (TRIM/EXTEND/OFFSET/
+        # FILLET/CHAMFER's "select object", connect_to_last=False), grudar no
+        # snap mais próximo (tipicamente a interseção onde duas arestas se
+        # cruzam) apaga a informação de "de que lado do corte o usuário
+        # clicou" — bug real reportado: TRIM cortando o lado errado perto de
+        # interseções, exatamente o caso mais comum de uso do comando.
+        if self.osnap_enabled and connect_prompt:
             snap = self._find_osnap_point(point)
             if snap is not None:
                 self._osnap_marker = snap
@@ -1040,6 +1895,15 @@ class CanvasView(QGraphicsView):
                 pts.append((a, "endpoint"))
                 pts.append((b, "endpoint"))
                 pts.append((Point((a.x + b.x) / 2, (a.y + b.y) / 2), "midpoint"))
+        elif isinstance(entity, Spline):
+            # Gruda nos fit points (não em pontos da curva suave em si —
+            # simplificação: são os únicos pontos "nomeáveis" do modelo).
+            for pt in entity.points:
+                pts.append((pt, "endpoint"))
+        elif isinstance(entity, PointEntity):
+            pts.append((entity.location, "node"))
+        elif isinstance(entity, BlockReference):
+            pts.append((entity.insertion_point, "insert"))
         return pts
 
     def _nearby_entities(self, cursor_scene: QPointF, radius_world: float) -> list[Entity]:
@@ -1105,9 +1969,13 @@ class CanvasView(QGraphicsView):
                 event.accept()
                 return
             if not self.interpreter.active:
-                # Sem comando ativo, clique/arrasto seleciona direto (estilo
-                # AutoCAD "noun-verb") — permite depois apertar Delete/ERASE
-                # sem precisar iniciar um comando de modificação primeiro.
+                # Fora de qualquer comando: clique seleciona/alterna a
+                # entidade sob o cursor (ou inicia janela/crossing numa área
+                # vazia) — antes disso só era possível selecionar clicando
+                # DURANTE o prompt "Select objects:" de um comando como
+                # ERASE/MOVE. Sem isso, Del e qualquer ação "selecione algo e
+                # depois aja" (ex.: botão direito, ver abaixo) não tinham
+                # como funcionar. Bug real reportado pela Rafaela.
                 self._handle_selection_press(event)
                 event.accept()
                 return
@@ -1117,6 +1985,21 @@ class CanvasView(QGraphicsView):
             return
 
         if event.button() == Qt.MouseButton.RightButton:
+            if not self.interpreter.active:
+                cad_point = scene_to_cad(self.mapToScene(self._event_pos(event)))
+                hit_id = self._hit_test(cad_point)
+                if hit_id is not None:
+                    selection = self.interpreter.context.selection
+                    if hit_id not in selection.ids:
+                        selection.set({hit_id})
+                        self.refresh_selection_highlight()
+                        self.viewport().update()
+                        if self.on_selection_changed is not None:
+                            self.on_selection_changed()
+                    if self.on_context_menu is not None:
+                        self.on_context_menu()
+                    event.accept()
+                    return
             if self.on_enter is not None:
                 self.on_enter()
             event.accept()
@@ -1148,7 +2031,29 @@ class CanvasView(QGraphicsView):
         self._update_dynamic_input(cad_point)
         self._update_preview(cad_point)
         self.mouse_moved.emit(cad_point)
-        self.viewport().update()
+        # Invalidação PARCIAL: o que o drawForeground desenha em função do
+        # cursor são o crosshair (duas linhas finas atravessando a viewport
+        # toda), o pickbox e o marcador de OSNAP (ambos a poucos px do
+        # cursor). Redesenhar a viewport inteira a cada movimento — o
+        # comportamento antigo — significa re-renderizar todos os itens
+        # visíveis por movimento, o que num .dwg real (~35 mil itens) deixava
+        # o simples mover do mouse arrastado (auditoria 2026-08-28). Aqui só
+        # as faixas do crosshair (velho + novo) e uma caixa generosa ao redor
+        # das duas posições do cursor (cobre pickbox/marcador de OSNAP; o
+        # texto do dynamic input é um item de cena, se auto-invalida) são
+        # marcadas pra repintura.
+        prev = self._last_cursor_viewport_pos
+        self._last_cursor_viewport_pos = pos
+        if prev is None:
+            self.viewport().update()
+        else:
+            w, h = self.viewport().width(), self.viewport().height()
+            region = QRegion()
+            for p in (prev, pos):
+                region += QRect(0, p.y() - 2, w, 5)
+                region += QRect(p.x() - 2, 0, 5, h)
+                region += QRect(p.x() - 150, p.y() - 150, 300, 300)
+            self.viewport().update(region)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -1174,19 +2079,20 @@ class CanvasView(QGraphicsView):
                 self.on_cancel()
             event.accept()
             return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            # Del/Backspace apaga a seleção atual direto (sem precisar digitar
+            # ERASE) — bug real reportado: Del "não fazia nada". Só dispara
+            # fora de um comando ativo (self.on_delete decide isso).
+            if self.on_delete is not None:
+                self.on_delete()
+            event.accept()
+            return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             # Depois de selecionar objetos clicando no canvas, o foco do
             # teclado fica no canvas (não na linha de comando) — Enter/Espaço
             # precisa confirmar mesmo assim, igual clique direito.
             if self.on_enter is not None:
                 self.on_enter()
-            event.accept()
-            return
-        if event.key() == Qt.Key.Key_Delete:
-            # Seleção feita direto no canvas (noun-verb, sem comando ativo)
-            # também precisa responder a Delete, igual ao ERASE do menu.
-            if self.on_delete_pressed is not None:
-                self.on_delete_pressed()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1210,6 +2116,12 @@ class CanvasView(QGraphicsView):
             path.addEllipse(center_scene, radius, radius)
             path.moveTo(center_scene)
             path.lineTo(cad_to_scene(cursor_point))
+        elif interp.last_command_name == "RECTANG" and prompt is not None and prompt.kind == "point":
+            # Sem isso, RECTANG caía no preview genérico de "linha reta até o
+            # cursor" (igual LINE) — dava a impressão de estar desenhando uma
+            # linha, não um retângulo, mesmo a entidade final sendo uma
+            # LWPolyline fechada correta. Bug real reportado pelo grupo.
+            path.addRect(QRectF(cad_to_scene(last), cad_to_scene(cursor_point)).normalized())
         elif prompt is not None and prompt.kind == "point" and prompt.connect_to_last:
             path.moveTo(cad_to_scene(last))
             path.lineTo(cad_to_scene(cursor_point))

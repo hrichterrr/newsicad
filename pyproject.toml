@@ -1,12 +1,14 @@
 [project]
 name = "newsicad"
-version = "2.0.1"
+version = "2.14.0"
 description = "CAD 2D desktop com interface e comandos estilo AutoCAD"
 authors = [{ name = "HRichter" }]
 requires-python = ">=3.9"
 dependencies = [
     "PySide6>=6.10",
     "ezdxf>=1.4",
+    "pymupdf>=1.24",
+    "requests>=2.31",
 ]
 
 [project.optional-dependencies]

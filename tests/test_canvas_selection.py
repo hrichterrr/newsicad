@@ -12,11 +12,13 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from unittest.mock import patch  # noqa: E402
+
 from PySide6.QtCore import QPoint, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from newsicad.core.entities import Point  # noqa: E402
+from newsicad.core.entities import Line, Point  # noqa: E402
 from newsicad.ui.canvas import cad_to_scene  # noqa: E402
 from newsicad.ui.main_window import MainWindow  # noqa: E402
 
@@ -150,35 +152,103 @@ def test_move_via_real_mouse_events_updates_rendered_geometry():
     assert abs(rendered_line.y1() - expected_start.y()) < 1e-6
 
 
-def test_delete_key_erases_selected_entities():
-    """Regressão: selecionar clicando direto no canvas (sem comando ativo)
-    e apertar Delete precisa apagar a seleção, igual ao ERASE."""
+# ---------------------------------------------------------------------- #
+# clique fora de um comando ativo (bug real reportado pela Rafaela: botão
+# direito "não selecionava nada" — causa raiz era mais funda, não existia
+# NENHUMA forma de selecionar por clique fora do prompt "Select objects:" de
+# comandos como ERASE/MOVE)
+# ---------------------------------------------------------------------- #
+def test_idle_left_click_selects_entity_under_cursor():
     app = _app()
     window = MainWindow()
-
     window._handle_text_submitted("LINE")
     window._handle_canvas_point(Point(0, 0))
     window._handle_canvas_point(Point(10, 0))
     window._handle_text_submitted("")
     app.processEvents()
-    assert len(window.document.entities) == 1
+    assert not window.interpreter.active
+
+    pos = _viewport_pos(window, Point(5, 0))
+    QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+    app.processEvents()
+
+    assert len(window.selection.ids) == 1
+
+
+def test_idle_click_then_delete_key_erases_entity():
+    """Fluxo completo reportado como quebrado: clicar numa linha pra
+    selecioná-la e depois apagar com Delete."""
+    app = _app()
+    window = MainWindow()
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
 
     pos = _viewport_pos(window, Point(5, 0))
     QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.LeftButton, pos=pos)
     app.processEvents()
     assert len(window.selection.ids) == 1
 
-    QTest.keyClick(window.canvas.viewport(), Qt.Key.Key_Delete)
+    QTest.keyClick(window.canvas, Qt.Key.Key_Delete)
     app.processEvents()
-
     assert len(window.document.entities) == 0
-    assert len(window.selection.ids) == 0
 
 
-def test_delete_key_without_selection_does_nothing():
+def test_idle_right_click_on_unselected_entity_selects_it_and_opens_menu():
     app = _app()
     window = MainWindow()
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
 
+    # QMenu.exec() é um método C++/Shiboken — não intercepta via
+    # unittest.mock.patch (travava de verdade num popup real em teste
+    # manual). Mocka o callback canvas.on_context_menu diretamente: mockar
+    # window._show_selection_context_menu não adianta, porque
+    # canvas.on_context_menu já guarda a referência ao método original
+    # (capturada em MainWindow.__init__, antes do patch existir).
+    pos = _viewport_pos(window, Point(5, 0))
+    with patch.object(window.canvas, "on_context_menu") as mock_menu:
+        QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.RightButton, pos=pos)
+        app.processEvents()
+
+    assert len(window.selection.ids) == 1
+    mock_menu.assert_called_once()
+
+
+def test_idle_right_click_on_already_selected_entity_keeps_selection():
+    app = _app()
+    window = MainWindow()
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 20))
+    window._handle_canvas_point(Point(10, 20))
+    window._handle_text_submitted("")
+    app.processEvents()
+
+    ids = list(window.document.entities.keys())
+    window.selection.set(set(ids))  # ambas já selecionadas (ex.: via Ctrl+A)
+
+    pos = _viewport_pos(window, Point(5, 0))
+    with patch.object(window.canvas, "on_context_menu"):
+        QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.RightButton, pos=pos)
+        app.processEvents()
+
+    assert window.selection.ids == set(ids)  # não reduziu pra só a clicada
+
+
+def test_idle_right_click_on_empty_space_repeats_last_command():
+    """Right-click em área vazia continua com o comportamento existente
+    (repete o último comando) — não deve regredir."""
+    app = _app()
+    window = MainWindow()
     window._handle_text_submitted("LINE")
     window._handle_canvas_point(Point(0, 0))
     window._handle_canvas_point(Point(10, 0))
@@ -186,7 +256,40 @@ def test_delete_key_without_selection_does_nothing():
     app.processEvents()
     assert len(window.document.entities) == 1
 
-    QTest.keyClick(window.canvas.viewport(), Qt.Key.Key_Delete)
+    pos = _viewport_pos(window, Point(50, 50))  # longe de qualquer entidade
+    QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.RightButton, pos=pos)
+    app.processEvents()
+    assert window.interpreter.active  # repetiu LINE, esperando o primeiro ponto
+
+
+def test_selection_context_menu_offers_expected_actions():
+    """Testa o conteúdo do menu sem chamar .exec() (bloquearia esperando um
+    popup real)."""
+    app = _app()
+    window = MainWindow()
+    line = window.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    window.selection.add(line.id)
     app.processEvents()
 
+    menu = window._build_selection_context_menu()
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels == ["Move", "Copy", "Rotate", "Erase", "Select Similar", "Properties"]
+
+
+def test_right_click_during_active_command_still_confirms():
+    """Right-click DURANTE um comando ativo precisa continuar equivalendo a
+    Enter (ex.: terminar um LINE/PLINE) — não deve virar seleção."""
+    app = _app()
+    window = MainWindow()
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    app.processEvents()
+    assert window.interpreter.active
+
+    pos = _viewport_pos(window, Point(10, 0))
+    QTest.mouseClick(window.canvas.viewport(), Qt.MouseButton.RightButton, pos=pos)
+    app.processEvents()
+
+    assert not window.interpreter.active
     assert len(window.document.entities) == 1

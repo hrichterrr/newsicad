@@ -85,6 +85,37 @@ def test_osnap_finds_intersection_between_two_lines():
     assert pt.y == pytest.approx(0)
 
 
+def test_osnap_finds_point_entity_node():
+    _app()
+    window = MainWindow()
+    from newsicad.core.entities import PointEntity
+
+    window.document.add_entity(PointEntity(location=Point(7, 2)))
+    window.canvas.set_osnap_enabled(True)
+
+    snap = window.canvas._find_osnap_point(Point(7.05, 2.05))
+    assert snap is not None
+    pt, kind = snap
+    assert kind == "node"
+    assert pt.as_tuple() == (7, 2)
+
+
+def test_osnap_finds_block_reference_insertion_point():
+    _app()
+    window = MainWindow()
+    from newsicad.core.entities import BlockReference, Line as _Line
+
+    window.document.block_definitions["CADEIRA"] = [_Line(start=Point(0, 0), end=Point(1, 0))]
+    window.document.add_entity(BlockReference(block_name="CADEIRA", insertion_point=Point(-4, 6)))
+    window.canvas.set_osnap_enabled(True)
+
+    snap = window.canvas._find_osnap_point(Point(-3.95, 6.05))
+    assert snap is not None
+    pt, kind = snap
+    assert kind == "insert"
+    assert pt.as_tuple() == (-4, 6)
+
+
 def test_osnap_returns_none_outside_tolerance():
     _app()
     window = MainWindow()
@@ -117,6 +148,29 @@ def test_osnap_disabled_does_not_snap():
     window._handle_canvas_point(Point(-5, -5))
     resolved = window.canvas._apply_constraints(Point(10.1, -0.1))
     assert resolved.as_tuple() == (10.1, -0.1)
+
+
+def test_osnap_does_not_override_pick_point_during_trim():
+    """Bug real reportado: TRIM cortando o lado errado perto de interseções.
+    Causa raiz: o clique de "Select object to trim" (connect_to_last=False,
+    só identifica uma entidade/lado já existente, não define geometria nova)
+    grudava no OSNAP igual um clique normal — perto de uma interseção (o caso
+    mais comum de TRIM), isso apaga a informação de qual lado do corte o
+    usuário quis apagar. OSNAP não deve se aplicar aqui."""
+    _app()
+    window = MainWindow()
+    line1 = window.document.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    line2 = window.document.add_entity(Line(start=Point(5, -5), end=Point(5, 5)))
+    window.canvas.set_osnap_enabled(True)
+
+    window._handle_text_submitted("TR")
+    window.selection.add(line1.id)
+    window.selection.add(line2.id)
+    window._handle_text_submitted("")  # termina a seleção de cutting edges
+
+    # ponto perto da interseção (5,0), mas não exatamente nela
+    resolved = window.canvas._apply_constraints(Point(5.05, 2.0))
+    assert resolved.as_tuple() == (5.05, 2.0)
 
 
 # ---------------------------------------------------------------------- #

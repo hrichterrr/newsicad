@@ -1,0 +1,12 @@
+# Binários empacotados (LibreDWG, ícone) e amostras CAD: nunca converter fim
+# de linha. Com core.autocrlf=true no Windows, um "git checkout" desses
+# arquivos corrompia o executável dwg2dxf do macOS (LF -> CRLF dentro do
+# binário) e ele passava a aparecer como modificado para sempre.
+newsicad/resources/** -text
+*.exe -text
+*.dll -text
+*.dylib -text
+*.ico -text
+*.png -text
+*.dxf -text
+*.dwg -text

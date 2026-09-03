@@ -1,6 +1,6 @@
 """Testes do painel de camadas (comando LAYER/LA, newsicad/ui/layer_panel.py):
-listagem, toggle de visibilidade/trava via checkbox, definir camada atual
-por duplo clique, e criar camada nova."""
+listagem, toggle de visibilidade/trava via botão-ícone (lâmpada/cadeado),
+cor de camada, definir camada atual por duplo clique, e criar camada nova."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QCheckBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QToolButton  # noqa: E402
 
-from newsicad.ui.layer_panel import _COL_LOCKED, _COL_NAME, _COL_VISIBLE  # noqa: E402
+from newsicad.core.entities import Line, Point  # noqa: E402
+from newsicad.ui.layer_panel import _COL_COLOR, _COL_LOCKED, _COL_NAME, _COL_VISIBLE  # noqa: E402
 from newsicad.ui.main_window import MainWindow  # noqa: E402
 
 
@@ -52,32 +53,51 @@ def test_current_layer_name_is_bold_and_others_are_not():
     assert not window.layer_dock.table.item(other_row, _COL_NAME).font().bold()
 
 
-def test_visible_checkbox_toggles_layer_and_refreshes_canvas():
+def test_visible_toggle_button_toggles_layer_and_refreshes_canvas():
     _app()
     window = MainWindow()
     window.document.add_layer("PAREDES")
     window.layer_dock.refresh()
 
     row = _row_of(window, "PAREDES")
-    checkbox = window.layer_dock.table.cellWidget(row, _COL_VISIBLE).findChild(QCheckBox)
-    assert checkbox.isChecked()
+    button = window.layer_dock.table.cellWidget(row, _COL_VISIBLE).findChild(QToolButton)
+    assert button.isChecked()
 
-    checkbox.setChecked(False)
+    button.setChecked(False)
     assert window.document.layers["PAREDES"].visible is False
 
 
-def test_locked_checkbox_toggles_layer():
+def test_locked_toggle_button_toggles_layer():
     _app()
     window = MainWindow()
     window.document.add_layer("PAREDES")
     window.layer_dock.refresh()
 
     row = _row_of(window, "PAREDES")
-    checkbox = window.layer_dock.table.cellWidget(row, _COL_LOCKED).findChild(QCheckBox)
-    assert not checkbox.isChecked()
+    button = window.layer_dock.table.cellWidget(row, _COL_LOCKED).findChild(QToolButton)
+    assert not button.isChecked()
 
-    checkbox.setChecked(True)
+    button.setChecked(True)
     assert window.document.layers["PAREDES"].locked is True
+
+
+def test_color_button_present_and_set_color_updates_layer_and_canvas():
+    _app()
+    window = MainWindow()
+    window.document.add_layer("PAREDES", color="#ffffff")
+    line = window.document.add_entity(
+        Line(start=Point(0, 0), end=Point(1, 1), layer="PAREDES")
+    )
+    window.canvas.refresh_entities()
+    window.layer_dock.refresh()
+
+    row = _row_of(window, "PAREDES")
+    button = window.layer_dock.table.cellWidget(row, _COL_COLOR).findChild(QToolButton)
+    assert button is not None
+
+    window.layer_dock._set_color_with_hex("PAREDES", "#ff8800")
+    assert window.document.layers["PAREDES"].color == "#ff8800"
+    assert window.canvas._entity_items[line.id].pen().color().name() == "#ff8800"
 
 
 def test_double_click_name_sets_current_layer():

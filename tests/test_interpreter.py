@@ -6,7 +6,7 @@ from newsicad.commands.context import CommandContext
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.commands.registry import ALIASES, COMMAND_REGISTRY
 from newsicad.core.document import Document
-from newsicad.core.entities import Arc, Circle, Ellipse, Line, LWPolyline, Point
+from newsicad.core.entities import Arc, Circle, Ellipse, Line, LWPolyline, Point, PointEntity
 from newsicad.core.selection import Selection
 
 
@@ -141,14 +141,16 @@ def test_dist_command_logs_result_and_ends_without_waiting():
 
 
 def test_planned_command_gives_friendly_message():
-    # ALIGN continua reconhecido-mas-não-implementado nesta versão (ver
-    # newsicad/commands/registry.py PLANNED_COMMANDS) — TRIM foi
-    # implementado em feature/geometry-editing, ver test_trim_* abaixo.
+    # REGION continua reconhecido-mas-não-implementado nesta versão (ver
+    # newsicad/commands/registry.py PLANNED_COMMANDS) — TRIM, ALIGN,
+    # BOUNDARY e (mais recentemente) TABLE foram implementados, ver
+    # test_trim_* abaixo, tests/test_new_commands.py e
+    # tests/test_marco_c_commands.py.
     interp, doc = make_interpreter()
-    result = interp.start("AL")  # ALIGN: reconhecido, ainda não implementado
+    result = interp.start("REGION")  # REGION: reconhecido, ainda não implementado
     assert result is None
     assert not interp.active
-    assert any("reconhecido" in line and "ALIGN" in line for line in interp.log)
+    assert any("reconhecido" in line and "REGION" in line for line in interp.log)
 
 
 def test_erase_command_removes_selected_entities():
@@ -237,6 +239,12 @@ def test_mirror_command_default_keeps_source():
     lines = [e for e in doc.all_entities() if isinstance(e, Line)]
     assert len(lines) == 2  # original + espelhada
     assert doc.get_entity(line.id) is not None
+    # a cópia espelhada precisa de um id próprio: se herdasse o id do
+    # original (bug de clone_entity via deepcopy preservando o id), o
+    # add_entity subsequente sobrescreveria o original no dict por id.
+    mirrored = next(e for e in lines if e.id != line.id)
+    assert mirrored.id != line.id
+    assert doc.get_entity(mirrored.id) is mirrored
 
 
 def test_mirror_command_yes_deletes_source():
@@ -464,6 +472,9 @@ def test_stretch_moves_only_vertex_inside_crossing_window():
 # DIVIDE / MEASURE
 # ---------------------------------------------------------------------- #
 def test_divide_line_into_n_segments_creates_n_minus_1_markers():
+    # Desde o comando POINT existir (marco B, 2026-08-22), DIVIDE cria
+    # PointEntity de verdade em vez do Circle minúsculo usado antes — ver
+    # tests/test_marco_b_commands.py para a cobertura completa desse marco.
     interp, doc = make_interpreter()
     line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
     interp.start("DIV")
@@ -471,9 +482,9 @@ def test_divide_line_into_n_segments_creates_n_minus_1_markers():
     interp.submit_text("")
     interp.submit_text("4")
     assert not interp.active
-    markers = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    markers = [e for e in doc.all_entities() if isinstance(e, PointEntity)]
     assert len(markers) == 3
-    xs = sorted(c.center.x for c in markers)
+    xs = sorted(m.location.x for m in markers)
     assert xs == [pytest.approx(2.5), pytest.approx(5.0), pytest.approx(7.5)]
 
 
@@ -485,9 +496,9 @@ def test_measure_line_by_fixed_length():
     interp.submit_text("")
     interp.submit_text("3")
     assert not interp.active
-    markers = [e for e in doc.all_entities() if isinstance(e, Circle)]
+    markers = [e for e in doc.all_entities() if isinstance(e, PointEntity)]
     assert len(markers) == 3  # em x=3,6,9 (10//3=3 marcadores)
-    xs = sorted(c.center.x for c in markers)
+    xs = sorted(m.location.x for m in markers)
     assert xs == [pytest.approx(3), pytest.approx(6), pytest.approx(9)]
 
 

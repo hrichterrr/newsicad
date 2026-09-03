@@ -8,3 +8,11 @@ build/
 dist/
 *.zip
 newsicad_windows/
+
+# Segredos locais (nunca commitar)
+cloudconvert_api_key.txt
+.env
+
+# Ambiente local desta maquina
+.venv_win/
+.claude/

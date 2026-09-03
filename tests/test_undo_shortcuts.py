@@ -60,6 +60,51 @@ def test_ctrl_y_redoes_after_ctrl_z():
     assert len(window.document.entities) == 1
 
 
+def test_ctrl_z_undoes_even_when_command_line_has_focus():
+    """QTest.keyClick(window, ...) nos testes acima entrega o evento direto
+    pra MainWindow, não pela cadeia normal de foco — não reproduz o caso real
+    de uso, em que a linha de comando está com foco (focus_input() é chamado
+    depois de cada comando). Nesse caso, o QLineEdit tem undo/redo nativo de
+    TEXTO embutido em Ctrl+Z/Ctrl+Y, que "roubava" o atalho antes do Undo do
+    desenho disparar — bug real reportado (Ctrl+Z só desfazia a digitação)."""
+    app = _app()
+    window = MainWindow()
+    window.show()
+
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
+    assert len(window.document.entities) == 1
+
+    window.command_line.focus_input()
+    QTest.keyClick(window.command_line.input_edit, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    app.processEvents()
+    assert len(window.document.entities) == 0
+
+
+def test_ctrl_y_redoes_even_when_command_line_has_focus():
+    app = _app()
+    window = MainWindow()
+    window.show()
+
+    window._handle_text_submitted("LINE")
+    window._handle_canvas_point(Point(0, 0))
+    window._handle_canvas_point(Point(10, 0))
+    window._handle_text_submitted("")
+    app.processEvents()
+
+    window.command_line.focus_input()
+    QTest.keyClick(window.command_line.input_edit, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    app.processEvents()
+    assert len(window.document.entities) == 0
+
+    QTest.keyClick(window.command_line.input_edit, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    app.processEvents()
+    assert len(window.document.entities) == 1
+
+
 def test_typed_undo_command_also_works():
     app = _app()
     window = MainWindow()
