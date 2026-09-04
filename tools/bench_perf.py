@@ -75,8 +75,20 @@ def main(path_str: str) -> None:
     # ---------------------------------------------------------- por passo
     timed("mark_saved (snapshot 'salvo')", session.mark_saved)
     timed("is_dirty() (a cada passo de comando)", session.is_dirty)
+    win._after_interpreter_step()  # o 1º passo depois de abrir monta o painel de camadas; medir o 2º
+    app.processEvents()
     timed("_after_interpreter_step (cada clique num comando)", lambda: (win._after_interpreter_step(), app.processEvents()))
     timed("undo_stack.push() (antes de cada comando)", session.undo_stack.push)
+    # Passo de comando COM comando ativo: e o que o usuario sente a cada
+    # clique dentro de LINE/MOVE/TRIM... (passada leve do refresh_entities).
+    win._handle_text_submitted("LINE")
+    app.processEvents()
+    timed("_after_interpreter_step com comando ativo (passada leve)", lambda: (win._after_interpreter_step(), app.processEvents()))
+    timed("refresh_entities com comando ativo (passada leve)", canvas.refresh_entities)
+    win.interpreter.cancel() if hasattr(win.interpreter, "cancel") else None
+    if win.interpreter.active and win.canvas.on_cancel is not None:
+        win.canvas.on_cancel()
+    app.processEvents()
     timed("refresh_entities sem mudança", canvas.refresh_entities)
     timed("zoom_extents", canvas.zoom_extents)
     app.processEvents()

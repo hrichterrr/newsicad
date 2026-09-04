@@ -65,7 +65,7 @@ from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.15.1"
+APP_VERSION = "2.15.2"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
@@ -464,6 +464,7 @@ class MainWindow(QMainWindow):
 
     def _build_layer_dock(self) -> None:
         self.layer_dock = LayerPanel(self)
+        self._layer_dock_last_key: tuple | None = None
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_dock)
         self.tabifyDockWidget(self.properties_dock, self.layer_dock)
         self.properties_dock.raise_()
@@ -1010,7 +1011,19 @@ class MainWindow(QMainWindow):
                 pane.refresh_entities()
                 timer = QTimer(pane)
                 timer.setInterval(400)
-                timer.timeout.connect(pane.refresh_entities)
+                # Só remonta a pane se o desenho mudou desde a última vez —
+                # um refresh completo 2,5x por segundo, para sempre, numa
+                # planta de 43 mil entidades era congelamento garantido.
+                pane._vports_last_state = session.state_id()
+
+                def _refresh_pane_if_changed(pane=pane, session=session) -> None:
+                    state = session.state_id()
+                    if state == pane._vports_last_state:
+                        return
+                    pane._vports_last_state = state
+                    pane.refresh_entities()
+
+                timer.timeout.connect(_refresh_pane_if_changed)
                 timer.start()
                 pane._vports_refresh_timer = timer
                 container.addWidget(pane)
@@ -1570,10 +1583,23 @@ class MainWindow(QMainWindow):
         # camadas do documento sem passar pelo LAYER/RENAME (que já dão
         # refresh explícito) — sem isso o painel de camadas ficava com dados
         # obsoletos (ex.: mostrando uma camada que o PURGE acabou de remover)
-        # até o usuário mexer nele manualmente.
-        self.layer_dock.refresh()
+        # até o usuário mexer nele manualmente. Só quando algo de camada
+        # mudou: reconstruir o painel (6 widgets + 3 ícones por camada)
+        # custava 0,25 s a cada clique de comando com 72 camadas.
+        self._refresh_layer_dock_if_needed()
         self._refresh_tab_labels()
         self.command_line.focus_input()
+
+    def _layer_dock_key(self) -> tuple:
+        document = self.document
+        return (document.revision, len(document.layers), document.current_layer, id(document))
+
+    def _refresh_layer_dock_if_needed(self) -> None:
+        key = self._layer_dock_key()
+        if key == self._layer_dock_last_key:
+            return
+        self._layer_dock_last_key = key
+        self.layer_dock.refresh()
 
     def _refresh_prompt(self) -> None:
         self.command_line.set_log(self.interpreter.log)

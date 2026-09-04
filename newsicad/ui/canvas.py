@@ -676,6 +676,7 @@ class CanvasView(QGraphicsView):
         #: recriação de itens cujas entidades não mudaram desde o último
         #: refresh.
         self._entity_fingerprints: dict[str, str] = {}
+        self._entity_reprs: dict[str, str] = {}
         #: Cache ENTRE refreshes da impressão digital das definições de
         #: bloco (nome -> digest) — elas são o grosso do custo num .dwg real
         #: (milhares de entidades dentro das definições) e só mudam via
@@ -723,13 +724,25 @@ class CanvasView(QGraphicsView):
     # ------------------------------------------------------------------ #
     # sincronização com o Document
     # ------------------------------------------------------------------ #
-    def refresh_entities(self) -> None:
+    def refresh_entities(self, full: bool | None = None) -> None:
+        """Sincroniza os itens da cena com o documento.
+
+        `full=None` (padrão) decide sozinho: passada LEVE enquanto um comando
+        está em andamento (compara identidade + versão de cada entidade, ver
+        `Entity.__setattr__`) e passada COMPLETA quando não há comando ativo
+        (também confere o `repr()` guardado, pegando qualquer mutação feita
+        no lugar sem passar por atribuição). Antes toda passada calculava o
+        repr de todas as entidades: 0,59 s por clique numa planta de 43 mil
+        entidades (medição de 2026-09-04)."""
+        if full is None:
+            full = not self.interpreter.active
         doc_ids = set(self.document.entities.keys())
         existing_ids = set(self._entity_items.keys())
 
         for stale_id in existing_ids - doc_ids:
             item = self._entity_items.pop(stale_id)
             self._entity_fingerprints.pop(stale_id, None)
+            self._entity_reprs.pop(stale_id, None)
             self._scene.removeItem(item)
 
         # MOVE/ROTATE/SCALE mutam a entidade em memória sem trocar de id —
@@ -796,18 +809,29 @@ class CanvasView(QGraphicsView):
         for index, (entity_id, entity) in enumerate(self.document.entities.items()):
             if isinstance(entity, Text) and entity.field_type:
                 # FIELD (comando FIELD): recalcula o valor vivo a cada
-                # refresh, ANTES da impressão digital ser calculada (o
-                # conteúdo novo entra no repr) e antes de qualquer código
-                # ler `entity.content` — hit-test/bbox/render usam esse
-                # mesmo atributo (ver `_text_top_left_world`).
-                entity.content = resolve_field_text(entity, self.document)
+                # refresh, ANTES da impressão digital ser calculada e antes
+                # de qualquer código ler `entity.content` — hit-test/bbox/
+                # render usam esse mesmo atributo (ver `_text_top_left_world`).
+                # Só atribui se mudou: atribuir carimba versão nova.
+                live = resolve_field_text(entity, self.document)
+                if live != entity.content:
+                    entity.content = live
             visible = self.document.is_layer_visible(entity)
-            fingerprint = f"{entity!r}\x00{self._effective_color(entity)}"
+            fingerprint = f"{id(entity):x}\x00{entity.version}\x00{self._effective_color(entity)}"
             if isinstance(entity, BlockReference):
                 fingerprint += "\x00" + definition_fp(entity.block_name) + "\x00" + layer_colors_fp(entity.block_name)
             z_value = index * _DRAW_ORDER_Z_STEP
             item = self._entity_items.get(entity_id)
-            if item is not None and self._entity_fingerprints.get(entity_id) == fingerprint:
+            unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
+            if unchanged and full:
+                # Rede de segurança da passada completa: mutação no lugar
+                # (lista alterada sem atribuição) não bumpa a versão, mas
+                # muda o repr.
+                current_repr = repr(entity)
+                if self._entity_reprs.get(entity_id) != current_repr:
+                    unchanged = False
+                    self._entity_reprs[entity_id] = current_repr
+            if unchanged:
                 item.setZValue(z_value)
                 # Camada desligada no painel: o item fica na cena, só
                 # invisível — assim ligar/desligar não recria nada e o
@@ -841,6 +865,7 @@ class CanvasView(QGraphicsView):
                     self._scene.addItem(item)
                     self._entity_items[entity_id] = item
                     self._entity_fingerprints[entity_id] = fingerprint
+                    self._entity_reprs[entity_id] = repr(entity)
                     recreated.append(entity_id)
             finally:
                 if mass:
@@ -1967,16 +1992,36 @@ class CanvasView(QGraphicsView):
 
     def compute_extents_rect(self, margin_ratio: float = 0.1) -> QRectF | None:
         """Bounding box (coordenadas de cena) de todas as entidades do
-        documento, com margem — usado por zoom_extents() e por export_pdf()."""
+        documento, com margem — usado por zoom_extents() e por export_pdf().
+
+        Quando a cena está em dia (um item por entidade), usa a união dos
+        `sceneBoundingRect` dos itens visíveis — o Qt já tem essas caixas
+        prontas em C++. Recalcular a bbox de cada entidade em Python,
+        descendo na definição de cada bloco, custava 2,09 s a cada zoom
+        extents (e na abertura) numa planta de 43 mil entidades; a união
+        dos itens custa 0,16 s (medição de 2026-09-04)."""
         if not self.document.entities:
             return None
         rect: QRectF | None = None
-        for entity in self.document.entities.values():
-            if not self.document.is_layer_visible(entity):
-                continue
-            bbox = self._entity_bbox_scene(entity)
-            rect = bbox if rect is None else rect.united(bbox)
-        if rect is None or rect.isEmpty():
+        document = self.document
+        if len(self._entity_items) == len(document.entities):
+            # A verdade sobre visibilidade é o documento (a camada pode ter
+            # acabado de ser desligada sem a cena ter sido sincronizada).
+            for entity_id, item in self._entity_items.items():
+                entity = document.entities.get(entity_id)
+                if entity is None or not document.is_layer_visible(entity):
+                    continue
+                bbox = item.sceneBoundingRect()
+                rect = bbox if rect is None else rect.united(bbox)
+        else:
+            for entity in document.entities.values():
+                if not document.is_layer_visible(entity):
+                    continue
+                bbox = self._entity_bbox_scene(entity)
+                rect = bbox if rect is None else rect.united(bbox)
+        # Um desenho só com uma linha horizontal tem bbox de altura zero —
+        # ainda assim é um lugar para onde dar zoom (`isEmpty()` recusava).
+        if rect is None or (rect.width() <= 0 and rect.height() <= 0):
             return None
         margin = max(rect.width(), rect.height()) * margin_ratio or 1.0
         return rect.adjusted(-margin, -margin, margin, margin)

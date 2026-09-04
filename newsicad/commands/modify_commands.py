@@ -1147,6 +1147,7 @@ def pedit_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
                 "Specify new vertex (added at the end):", kind="point", connect_to_last=False
             )
             poly.points.append(point)
+            poly.touch()  # lista alterada no lugar: avisa o canvas
         elif option == "REMOVE VERTEX":
             if len(poly.points) <= 2:
                 yield Prompt("PEDIT: a polilinha precisa de pelo menos 2 vértices.", kind="info")
@@ -1156,6 +1157,7 @@ def pedit_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             )
             nearest_index = min(range(len(poly.points)), key=lambda i: poly.points[i].distance_to(point))
             poly.points.pop(nearest_index)
+            poly.touch()
 
 
 def measure_command(ctx: CommandContext) -> Generator[Prompt, object, None]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import uuid
 from dataclasses import dataclass, field
@@ -38,12 +39,39 @@ def _new_id() -> str:
 BYBLOCK = "BYBLOCK"
 
 
+# Relógio global de mutação: cada atribuição de atributo em qualquer entidade
+# carimba nela o próximo valor (ver Entity.__setattr__). Não é um campo do
+# dataclass — fica só em __dict__ — então não entra em ==, repr nem astuple.
+_MUTATION_CLOCK = itertools.count(1)
+
+
 @dataclass
 class Entity:
     layer: str = "0"
     #: None = ByLayer | `BYBLOCK` (sentinel acima) | "#RRGGBB" = cor própria.
     color: str | None = None
     id: str = field(default_factory=_new_id)
+
+    def __setattr__(self, name: str, value) -> None:
+        """Toda atribuição carimba a entidade com uma versão nova.
+
+        É o que permite ao canvas saber, a cada passo de comando, quais
+        entidades mudaram sem calcular o `repr()` de todas (0,35 s por passo
+        numa planta de 43 mil entidades — medição de 2026-09-04). Os
+        comandos mutam por atribuição (`line.end = ...`, `poly.points =
+        [...]`, ver core/geometry_ops.py); quem altera uma lista NO LUGAR
+        (`points.append`) deve chamar `touch()`."""
+        object.__setattr__(self, name, value)
+        if name != "_version":
+            object.__setattr__(self, "_version", next(_MUTATION_CLOCK))
+
+    def touch(self) -> None:
+        """Marca a entidade como alterada sem trocar nenhum atributo."""
+        object.__setattr__(self, "_version", next(_MUTATION_CLOCK))
+
+    @property
+    def version(self) -> int:
+        return self.__dict__.get("_version", 0)
 
 
 @dataclass
