@@ -53,6 +53,7 @@ from newsicad.io.dwg_bridge import DwgBridgeError, dwg_to_document
 from newsicad.io.dwg_export import DwgExportError, document_to_dwg
 from newsicad.io.dxf_io import DxfIoError, load_dxf, save_dxf
 from newsicad.io.open_cache import load_cached, store_cached
+from newsicad.ui.background_load import make_progress_dialog, run_with_progress
 from newsicad.io.pdf_import import PdfImportError, import_pdf_page, pdf_page_count
 from newsicad.ui.block_editor_dialog import BlockEditorDialog
 from newsicad.ui.canvas import PDF_PAGE_SIZES, CanvasView
@@ -65,7 +66,7 @@ from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.15.2"
+APP_VERSION = "2.15.3"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
@@ -1375,7 +1376,23 @@ class MainWindow(QMainWindow):
         for entity in loaded.all_entities():
             document.add_entity(entity)
         session.current_path = path
-        session.canvas.refresh_entities()
+        # Montar a cena precisa da thread da interface (itens Qt); em lotes,
+        # com o diálogo de progresso, a janela segue viva (10 s numa planta
+        # de 43 mil entidades).
+        total = len(document.entities)
+        dialog = make_progress_dialog(self, "Abrindo desenho", f"Montando a tela de {path.name}…")
+        dialog.setRange(0, max(total, 1))
+        dialog.show()
+
+        def progress(done: int, _total: int) -> None:
+            dialog.setValue(min(done, total))
+            QApplication.processEvents()
+
+        try:
+            session.canvas.refresh_entities(full=True, progress=progress)
+        finally:
+            dialog.close()
+            dialog.deleteLater()
         session.canvas.zoom_extents()
 
         if skipped > 0:
@@ -1425,24 +1442,29 @@ class MainWindow(QMainWindow):
         self.command_line.focus_input()
 
     def _load_document_file(self, path: Path) -> tuple[Document, int]:
-        """Lê um .dxf/.dwg com cursor de espera e cache do resultado (ver
-        newsicad/io/open_cache.py): a segunda abertura do mesmo arquivo pula
-        dwg2dxf + ezdxf e volta em poucos segundos mesmo numa planta grande."""
-        from PySide6.QtWidgets import QApplication
+        """Lê um .dxf/.dwg numa thread, com diálogo de progresso, e cache do
+        resultado (ver newsicad/io/open_cache.py): a segunda abertura do
+        mesmo arquivo pula dwg2dxf + ezdxf e volta em poucos segundos mesmo
+        numa planta grande. A leitura em si (dwg2dxf + parser do ezdxf) não
+        toca em Qt, então roda fora da thread da interface: a janela continua
+        respondendo em vez de virar "não respondendo" por 30 s numa planta
+        pesada (ver newsicad/ui/background_load.py)."""
+        cached = load_cached(path, APP_VERSION)
+        if cached is not None:
+            return cached
 
-        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.WaitCursor))
-        try:
-            cached = load_cached(path, APP_VERSION)
-            if cached is not None:
-                return cached
+        def read() -> tuple[Document, int]:
             if path.suffix.lower() == ".dwg":
                 loaded, skipped = dwg_to_document(path)
             else:
                 loaded, skipped = load_dxf(path)
             store_cached(path, APP_VERSION, (loaded, skipped))
             return loaded, skipped
-        finally:
-            QApplication.restoreOverrideCursor()
+
+        texto = (
+            f"Convertendo e lendo {path.name}…" if path.suffix.lower() == ".dwg" else f"Lendo {path.name}…"
+        )
+        return run_with_progress(self, "Abrindo desenho", texto, read)
 
     def _save_file(self) -> bool:
         if self.current_path is None:

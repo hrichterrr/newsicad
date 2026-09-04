@@ -92,6 +92,8 @@ _CURSOR_REGION_PADDING_PX = 16
 #: Acima de tantos itens a recriar num refresh, o índice espacial da cena é
 #: desligado durante a troca (ver refresh_entities).
 _REINDEX_THRESHOLD = 1000
+#: A cada tantos itens recriados, `refresh_entities` avisa o callback de progresso.
+_PROGRESS_BATCH = 1000
 #: Janela (ms) em que os eventos de roda do mouse são acumulados num único
 #: passo de zoom — ver CanvasView.wheelEvent.
 _ZOOM_COALESCE_MS = 10
@@ -724,7 +726,7 @@ class CanvasView(QGraphicsView):
     # ------------------------------------------------------------------ #
     # sincronização com o Document
     # ------------------------------------------------------------------ #
-    def refresh_entities(self, full: bool | None = None) -> None:
+    def refresh_entities(self, full: bool | None = None, progress=None) -> None:
         """Sincroniza os itens da cena com o documento.
 
         `full=None` (padrão) decide sozinho: passada LEVE enquanto um comando
@@ -733,7 +735,10 @@ class CanvasView(QGraphicsView):
         (também confere o `repr()` guardado, pegando qualquer mutação feita
         no lugar sem passar por atribuição). Antes toda passada calculava o
         repr de todas as entidades: 0,59 s por clique numa planta de 43 mil
-        entidades (medição de 2026-09-04)."""
+        entidades (medição de 2026-09-04).
+
+        `progress(feitos, total)` é chamado a cada lote de itens recriados —
+        a abertura usa isso para manter um diálogo de progresso vivo."""
         if full is None:
             full = not self.interpreter.active
         doc_ids = set(self.document.entities.keys())
@@ -853,7 +858,9 @@ class CanvasView(QGraphicsView):
             if mass:
                 self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
             try:
-                for z_value, entity_id, entity, fingerprint, visible in plan:
+                for done, (z_value, entity_id, entity, fingerprint, visible) in enumerate(plan):
+                    if progress is not None and done % _PROGRESS_BATCH == 0:
+                        progress(done, len(plan))
                     old_item = self._entity_items.pop(entity_id, None)
                     if old_item is not None:
                         self._scene.removeItem(old_item)
