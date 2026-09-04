@@ -28,17 +28,22 @@ def _window_with_line_on_layer(layer: str = "PAREDES") -> tuple[MainWindow, Line
     return window, line
 
 
-def test_hiding_layer_removes_entity_from_scene():
+def test_hiding_layer_hides_entity_item_without_destroying_it():
+    """Camada desligada: o item fica na cena, só invisível (v2.15.1 — antes
+    era destruído e recriado ao religar, o que custava uma reconstrução
+    total da cena em planta grande; ver tests/test_layer_performance.py)."""
     window, line = _window_with_line_on_layer()
     assert line.id in window.canvas._entity_items
+    assert window.canvas._entity_items[line.id].isVisible()
 
     window.document.layers["PAREDES"].visible = False
     window.canvas.refresh_entities()
-    assert line.id not in window.canvas._entity_items
+    assert line.id in window.canvas._entity_items
+    assert not window.canvas._entity_items[line.id].isVisible()
 
     window.document.layers["PAREDES"].visible = True
     window.canvas.refresh_entities()
-    assert line.id in window.canvas._entity_items
+    assert window.canvas._entity_items[line.id].isVisible()
 
 
 def test_hiding_layer_excludes_entity_from_hit_test():

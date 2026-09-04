@@ -49,9 +49,26 @@ class DocumentSession:
         self.viewport_layout: str = "Single"
         self.tab_widget = self.canvas
 
-        self.saved_snapshot = self.snapshot_state()
+        self.saved_state = self.state_id()
+
+    def state_id(self) -> tuple:
+        """Identificador barato do estado do desenho: posição na pilha de
+        undo (entidades), revisão do documento (camadas/unidades) e revisão
+        das definições de bloco. Comparar dois ids diz se o desenho mudou
+        sem copiar nem percorrer nada — antes `is_dirty` fazia um deepcopy
+        de entidades + camadas + blocos e comparava tudo, a cada passo de
+        comando: 10 s por clique numa planta de 43 mil entidades (medição de
+        2026-09-03)."""
+        return (
+            self.undo_stack.state_id(),
+            self.document.revision,
+            self.document.block_defs_revision,
+            self.document.units,
+        )
 
     def snapshot_state(self) -> tuple:
+        """Cópia profunda do estado — só para diagnóstico/testes; NÃO usar no
+        caminho de um comando (custo de segundos em desenho grande)."""
         return (
             copy.deepcopy(self.document.entities),
             copy.deepcopy(self.document.layers),
@@ -60,10 +77,10 @@ class DocumentSession:
         )
 
     def is_dirty(self) -> bool:
-        return self.snapshot_state() != self.saved_snapshot
+        return self.state_id() != self.saved_state
 
     def mark_saved(self) -> None:
-        self.saved_snapshot = self.snapshot_state()
+        self.saved_state = self.state_id()
 
     def display_name(self) -> str:
         return self.current_path.name if self.current_path else self.untitled_label

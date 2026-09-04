@@ -120,12 +120,26 @@ class Document:
         # do AutoCAD, que não se aplica sem paper space) — multiplica a
         # altura padrão de Text/Dimension/Table/Leader na hora de criar.
         self.annotation_scale: float = 1.0
+        # Revisão do que muda FORA da pilha de undo e ainda assim vai pro
+        # arquivo: camadas (cor/visível/travada/nome/criação/purge) e
+        # unidades. Junto com `UndoStack.state_id()` e
+        # `block_defs_revision`, identifica o estado do documento pra
+        # `DocumentSession.is_dirty` sem copiar nada (ver `touch`).
+        self.revision: int = 0
+
+    def touch(self) -> None:
+        """Registra uma mudança de estado que não passa pelo undo (camada
+        ligada/desligada/travada/cor, unidades...). Quem muda `Layer.*` ou
+        `units` direto deve chamar isto — senão o "arquivo modificado?" da
+        aba não fica sabendo."""
+        self.revision += 1
 
     def add_layer(self, name: str, color: str = DEFAULT_LAYER_COLOR) -> Layer:
         layer = self.layers.get(name)
         if layer is None:
             layer = Layer(name=name, color=color)
             self.layers[name] = layer
+            self.revision += 1
         return layer
 
     def set_current_layer(self, name: str) -> None:
@@ -185,6 +199,7 @@ class Document:
         layer = self.layers.pop(old_name)
         layer.name = new_name
         self.layers[new_name] = layer
+        self.revision += 1
 
         for entity in self.entities.values():
             if entity.layer == old_name:
@@ -213,6 +228,8 @@ class Document:
             del self.layers[name]
             if self.current_layer == name:
                 self.current_layer = "0"
+        if removable:
+            self.revision += 1
         return removable
 
     def purge_unused_blocks(self) -> list[str]:

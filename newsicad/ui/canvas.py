@@ -89,6 +89,9 @@ CROSSHAIR_SIZE_PERCENT = 5
 #: Folga (px) somada à caixa repintada ao redor do cursor: cobre o texto
 #: do dynamic input, que fica ao lado do cursor, e o marcador de OSNAP.
 _CURSOR_REGION_PADDING_PX = 16
+#: Acima de tantos itens a recriar num refresh, o índice espacial da cena é
+#: desligado durante a troca (ver refresh_entities).
+_REINDEX_THRESHOLD = 1000
 #: Janela (ms) em que os eventos de roda do mouse são acumulados num único
 #: passo de zoom — ver CanvasView.wheelEvent.
 _ZOOM_COALESCE_MS = 10
@@ -667,6 +670,7 @@ class CanvasView(QGraphicsView):
         #: ids cujo item está com a caneta de seleção aplicada agora —
         #: ver refresh_selection_highlight.
         self._highlighted_ids: set[str] = set()
+        self._def_layers_cache: dict[str, tuple[str, ...]] = {}
         #: id da entidade -> "impressão digital" do estado com que o item
         #: gráfico dela foi criado (ver refresh_entities) — permite pular a
         #: recriação de itens cujas entidades não mudaram desde o último
@@ -741,6 +745,7 @@ class CanvasView(QGraphicsView):
         # refresh sem mudanças vira só o custo de calcular os reprs.
         if self._def_fp_cache_revision != self.document.block_defs_revision:
             self._def_fp_cache.clear()
+            self._def_layers_cache.clear()
             self._def_fp_cache_revision = self.document.block_defs_revision
 
         def definition_fp(block_name: str, _visiting: frozenset[str] = frozenset()) -> str:
@@ -764,16 +769,30 @@ class CanvasView(QGraphicsView):
             self._def_fp_cache[block_name] = fp
             return fp
 
-        # Mudança em qualquer camada (cor/visibilidade/trava) pode afetar a
-        # cor dos FILHOS de um bloco (resolvida na criação do item), então
-        # entra na impressão digital de tudo — na prática, mexer no painel
-        # de camadas volta a reconstruir tudo (raro e era o comportamento
-        # antigo de qualquer forma).
-        layers_fp = f"{hash(chr(0).join(f'{la.name}|{la.color}|{la.visible}|{la.locked}' for la in self.document.layers.values())):x}"
+        # Cor de camada muda a aparência de quem está nela (coberto pela cor
+        # efetiva no fingerprint) e dos FILHOS de um bloco (resolvida na
+        # criação do item). Por isso cada instância de bloco leva na
+        # impressão digital as cores das camadas que a definição usa — e SÓ
+        # elas. Antes entrava aqui um resumo de TODAS as camadas (cor +
+        # visível + travada) em TODAS as entidades: qualquer clique no painel
+        # de camadas, inclusive o cadeado, recriava os 43 mil itens de uma
+        # planta real — 178 s por clique (medição de 2026-09-03).
+        # Visibilidade não entra: é `setVisible` no item, ver abaixo.
+        layers = self.document.layers
+
+        def layer_colors_fp(block_name: str) -> str:
+            names = self._def_layers_cache.get(block_name)
+            if names is None:
+                names = self._definition_layer_names(block_name)
+                self._def_layers_cache[block_name] = names
+            return "|".join(f"{n}={layers[n].color}" for n in names if n in layers)
 
         # Percorre na ORDEM do dict (ordem de criação / ordem de desenho do
         # arquivo), não num set: a posição vira o zValue do item (ver
         # _DRAW_ORDER_Z_STEP), então a cena empilha igual ao documento.
+        # Primeiro decide o que recriar; a recriação em si vem depois, para
+        # poder desligar o índice espacial quando for muita coisa.
+        plan: list[tuple[int, str, Entity, str, bool]] = []
         for index, (entity_id, entity) in enumerate(self.document.entities.items()):
             if isinstance(entity, Text) and entity.field_type:
                 # FIELD (comando FIELD): recalcula o valor vivo a cada
@@ -782,39 +801,87 @@ class CanvasView(QGraphicsView):
                 # ler `entity.content` — hit-test/bbox/render usam esse
                 # mesmo atributo (ver `_text_top_left_world`).
                 entity.content = resolve_field_text(entity, self.document)
-            if not self.document.is_layer_visible(entity):
-                # Camada desligada no painel de camadas: a entidade some do
-                # canvas (não só fica "acinzentada") e também fica de fora
-                # de hit-test/seleção/zoom-extents — ver os outros métodos
-                # que checam `is_layer_visible`.
-                old_item = self._entity_items.pop(entity_id, None)
-                if old_item is not None:
-                    self._scene.removeItem(old_item)
-                self._entity_fingerprints.pop(entity_id, None)
-                continue
-
-            fingerprint = f"{entity!r}\x00{self._effective_color(entity)}\x00{layers_fp}"
+            visible = self.document.is_layer_visible(entity)
+            fingerprint = f"{entity!r}\x00{self._effective_color(entity)}"
             if isinstance(entity, BlockReference):
-                fingerprint += "\x00" + definition_fp(entity.block_name)
+                fingerprint += "\x00" + definition_fp(entity.block_name) + "\x00" + layer_colors_fp(entity.block_name)
             z_value = index * _DRAW_ORDER_Z_STEP
-            if (
-                self._entity_fingerprints.get(entity_id) == fingerprint
-                and entity_id in self._entity_items
-            ):
-                self._entity_items[entity_id].setZValue(z_value)
+            item = self._entity_items.get(entity_id)
+            if item is not None and self._entity_fingerprints.get(entity_id) == fingerprint:
+                item.setZValue(z_value)
+                # Camada desligada no painel: o item fica na cena, só
+                # invisível — assim ligar/desligar não recria nada e o
+                # pré-filtro do hit-test (que exige item por entidade)
+                # continua valendo. Hit-test/seleção/zoom-extents já
+                # ignoram entidade de camada invisível por conta própria.
+                if item.isVisible() != visible:
+                    item.setVisible(visible)
                 continue
+            plan.append((z_value, entity_id, entity, fingerprint, visible))
 
-            old_item = self._entity_items.pop(entity_id, None)
-            if old_item is not None:
-                self._scene.removeItem(old_item)
-            item = self._create_item(entity)
-            item.setZValue(z_value)
-            item.setData(_ENTITY_ID_DATA_KEY, entity_id)
-            self._scene.addItem(item)
-            self._entity_items[entity_id] = item
-            self._entity_fingerprints[entity_id] = fingerprint
+        recreated: list[str] = []
+        if plan:
+            # Recriar milhares de itens numa cena cheia é dominado pelo
+            # índice espacial (BSP) sendo refeito a cada removeItem/addItem:
+            # 178 s contra 10,7 s de montar do zero, na mesma planta. Com
+            # muita coisa a trocar, desliga o índice durante a troca.
+            mass = len(plan) > _REINDEX_THRESHOLD
+            if mass:
+                self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+            try:
+                for z_value, entity_id, entity, fingerprint, visible in plan:
+                    old_item = self._entity_items.pop(entity_id, None)
+                    if old_item is not None:
+                        self._scene.removeItem(old_item)
+                    item = self._create_item(entity)
+                    item.setZValue(z_value)
+                    item.setData(_ENTITY_ID_DATA_KEY, entity_id)
+                    if not visible:
+                        item.setVisible(False)
+                    self._scene.addItem(item)
+                    self._entity_items[entity_id] = item
+                    self._entity_fingerprints[entity_id] = fingerprint
+                    recreated.append(entity_id)
+            finally:
+                if mass:
+                    self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.BspTreeIndex)
 
-        self.refresh_selection_highlight(changed_only=False)
+        # Destaque de seleção só no que acabou de ser recriado (item novo
+        # nasce com a caneta base): varrer todos os itens aqui custava uma
+        # passada completa por refresh.
+        selected_ids = set(self.interpreter.context.selection.ids)
+        self._highlighted_ids -= set(recreated)
+        self._highlighted_ids &= set(self._entity_items)
+        for entity_id in recreated:
+            if entity_id in selected_ids:
+                self._apply_pen(self._entity_items[entity_id], _selected_pen())
+                self._highlighted_ids.add(entity_id)
+
+    def _definition_layer_names(self, block_name: str, _visiting: frozenset[str] = frozenset()) -> tuple[str, ...]:
+        """Camadas referenciadas pelos filhos de uma definição de bloco
+        (recursivo em blocos aninhados; ciclo é cortado). Cacheado por nome
+        em `_def_layers_cache`, invalidado junto com `_def_fp_cache`."""
+        if block_name in _visiting:
+            return ()
+        names: set[str] = set()
+        for child in self.document.block_definitions.get(block_name, []):
+            names.add(child.layer)
+            if isinstance(child, BlockReference):
+                names.update(self._definition_layer_names(child.block_name, _visiting | {block_name}))
+        return tuple(sorted(names))
+
+    def apply_layer_visibility(self) -> None:
+        """Sincroniza a visibilidade dos itens com o estado das camadas, sem
+        recriar nada — é o que o clique na lâmpada do painel de camadas
+        chama (antes: reconstrução total da cena, 178 s numa planta real)."""
+        document = self.document
+        for entity_id, item in self._entity_items.items():
+            entity = document.entities.get(entity_id)
+            if entity is None:
+                continue
+            visible = document.is_layer_visible(entity)
+            if item.isVisible() != visible:
+                item.setVisible(visible)
 
     def _effective_color(self, entity: Entity, inherited: tuple[str, str] | None = None) -> str:
         """Cor de verdade com que a entidade deve ser desenhada — regra do

@@ -248,7 +248,10 @@ def test_refresh_entities_rebuilds_instances_after_block_redefinition():
     assert item_after.sceneBoundingRect().width() == pytest.approx(5, abs=0.5)
 
 
-def test_refresh_entities_removes_item_when_layer_hidden():
+def test_refresh_entities_hides_item_when_layer_hidden():
+    """v2.15.1: camada desligada esconde o item (setVisible) em vez de
+    destruí-lo — recriar tudo ao religar custava uma reconstrução total da
+    cena numa planta grande (ver tests/test_layer_performance.py)."""
     _app()
     from newsicad.ui.main_window import MainWindow
 
@@ -257,15 +260,15 @@ def test_refresh_entities_removes_item_when_layer_hidden():
     doc.add_layer("CFTV")
     line = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0), layer="CFTV"))
     window.canvas.refresh_entities()
-    assert line.id in window.canvas._entity_items
+    assert window.canvas._entity_items[line.id].isVisible()
 
     doc.layers["CFTV"].visible = False
     window.canvas.refresh_entities()
-    assert line.id not in window.canvas._entity_items
+    assert not window.canvas._entity_items[line.id].isVisible()
 
     doc.layers["CFTV"].visible = True
     window.canvas.refresh_entities()
-    assert line.id in window.canvas._entity_items
+    assert window.canvas._entity_items[line.id].isVisible()
 
 
 def test_properties_panel_shows_split_scale_for_non_uniform():

@@ -202,6 +202,7 @@ def layiso_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             layer.visible = False
             hidden.append(name)
     ctx.document.isolated_layers = hidden
+    ctx.document.touch()
     ctx.selection.clear()
     if hidden:
         yield Prompt(f"LAYISO: {len(hidden)} camada(s) escondida(s). Use LAYUNISO pra reverter.", kind="info")
@@ -223,6 +224,7 @@ def layuniso_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             layer.visible = True
             restored += 1
     ctx.document.isolated_layers = None
+    ctx.document.touch()
     yield Prompt(f"LAYUNISO: {restored} camada(s) tornada(s) visível(is) de novo.", kind="info")
 
 

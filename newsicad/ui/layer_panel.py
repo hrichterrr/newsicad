@@ -248,7 +248,10 @@ class LayerPanel(QDockWidget):
         if layer is None:
             return
         layer.visible = visible
-        self.main_window.canvas.refresh_entities()
+        document.touch()
+        # Só liga/desliga os itens da camada — nada é recriado (ver
+        # CanvasView.apply_layer_visibility).
+        self.main_window.canvas.apply_layer_visibility()
         self.main_window.canvas.viewport().update()
 
     def _set_locked(self, name: str, locked: bool) -> None:
@@ -257,6 +260,7 @@ class LayerPanel(QDockWidget):
         if layer is None:
             return
         layer.locked = locked
+        document.touch()
         # Trancar uma camada não muda o desenho na tela, só o que dá pra
         # selecionar — mas uma seleção já feita antes de travar pode conter
         # entidades da camada, então limpamos pra manter consistente com
@@ -283,6 +287,7 @@ class LayerPanel(QDockWidget):
         if layer is None:
             return
         layer.color = color_hex
+        document.touch()
         self.main_window.canvas.refresh_entities()
         self.refresh()
 
