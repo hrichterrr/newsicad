@@ -64,7 +64,7 @@ from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.14.1"
+APP_VERSION = "2.14.2"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """

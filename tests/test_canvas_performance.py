@@ -154,3 +154,48 @@ def test_destaque_de_selecao_toca_so_o_que_mudou(qt_canvas):
     canvas.refresh_selection_highlight()
     assert tocados == [id_b]
     assert restaurados == [id_a]
+
+def test_bloco_vira_poucos_itens_por_cor(qt_canvas):
+    """A geometria de uma instância de bloco é fundida num item por cor: era
+    um item gráfico por segmento (21.378 itens numa planta real), e cada
+    repintura percorre item por item."""
+    from newsicad.core.entities import BlockReference
+
+    canvas = qt_canvas
+    canvas.document.define_block(
+        "GRADE",
+        [Line(start=Point(x, 0), end=Point(x, 10)) for x in range(20)],
+    )
+    instancia = BlockReference(block_name="GRADE", insertion_point=Point(0, 0))
+    canvas.document.add_entity(instancia)
+    canvas.refresh_entities()
+
+    grupo = canvas._entity_items[instancia.id]
+    # 20 linhas da mesma cor -> um único traçado
+    assert len(grupo.childItems()) == 1
+
+
+def test_zoom_acumula_a_rajada_de_roda(qt_canvas):
+    """Girar a roda várias vezes seguidas resulta em UM passo de zoom (um
+    repaint), com o mesmo fator total."""
+    from PySide6.QtCore import QPoint, QPointF
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtCore import Qt as QtCore_Qt
+
+    canvas = qt_canvas
+    escala_inicial = canvas.transform().m11()
+    for _ in range(3):
+        canvas.wheelEvent(
+            QWheelEvent(
+                QPointF(100, 100), QPointF(100, 100), QPoint(0, 0), QPoint(0, 120),
+                QtCore_Qt.MouseButton.NoButton, QtCore_Qt.KeyboardModifier.NoModifier,
+                QtCore_Qt.ScrollPhase.NoScrollPhase, False,
+            )
+        )
+    # nada aplicado ainda: só o acumulado
+    assert canvas.transform().m11() == escala_inicial
+    assert canvas._pending_zoom_factor > 1.0
+
+    canvas._apply_pending_zoom()
+    assert canvas.transform().m11() > escala_inicial
+    assert canvas._pending_zoom_factor == 1.0

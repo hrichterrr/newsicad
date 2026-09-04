@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -89,6 +89,9 @@ CROSSHAIR_SIZE_PERCENT = 5
 #: Folga (px) somada à caixa repintada ao redor do cursor: cobre o texto
 #: do dynamic input, que fica ao lado do cursor, e o marcador de OSNAP.
 _CURSOR_REGION_PADDING_PX = 16
+#: Janela (ms) em que os eventos de roda do mouse são acumulados num único
+#: passo de zoom — ver CanvasView.wheelEvent.
+_ZOOM_COALESCE_MS = 10
 ENTITY_COLOR = "#e8e8e8"
 # Chave arbitrária pra QGraphicsItem.setData/.data — QGraphicsItem não é um
 # QObject (diferente da maioria dos outros widgets Qt), então não tem
@@ -635,6 +638,25 @@ class CanvasView(QGraphicsView):
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # `DontSavePainterState`: não salvar/restaurar o estado do QPainter a
+        # cada item (o canvas configura a caneta em todo paint, não depende do
+        # estado herdado). `DontAdjustForAntialiasing`: não inflar a área
+        # repintada de cada item por causa do antialias. `SmartViewportUpdate`:
+        # o Qt decide entre repintar as regiões sujas ou a viewport toda,
+        # conforme o que sai mais barato. Juntos: zoom de 91 ms para 38 ms na
+        # planta NEWSI-ANA BEATRIZ-R01 (medição de 2026-09-03).
+        self.setOptimizationFlags(
+            QGraphicsView.OptimizationFlag.DontSavePainterState
+            | QGraphicsView.OptimizationFlag.DontAdjustForAntialiasing
+        )
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.SmartViewportUpdate)
+        # Zoom com a roda: um repaint por rajada, não um por evento — ver
+        # `wheelEvent`.
+        self._pending_zoom_factor = 1.0
+        self._zoom_timer = QTimer(self)
+        self._zoom_timer.setSingleShot(True)
+        self._zoom_timer.setInterval(_ZOOM_COALESCE_MS)
+        self._zoom_timer.timeout.connect(self._apply_pending_zoom)
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -1242,6 +1264,8 @@ class CanvasView(QGraphicsView):
                 continue
             group.addToGroup(child_item)
 
+        self._merge_geometry_children(group)
+
         pos = cad_to_scene(entity.insertion_point)
         group.setPos(pos)
         # setRotation+setScale só cobrem escala uniforme; escala por eixo
@@ -1259,6 +1283,58 @@ class CanvasView(QGraphicsView):
         transform.scale(sx, sy)
         group.setTransform(transform)
         return group
+
+    def _merge_geometry_children(self, group: QGraphicsItemGroup) -> None:
+        """Funde os filhos puramente geométricos do grupo num item por cor.
+
+        Só entram itens cuja aparência é "um traçado com uma caneta": linha,
+        caminho (polilinha/arco/spline), elipse e retângulo. Texto, hachura
+        (que tem preenchimento próprio), imagem e sub-grupos ficam como
+        estão. A caneta de cada item já vem com a cor efetiva resolvida
+        (BYBLOCK/camada 0), então agrupar por cor preserva exatamente o que
+        aparece na tela — inclusive o destaque de seleção, que continua sendo
+        aplicado a cada filho do grupo."""
+        by_color: dict[str, QPainterPath] = {}
+        merged_children: list[QGraphicsItem] = []
+        for child in list(group.childItems()):
+            path: QPainterPath | None = None
+            if type(child) is QGraphicsLineItem:
+                line = child.line()
+                path = QPainterPath(QPointF(line.x1(), line.y1()))
+                path.lineTo(QPointF(line.x2(), line.y2()))
+            elif type(child) is QGraphicsPathItem:
+                path = QPainterPath(child.path())
+            elif type(child) is QGraphicsEllipseItem:
+                path = QPainterPath()
+                path.addEllipse(child.rect())
+            elif type(child) is QGraphicsRectItem:
+                path = QPainterPath()
+                path.addRect(child.rect())
+            if path is None:
+                continue
+            brush = getattr(child, "brush", None)
+            if brush is not None and brush().style() != Qt.BrushStyle.NoBrush:
+                # Item preenchido (texto vetorizado, hachura sólida): a fusão
+                # por caneta perderia o preenchimento — fica como está.
+                # QGraphicsLineItem não tem brush(), daí o getattr.
+                continue
+            transform = child.transform() * QTransform.fromTranslate(child.pos().x(), child.pos().y())
+            color = child.data(_BASE_COLOR_DATA_KEY) or child.pen().color().name()
+            by_color.setdefault(color, QPainterPath()).addPath(transform.map(path))
+            merged_children.append(child)
+
+        if len(merged_children) < 2:
+            return
+        for child in merged_children:
+            group.removeFromGroup(child)
+            scene = child.scene()
+            if scene is not None:
+                scene.removeItem(child)
+        for color, path in by_color.items():
+            item = QGraphicsPathItem(path)
+            item.setPen(_entity_pen(color))
+            item.setData(_BASE_COLOR_DATA_KEY, color)
+            group.addToGroup(item)
 
     def _create_image_item(self, entity: ImageReference) -> QGraphicsItem:
         """ImageReference: insertion_point é o canto inferior-esquerdo (em
@@ -2194,6 +2270,12 @@ class CanvasView(QGraphicsView):
             region += QRect(p.x() - margin, p.y() - margin, margin * 2, margin * 2)
         return region
 
+    def _apply_pending_zoom(self) -> None:
+        """Aplica de uma vez o zoom acumulado desde o último repaint."""
+        factor, self._pending_zoom_factor = self._pending_zoom_factor, 1.0
+        if abs(factor - 1.0) > 1e-9:
+            self.scale(factor, factor)
+
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = False
@@ -2207,8 +2289,16 @@ class CanvasView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
     def wheelEvent(self, event) -> None:
+        """Zoom com a roda, acumulando a rajada num repaint só.
+
+        Girar a roda rápido gera vários eventos seguidos, e cada `scale()`
+        obriga um repaint da viewport inteira (~39 ms numa planta real). Com o
+        acúmulo, três "cliques" de roda dados juntos viram um repaint com o
+        fator total — o resultado final é idêntico (a escala é multiplicativa)
+        e a sensação é de resposta imediata em vez de arrastada."""
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        self.scale(factor, factor)
+        self._pending_zoom_factor *= factor
+        self._zoom_timer.start()
         event.accept()
 
     def keyPressEvent(self, event) -> None:
