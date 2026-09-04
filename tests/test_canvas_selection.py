@@ -272,8 +272,19 @@ def test_selection_context_menu_offers_expected_actions():
     app.processEvents()
 
     menu = window._build_selection_context_menu()
-    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
-    assert labels == ["Move", "Copy", "Rotate", "Erase", "Select Similar", "Properties"]
+    labels = [action.text().split("	")[0] for action in menu.actions() if not action.isSeparator()]
+    # Ordem do menu de contexto do AutoCAD (ver MainWindow._build_selection_context_menu);
+    # os itens que o NewSIcad ainda não tem ficam desabilitados, não somem.
+    assert labels == [
+        "Repeat", "Recent Input", "Clipboard", "Isolate",
+        "Erase", "Move", "Copy Selection", "Scale", "Rotate", "Draw Order", "Group",
+        "Select Similar", "Deselect All",
+        "Quick Select...", "Find...", "Properties",
+    ]
+    enabled = {a.text().split("	")[0] for a in menu.actions() if a.isEnabled() and not a.isSeparator()}
+    assert {"Erase", "Move", "Copy Selection", "Scale", "Rotate", "Select Similar", "Deselect All", "Properties"} <= enabled
+    assert {"Recent Input", "Draw Order", "Group"}.isdisjoint(enabled)
+    assert all(not a.icon().isNull() for a in menu.actions() if not a.isSeparator())
 
 
 def test_right_click_during_active_command_still_confirms():

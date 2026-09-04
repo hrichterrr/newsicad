@@ -1,0 +1,741 @@
+<title>Ribbon NewSIcad 2.15</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+:root{
+  --bg:#f3f2ee;--bg2:#ffffff;--ink:#23231f;--ink2:#5d5d57;--ink3:#8d8d86;--rule:#d9d8d1;--gold:#a8851c;--goldbg:#f6efd9;
+  --font:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --disp:"IBM Plex Sans Condensed","Arial Narrow",var(--font);
+  --mono:"IBM Plex Mono",Consolas,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1a1a1c;--bg2:#222224;--ink:#dcdcd6;--ink2:#a2a29b;--ink3:#77776f;--rule:#34343a;--gold:#d5b03a;--goldbg:#2b2716}}
+:root[data-theme="dark"]{--bg:#1a1a1c;--bg2:#222224;--ink:#dcdcd6;--ink2:#a2a29b;--ink3:#77776f;--rule:#34343a;--gold:#d5b03a;--goldbg:#2b2716}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 var(--font)}
+main{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
+h1{font:600 34px/1.1 var(--disp);letter-spacing:-.01em;margin:0 0 6px;text-wrap:balance}
+h2{font:600 22px/1.2 var(--disp);margin:56px 0 14px;padding-top:14px;border-top:1px solid var(--rule);text-wrap:balance}
+h3{font:500 16px/1.3 var(--font);margin:24px 0 8px}
+p{max-width:68ch;margin:0 0 12px}
+.lead{color:var(--ink2);font-size:16px;max-width:72ch}
+.eyebrow{font:500 11px/1 var(--font);letter-spacing:.12em;text-transform:uppercase;color:var(--gold);margin-bottom:10px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;color:var(--ink2);margin:14px 0 0}
+.meta b{color:var(--ink);font-weight:500}
+code{font:13px var(--mono);background:var(--bg2);border:1px solid var(--rule);padding:0 5px;border-radius:3px}
+.note{border-left:3px solid var(--gold);background:var(--goldbg);padding:10px 14px;border-radius:0;max-width:78ch;font-size:14px;margin:14px 0}
+.ctl{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:18px 0 10px;font-size:13px;color:var(--ink2)}
+.ctl label{display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.seg button{font:13px var(--font);background:var(--bg2);color:var(--ink2);border:0;padding:4px 12px;cursor:pointer}
+.seg button.on{background:var(--ink);color:var(--bg)}
+.seg button:focus-visible{outline:2px solid var(--gold);outline-offset:-2px}
+table{border-collapse:collapse;font-size:14px;width:100%;max-width:860px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{font-weight:500;color:var(--ink2);font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+td.n{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+ul{padding-left:20px;max-width:78ch}li{margin:4px 0}
+a{color:var(--gold)}
+.figcap{font-size:13px;color:var(--ink3);margin:8px 0 0}
+
+/* ============ o app (sempre escuro, como o NewSIcad) ============ */
+.frame{overflow-x:auto;border:1px solid var(--rule);border-radius:6px;background:#1c1c1c}
+.app{width:1420px;background:#232323;font:11px/1.2 "Segoe UI",Tahoma,var(--font);color:#d0d0d0;user-select:none}
+.title{display:flex;align-items:center;gap:6px;height:30px;padding:0 6px;background:#1c1c1c}
+.appbtn{width:40px;height:26px;background:#c9a227;display:flex;align-items:center;justify-content:center;border-radius:2px}
+.appbtn img{width:20px;height:20px}
+.qat{display:flex;align-items:center;gap:1px;color:#b8b8b8}
+.q{width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:2px}
+.q svg{width:16px;height:16px}
+.q:hover,.lg:hover,.sm:hover,.io:hover,.mi:hover{background:#3a3a3a}
+.ws{margin-left:6px;padding:2px 8px;border:1px solid #4a4a4a;border-radius:2px;color:#d0d0d0}
+.ttl{flex:1;text-align:center;color:#a0a0a0;font-size:12px}
+.srch{width:210px;height:20px;border:1px solid #4a4a4a;border-radius:2px;color:#707070;padding:0 6px;display:flex;align-items:center;gap:6px}
+.srch svg{width:12px;height:12px;stroke:#707070}
+.tabs{display:flex;background:#232323;padding:3px 6px 0;font-size:12px}
+.tab{padding:5px 12px;color:#a0a0a0;cursor:pointer;border-bottom:2px solid transparent}
+.tab.on{background:#2f2f2f;color:#fff;border-bottom-color:#4da3ff}
+.tab.dim{color:#5a5a5a;cursor:default}
+.tab:focus-visible{outline:1px solid #4da3ff}
+.row{display:none;background:#2f2f2f;padding:2px 4px 0;align-items:stretch;min-height:96px}
+.row.on{display:flex}
+.panel{display:flex;flex-direction:column;padding:0 4px}
+.pb{display:flex;gap:1px;align-items:flex-start;flex:1}
+.pt{display:flex;align-items:center;justify-content:center;color:#8a8a8a;height:18px;border-top:1px solid #3a3a3a;margin-top:2px;position:relative;padding:0 10px}
+.pt .ln{position:absolute;right:0;bottom:1px;color:#7a7a7a;font-size:9px}
+.lg{display:flex;flex-direction:column;align-items:center;min-width:48px;padding:2px 3px 0;line-height:1.15;text-align:center;border-radius:2px;height:66px}
+.lg svg{width:32px;height:32px;margin-bottom:2px;flex:none}
+.col{display:flex;flex-direction:column}
+.sm{display:flex;align-items:center;gap:3px;padding:0 4px 0 2px;border-radius:2px;height:22px;white-space:nowrap}
+.sm svg{width:16px;height:16px;flex:none}
+.io{display:flex;align-items:center;height:22px;padding:0 2px;border-radius:2px}
+.io svg{width:16px;height:16px}
+.sep{width:1px;background:#3f3f3f;margin:2px 3px}
+.cb{display:flex;align-items:center;gap:4px;height:20px;border:1px solid #4a4a4a;background:#262626;padding:0 4px;color:#d0d0d0;border-radius:2px;margin:1px 0;white-space:nowrap}
+.cb svg{width:14px;height:14px;flex:none}
+.cb .ar{margin-left:auto;color:#8a8a8a;font-size:9px}
+.sw{width:12px;height:12px;background:#fff;border:1px solid #777;flex:none}
+.v{font-size:9px;color:#9a9a9a;margin-left:1px}
+.off{opacity:.38}
+.ftabs{display:flex;gap:2px;background:#1c1c1c;padding:3px 6px 0}
+.ft{padding:3px 10px;color:#a0a0a0;background:#232323;border-radius:3px 3px 0 0}
+.ft.on{background:#2d2d2d;color:#fff;border-top:2px solid #4da3ff}
+.canvas{height:38px;background:#1e1e1e;position:relative}
+.canvas:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#2a2a2a 1px,transparent 1px),linear-gradient(90deg,#2a2a2a 1px,transparent 1px);background-size:20px 20px}
+/* famílias (estilo B) e estilo A opcional */
+.dr{color:#e8935a}.md{color:#5b9bd5}.an{color:#a586d9}.bl{color:#a586d9}.nt{color:#b8b8b8}
+.acc{stroke:#fff}.fw{fill:#fff}.yl{stroke:#f0c33e}.yf{fill:#f0c33e}
+.app.a .dr,.app.a .md,.app.a .an,.app.a .bl,.app.a .nt,.cat.a .dr,.cat.a .md,.cat.a .an,.cat.a .bl,.cat.a .nt{color:#d8d8d8}
+.app.a .acc,.cat.a .acc{stroke:#4da3ff}.app.a .fw,.cat.a .fw{fill:#4da3ff}
+.app svg,.cat svg,.sb svg,.menu svg{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+/* status bar */
+.sb{width:1420px;background:#1c1c1c;display:flex;align-items:center;height:26px;padding:0 6px;gap:2px;font:11px "Segoe UI",var(--font);color:#b8b8b8}
+.sb .coord{font-family:Menlo,Consolas,monospace;color:#d8d8d8;padding:0 8px;font-variant-numeric:tabular-nums}
+.sb .sp{flex:1}
+.tg{display:flex;align-items:center;gap:3px;height:22px;padding:0 5px;border-radius:2px;color:#a0a0a0}
+.tg svg{width:16px;height:16px}
+.tg.on{background:#3a5a8c;color:#fff}
+.tg.on .acc{stroke:#fff}
+.tg.off{opacity:.35}
+.brand{color:#6a8fc9;font-family:Menlo,Consolas,monospace;padding-left:10px}
+/* menu de contexto */
+.menu{width:250px;background:#2b2b2b;border:1px solid #4a4a4a;padding:3px 0;font:12px "Segoe UI",var(--font);color:#d0d0d0;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.mi{display:flex;align-items:center;gap:8px;height:24px;padding:0 10px 0 8px}
+.mi svg{width:16px;height:16px;flex:none}
+.mi .k{margin-left:auto;color:#8a8a8a;font-size:11px}
+.mi.dis{color:#6a6a6a}
+.msep{height:1px;background:#4a4a4a;margin:3px 8px}
+.stage{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap;background:#1e1e1e;padding:26px;border:1px solid var(--rule);border-radius:6px}
+/* catálogo */
+.cat{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;background:#262626;padding:12px;border-radius:6px;border:1px solid var(--rule)}
+.ci{display:flex;align-items:center;gap:8px;padding:6px 8px;background:#2f2f2f;border-radius:3px;color:#d0d0d0;font:11px "Segoe UI",var(--font)}
+.ci svg.big{width:32px;height:32px;flex:none}.ci svg.small{width:16px;height:16px;flex:none}
+.ci .t{display:flex;flex-direction:column;gap:1px;min-width:0}
+.ci .t b{font-weight:500;color:#e8e8e8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci .t i{font:10px var(--mono);color:#8a8a8a;font-style:normal}
+.fam{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--ink2);margin:10px 0 12px}
+.fam span{display:inline-flex;align-items:center;gap:6px}
+.fam i{width:12px;height:12px;border-radius:2px;display:inline-block}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 32px;max-width:900px}
+@media (prefers-reduced-motion:no-preference){.tab,.q,.lg,.sm,.io{transition:background .12s}}
+</style>
+
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+<!-- arquivo / QAT / output -->
+<symbol id="i-new" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5"/><path class="acc" d="M12 11v6M9 14h6"/></symbol>
+<symbol id="i-open" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/><path class="acc" d="M3 11h18l-2 8H3"/></symbol>
+<symbol id="i-save" viewBox="0 0 24 24"><path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4"/><path class="acc" d="M7 20v-6h10v6"/></symbol>
+<symbol id="i-saveas" viewBox="0 0 24 24"><path d="M4 4h13l3 3v13H4z"/><path d="M8 4v5h7V4"/><path class="acc" d="M14 19l6-6-2-2-6 6v2z"/></symbol>
+<symbol id="i-plot" viewBox="0 0 24 24"><path d="M6 9V4h12v5"/><path d="M4 9h16v8h-4v3H8v-3H4z"/><path class="acc" d="M8 14h8M8 17h8"/></symbol>
+<symbol id="i-batchplot" viewBox="0 0 24 24"><path d="M4 9h13v7h-3v3H7v-3H4z"/><path d="M7 9V5h7v4"/><path class="acc" d="M17 6h3v7M20 13v3h-2"/></symbol>
+<symbol id="i-preview" viewBox="0 0 24 24"><path d="M5 3h9l4 4v14H5z"/><path d="M14 3v4h4"/><circle class="acc" cx="11" cy="14" r="3"/><path class="acc" d="M13 16l3 3"/></symbol>
+<symbol id="i-pagesetup" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18"/><path class="acc" d="M7 6h10M7 18h10M7 6v12M17 6v12" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-exportpdf" viewBox="0 0 24 24"><path d="M5 3h9l4 4v14H5z"/><path d="M14 3v4h4"/><path class="acc" d="M8 17v-6h2.5a1.5 1.5 0 0 1 0 3H8M13 11v6h1.5a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2z" stroke-width="1.3"/></symbol>
+<symbol id="i-exportdwg" viewBox="0 0 24 24"><path d="M5 3h9l4 4v14H5z"/><path d="M14 3v4h4"/><path class="acc" d="M8 11v6h1.5a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2zM13 11l1 6 1.5-4 1.5 4 1-6" stroke-width="1.3"/></symbol>
+<symbol id="i-closetab" viewBox="0 0 24 24"><path d="M3 7h8l2 2h8v11H3z"/><path class="acc" d="M10 12l5 5M15 12l-5 5"/></symbol>
+<symbol id="i-undo" viewBox="0 0 24 24"><path class="acc" d="M8 7H3v5"/><path d="M3 12a9 9 0 1 1 3 6.7"/></symbol>
+<symbol id="i-redo" viewBox="0 0 24 24"><path class="acc" d="M16 7h5v5"/><path d="M21 12a9 9 0 1 0-3 6.7"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5"/></symbol>
+<!-- draw -->
+<symbol id="i-line" viewBox="0 0 24 24"><path d="M4 20 20 4"/><circle class="fw" cx="4" cy="20" r="1.6" stroke="none"/><circle class="fw" cx="20" cy="4" r="1.6" stroke="none"/></symbol>
+<symbol id="i-pline" viewBox="0 0 24 24"><path d="M3 19 8 6l5 10 5-11 3 8"/><circle class="fw" cx="8" cy="6" r="1.5" stroke="none"/><circle class="fw" cx="13" cy="16" r="1.5" stroke="none"/></symbol>
+<symbol id="i-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path class="acc" d="M12 12h8"/><circle class="fw" cx="12" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-arc" viewBox="0 0 24 24"><path d="M4 18a9 9 0 0 1 16 0"/><circle class="fw" cx="4" cy="18" r="1.5" stroke="none"/><circle class="fw" cx="20" cy="18" r="1.5" stroke="none"/><circle class="fw" cx="12" cy="9" r="1.5" stroke="none"/></symbol>
+<symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12"/><circle class="fw" cx="4" cy="6" r="1.5" stroke="none"/><circle class="fw" cx="20" cy="18" r="1.5" stroke="none"/></symbol>
+<symbol id="i-polygon" viewBox="0 0 24 24"><path d="M12 3l8.5 6.2-3.2 10H6.7L3.5 9.2z"/><circle class="fw" cx="12" cy="12" r="1.5" stroke="none"/><path class="acc" d="M12 12l8.5-2.8" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path class="acc" d="M3 12h18"/></symbol>
+<symbol id="i-spline" viewBox="0 0 24 24"><path d="M3 18c4-14 8 12 12-4 1-4 3-4 6-2"/><circle class="fw" cx="3" cy="18" r="1.5" stroke="none"/><circle class="fw" cx="9" cy="8" r="1.5" stroke="none"/><circle class="fw" cx="15" cy="14" r="1.5" stroke="none"/><circle class="fw" cx="21" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-xline" viewBox="0 0 24 24"><path d="M2 12h20"/><path class="acc" d="M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3"/><circle class="fw" cx="12" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-ray" viewBox="0 0 24 24"><path d="M5 12h17"/><path class="acc" d="M22 12l-3-3M22 12l-3 3"/><circle class="fw" cx="5" cy="12" r="1.8" stroke="none"/></symbol>
+<symbol id="i-point" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke-width="1.2"/><circle class="fw" cx="12" cy="12" r="2" stroke="none"/></symbol>
+<symbol id="i-donut" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle class="acc" cx="12" cy="12" r="3.5"/><path class="acc" d="M15.5 12h4.5" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-revcloud" viewBox="0 0 24 24"><path d="M7 8a3 3 0 0 1 5-1 3 3 0 0 1 5 1 3 3 0 0 1 1 5 3 3 0 0 1-1 5 3 3 0 0 1-5 1 3 3 0 0 1-5-1 3 3 0 0 1-1-5 3 3 0 0 1 1-5z"/></symbol>
+<symbol id="i-wipeout" viewBox="0 0 24 24"><path d="M3 4h18v16H3z" stroke-dasharray="2 2"/><path class="acc" d="M6 8h12v8H6z"/></symbol>
+<symbol id="i-mline" viewBox="0 0 24 24"><path d="M3 15l7-9 11 8"/><path class="acc" d="M3 20l7-9 11 8"/></symbol>
+<symbol id="i-region" viewBox="0 0 24 24"><path d="M4 6h11l5 6-5 6H4z"/><path class="acc" d="M7 9l3 3-3 3M11 9l3 3-3 3" stroke-width="1.2"/></symbol>
+<symbol id="i-hatch" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path class="acc" d="M4 10l6-6M4 16 16 4M4 20 20 4M10 20l10-10M16 20l4-4"/></symbol>
+<symbol id="i-gradient" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path class="acc" d="M8 4v16M12 4v16M16 4v16" stroke-width="1"/><path class="acc" d="M6 4v16" stroke-width="2.4"/></symbol>
+<symbol id="i-boundary" viewBox="0 0 24 24"><path d="M4 4h16v16H4z" stroke-dasharray="2 2"/><path class="acc" d="M7 12a5 4 0 1 0 10 0 5 4 0 1 0-10 0z"/></symbol>
+<!-- modify -->
+<symbol id="i-move" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><path class="acc" d="M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></symbol>
+<symbol id="i-rotate" viewBox="0 0 24 24"><path d="M12 12 19 6"/><path class="acc" d="M19 6a8 8 0 1 1-8-2"/><path class="acc" d="M11 4l-2.5-2M11 4l-2 2.5"/><circle class="fw" cx="12" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-trim" viewBox="0 0 24 24"><path d="M4 8h16M4 16h16M12 3v5M12 16v5"/><path class="acc" stroke-dasharray="2 2" d="M12 8v8"/></symbol>
+<symbol id="i-extend" viewBox="0 0 24 24"><path d="M4 8h16M4 16h16M12 3v5"/><path class="acc" d="M12 8v8"/><path class="acc" d="M9 13l3 3 3-3"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="3" y="3" width="12" height="12"/><rect class="acc" x="9" y="9" width="12" height="12"/></symbol>
+<symbol id="i-mirror" viewBox="0 0 24 24"><path d="M3 19 9 5v14z"/><path class="acc" d="M21 19 15 5v14z"/><path stroke-dasharray="2 2" d="M12 3v18"/></symbol>
+<symbol id="i-fillet" viewBox="0 0 24 24"><path d="M4 20V12M12 4h8"/><path class="acc" d="M4 12a8 8 0 0 1 8-8"/></symbol>
+<symbol id="i-chamfer" viewBox="0 0 24 24"><path d="M4 20V12M12 4h8"/><path class="acc" d="M4 12l8-8"/></symbol>
+<symbol id="i-stretch" viewBox="0 0 24 24"><path d="M3 6h9v12H3z"/><path class="acc" d="M12 6h9v12h-9M15 12h6M18 9l3 3-3 3"/></symbol>
+<symbol id="i-scale" viewBox="0 0 24 24"><rect x="3" y="11" width="10" height="10"/><rect class="acc" x="3" y="3" width="18" height="18"/><path class="acc" d="M13 11l8-8M17 3h4v4"/></symbol>
+<symbol id="i-array" viewBox="0 0 24 24"><rect x="3" y="3" width="5" height="5"/><rect class="acc" x="10" y="3" width="5" height="5"/><rect class="acc" x="17" y="3" width="4" height="5"/><rect class="acc" x="3" y="10" width="5" height="5"/><rect class="acc" x="10" y="10" width="5" height="5"/><rect class="acc" x="17" y="10" width="4" height="5"/><rect class="acc" x="3" y="17" width="5" height="4"/><rect class="acc" x="10" y="17" width="5" height="4"/><rect class="acc" x="17" y="17" width="4" height="4"/></symbol>
+<symbol id="i-erase" viewBox="0 0 24 24"><path d="M3 17 13 7l6 6-7 7H8z"/><path class="acc" d="M9 20h12M9 11l6 6"/></symbol>
+<symbol id="i-explode" viewBox="0 0 24 24"><path d="M9 9h6v6H9z"/><path class="acc" d="M9 4V2M15 4V2M20 9h2M20 15h2M9 20v2M15 20v2M2 9h2M2 15h2M5 5l2 2M19 5l-2 2M5 19l2-2M19 19l-2-2"/></symbol>
+<symbol id="i-offset" viewBox="0 0 24 24"><path d="M4 20V8a4 4 0 0 1 4-4h12"/><path class="acc" d="M9 20v-9a2 2 0 0 1 2-2h9"/></symbol>
+<symbol id="i-break" viewBox="0 0 24 24"><path d="M3 12h6M15 12h6"/><path class="acc" d="M9 12l2-4M15 12l-2 4" stroke-dasharray="1.5 1.5"/><circle class="fw" cx="9" cy="12" r="1.5" stroke="none"/><circle class="fw" cx="15" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-breakpt" viewBox="0 0 24 24"><path d="M3 12h18"/><path class="acc" d="M12 6v12"/><circle class="fw" cx="12" cy="12" r="2" stroke="none"/></symbol>
+<symbol id="i-join" viewBox="0 0 24 24"><path d="M3 12h7M14 12h7"/><path class="acc" d="M10 12h4"/><path class="acc" d="M8 8l4 4-4 4M16 8l-4 4 4 4" stroke-width="1.2"/></symbol>
+<symbol id="i-lengthen" viewBox="0 0 24 24"><path d="M3 12h11"/><path class="acc" d="M14 12h7M18 9l3 3-3 3" stroke-dasharray="2 1.5"/><circle class="fw" cx="3" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-pedit" viewBox="0 0 24 24"><path d="M3 18 8 8l5 8 5-10"/><path class="acc" d="M13 21l8-8-2-2-8 8v2z"/></symbol>
+<symbol id="i-hatchedit" viewBox="0 0 24 24"><path d="M4 4h10v10H4z"/><path d="M4 8l4-4M4 12l8-8M8 14l6-6" stroke-width="1"/><path class="acc" d="M13 21l8-8-2-2-8 8v2z"/></symbol>
+<symbol id="i-align" viewBox="0 0 24 24"><path d="M4 14h6v6H4z"/><path class="acc" d="M13 4h7v7h-7z"/><path class="acc" d="M10 14l3-3" stroke-dasharray="1.5 1.5"/><path d="M3 21h18" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-divide" viewBox="0 0 24 24"><path d="M3 12h18"/><path class="acc" d="M7 9v6M12 9v6M17 9v6"/></symbol>
+<symbol id="i-measure" viewBox="0 0 24 24"><path d="M3 15 15 3l6 6L9 21z"/><path class="acc" d="M7 13l2 2M10 10l2 2M13 7l2 2"/></symbol>
+<symbol id="i-reverse" viewBox="0 0 24 24"><path d="M4 8h16"/><path d="M20 16H4"/><path class="acc" d="M17 5l3 3-3 3M7 13l-3 3 3 3"/></symbol>
+<!-- anotação -->
+<symbol id="i-text" viewBox="0 0 24 24"><path d="M5 20 12 4l7 16M7.5 14h9"/><path class="acc" d="M3 22h18"/></symbol>
+<symbol id="i-mtext" viewBox="0 0 24 24"><path d="M3 5h18M3 10h18M3 15h12"/><path class="acc" d="M17 19a1 1 0 0 1 0-4M20 15v4"/></symbol>
+<symbol id="i-ddedit" viewBox="0 0 24 24"><path d="M4 18 9 6l5 12M5.8 14h6.4"/><path class="acc" d="M14 21l7-7-2-2-7 7v2z"/></symbol>
+<symbol id="i-find" viewBox="0 0 24 24"><path d="M3 6h9M3 11h6M3 16h5"/><circle class="acc" cx="15" cy="13" r="4"/><path class="acc" d="M18 16l3 3"/></symbol>
+<symbol id="i-spell" viewBox="0 0 24 24"><path d="M3 16 8 4l5 12M4.8 12h6.4"/><path class="acc" d="M13 17l3 3 5-6"/></symbol>
+<symbol id="i-textstyle" viewBox="0 0 24 24"><path d="M4 6h12M10 6v12"/><path class="acc" d="M15 12h5M17.5 12v7" stroke-width="1.3"/></symbol>
+<symbol id="i-dim" viewBox="0 0 24 24"><path d="M4 20V10M20 20V10"/><path class="acc" d="M4 14h16M4 14l3-2M4 14l3 2M20 14l-3-2M20 14l-3 2"/><path d="M10 7h4" stroke-width="1"/></symbol>
+<symbol id="i-dimaligned" viewBox="0 0 24 24"><path d="M3 15l5 5M13 5l5 5"/><path class="acc" d="M5 17L15 7M5 17l1-3M5 17l3-1M15 7l-1 3M15 7l-3 1"/></symbol>
+<symbol id="i-dimangular" viewBox="0 0 24 24"><path d="M4 20h16M4 20 16 6"/><path class="acc" d="M13 20a9 9 0 0 0-2.6-6.4"/></symbol>
+<symbol id="i-dimradius" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path class="acc" d="M12 12l6-5M18 7l-3 .5M18 7l-.5 3"/><circle class="fw" cx="12" cy="12" r="1.3" stroke="none"/></symbol>
+<symbol id="i-dimdiameter" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path class="acc" d="M6 18 18 6M18 6l-3 .5M18 6l-.5 3M6 18l3-.5M6 18l.5-3"/></symbol>
+<symbol id="i-centermark" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path class="acc" d="M12 3v18M3 12h18" stroke-dasharray="4 2 1 2"/></symbol>
+<symbol id="i-dimbreak" viewBox="0 0 24 24"><path d="M4 20V10M20 20V10"/><path class="acc" d="M4 14h5M15 14h5M4 14l3-2M4 14l3 2M20 14l-3-2M20 14l-3 2"/><path d="M12 8v12"/></symbol>
+<symbol id="i-dimcont" viewBox="0 0 24 24"><path d="M3 18V10M12 18V10M21 18V10"/><path class="acc" d="M3 14h18M6 12l-3 2 3 2M9 12l3 2-3 2M15 12l-3 2 3 2M18 12l3 2-3 2" stroke-width="1.2"/></symbol>
+<symbol id="i-dimstyle" viewBox="0 0 24 24"><path d="M4 16V8M14 16V8"/><path class="acc" d="M4 12h10"/><path class="acc" d="M17 15h4M19 13v4" stroke-width="1.3"/></symbol>
+<symbol id="i-leader" viewBox="0 0 24 24"><path d="M4 20 11 9h9"/><path class="acc" d="M4 20l1-4M4 20l4-1"/><path d="M14 5h6" stroke-width="1"/></symbol>
+<symbol id="i-mleaderstyle" viewBox="0 0 24 24"><path d="M4 20 10 10h6"/><path class="acc" d="M4 20l1-4M4 20l4-1"/><path class="acc" d="M17 6h4M19 4v4" stroke-width="1.3"/></symbol>
+<symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path d="M3 10h18M3 15h18M9 4v16M15 4v16"/><path class="acc" d="M3 4h18v6H3z"/></symbol>
+<symbol id="i-tablestyle" viewBox="0 0 24 24"><rect x="3" y="4" width="13" height="13"/><path d="M3 9h13M3 13h13M8 4v13"/><path class="acc" d="M17 17h4M19 15v4" stroke-width="1.3"/></symbol>
+<symbol id="i-dataextract" viewBox="0 0 24 24"><rect x="3" y="4" width="12" height="12"/><path d="M3 8h12M3 12h12M7 4v12"/><path class="acc" d="M15 19h6M18 16v6M15 10l6 6" stroke-width="1.2"/></symbol>
+<!-- camadas -->
+<symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 4 3 9l9 5 9-5z"/><path class="acc" d="M3 13l9 5 9-5"/><path d="M3 17l9 5 9-5"/></symbol>
+<symbol id="i-bulb" viewBox="0 0 24 24"><path class="yl" d="M9 18h6M10 21h4"/><path class="yl" d="M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 4H9c0-2 0-3-1-4z"/><path class="yl" d="M12 9v4" stroke-width="1"/></symbol>
+<symbol id="i-bulboff" viewBox="0 0 24 24"><path d="M9 18h6M10 21h4"/><path d="M8 14a6 6 0 1 1 8 0c-1 1-1 2-1 4H9c0-2 0-3-1-4z"/></symbol>
+<symbol id="i-freeze" viewBox="0 0 24 24"><path d="M12 3v18M4 7l16 10M4 17 20 7"/><path class="acc" d="M12 3l-2 2M12 3l2 2M12 21l-2-2M12 21l2-2"/></symbol>
+<symbol id="i-thaw" viewBox="0 0 24 24"><path d="M12 3v18M4 7l16 10M4 17 20 7" opacity=".45"/><path class="acc" d="M5 19l14-14"/></symbol>
+<symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path class="acc" d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+<symbol id="i-unlock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10"/><path class="acc" d="M8 11V7a4 4 0 0 1 8 0"/></symbol>
+<symbol id="i-layiso" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4-9 4z" opacity=".4"/><path class="acc" d="M3 14l9 4 9-4"/><path d="M3 18l9 4 9-4" opacity=".4"/></symbol>
+<symbol id="i-layuniso" viewBox="0 0 24 24"><path d="M3 8l9-4 9 4-9 4z"/><path class="acc" d="M3 14l9 4 9-4"/><path d="M3 18l9 4 9-4"/></symbol>
+<symbol id="i-laymch" viewBox="0 0 24 24"><path d="M3 9l6-3 6 3-6 3z"/><path class="acc" d="M15 9l6 3-6 3-6-3"/><path class="acc" d="M12 18l3 3 6-6"/></symbol>
+<symbol id="i-laycur" viewBox="0 0 24 24"><path d="M12 4 3 9l9 5 9-5z"/><path class="acc" d="M12 21l-4-4h8z"/></symbol>
+<symbol id="i-layon" viewBox="0 0 24 24"><path class="yl" d="M8 13a5 5 0 1 1 7 0c-1 1-1 2-1 3H9c0-1 0-2-1-3z"/><path class="yl" d="M9 19h5M10 21h3" stroke-width="1.2"/><path class="acc" d="M3 5l2 2M21 5l-2 2M12 2v2" stroke-width="1.2"/></symbol>
+<symbol id="i-laystate" viewBox="0 0 24 24"><path d="M12 4 3 9l9 5 9-5z"/><path class="acc" d="M5 15v4l7 3 7-3v-4"/></symbol>
+<symbol id="i-layprev" viewBox="0 0 24 24"><path d="M12 6 5 10l7 4 7-4z"/><path class="acc" d="M8 17H3v-5"/><path class="acc" d="M3 17a8 8 0 0 0 3.5 3"/></symbol>
+<symbol id="i-rename" viewBox="0 0 24 24"><path d="M3 6h18v12H3z"/><path class="acc" d="M8 9v6M6 9h4M6 15h4"/></symbol>
+<!-- blocos / referências -->
+<symbol id="i-insert" viewBox="0 0 24 24"><path d="M3 12l9-5 9 5-9 5z"/><path d="M3 12v5l9 5 9-5v-5"/><path class="acc" d="M12 2v8M9 7l3 3 3-3"/></symbol>
+<symbol id="i-block" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5 9-5V8"/><path class="acc" d="M12 13v8"/></symbol>
+<symbol id="i-bedit" viewBox="0 0 24 24"><path d="M3 8l9-5 9 5-9 5z"/><path d="M3 8v8l9 5"/><path class="acc" d="M13 20l8-8-2-2-8 8v2z"/></symbol>
+<symbol id="i-attr" viewBox="0 0 24 24"><path d="M4 20 10 6l6 14M6 15h8"/><path class="acc" d="M17 4h4M17 8h4M17 12h4"/></symbol>
+<symbol id="i-attrsync" viewBox="0 0 24 24"><path d="M4 18 9 6l5 12M6 14h6"/><path class="acc" d="M15 9a4 4 0 0 1 6 1M21 15a4 4 0 0 1-6-1M21 10V7M15 14v3" stroke-width="1.3"/></symbol>
+<symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path class="acc" d="M3 17l5-5 4 4 3-3 6 6"/><circle class="fw" cx="16" cy="9" r="1.8" stroke="none"/></symbol>
+<symbol id="i-xref" viewBox="0 0 24 24"><path d="M3 4h10v16H3z"/><path d="M6 8h4M6 12h4M6 16h4" stroke-width="1"/><path class="acc" d="M13 8h8M21 8l-3-3M21 8l-3 3" stroke-dasharray="2 1.5"/><path class="acc" d="M15 14h6v6h-6z"/></symbol>
+<symbol id="i-xrefpanel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M3 8h18"/><path class="acc" d="M6 12h5M6 15h7M6 18h4"/></symbol>
+<symbol id="i-clip" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" stroke-dasharray="2 2"/><path class="acc" d="M7 7h10v10H7z"/><path d="M8 11h8M9 14h6" stroke-width="1"/></symbol>
+<symbol id="i-clipoff" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path class="acc" d="M7 7h10v10H7z" stroke-dasharray="2 2"/><path class="acc" d="M5 19 19 5"/></symbol>
+<symbol id="i-importpdf" viewBox="0 0 24 24"><path d="M5 3h9l4 4v14H5z"/><path d="M14 3v4h4"/><path class="acc" d="M8 17v-6h2.5a1.5 1.5 0 0 1 0 3H8M13 11v6h1.5a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2z" stroke-width="1.3"/><path class="acc" d="M2 12l3 3-3 3" stroke-width="1.2"/></symbol>
+<symbol id="i-field" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10"/><path class="acc" d="M6 12h6M14 10v4M17 10v4" stroke-width="1.3"/></symbol>
+<symbol id="i-datalink" viewBox="0 0 24 24"><rect x="3" y="4" width="10" height="10"/><path d="M3 8h10M7 4v10"/><path class="acc" d="M10 17a3 3 0 0 0 3 3h5a3 3 0 0 0 0-6h-1M15 17a3 3 0 0 0-3-3" stroke-width="1.3"/></symbol>
+<symbol id="i-ole" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14"/><path class="acc" d="M7 15V9h3M13 15h3M13 9v6M17 9h3" stroke-width="1.3"/></symbol>
+<symbol id="i-updatefield" viewBox="0 0 24 24"><rect x="3" y="8" width="12" height="8"/><path class="acc" d="M15 5a5 5 0 0 1 5 5M20 19a5 5 0 0 1-5-5M20 10V7M15 14v3" stroke-width="1.3"/></symbol>
+<!-- propriedades / utilidades / clipboard -->
+<symbol id="i-matchprop" viewBox="0 0 24 24"><path d="M14 3l7 7-6 6-7-7z"/><path class="acc" d="M8 9 3 14l4 4 5-5"/><path class="acc" d="M4 21h6"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h2M4 12h2M4 18h2"/><path class="acc" d="M9 6h11M9 12h11M9 18h11"/></symbol>
+<symbol id="i-transp" viewBox="0 0 24 24"><rect x="3" y="3" width="10" height="10"/><rect class="acc" x="11" y="11" width="10" height="10" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-props" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M3 8h18M10 8v13"/><path class="acc" d="M13 12h5M13 16h5"/></symbol>
+<symbol id="i-group" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><circle class="acc" cx="9" cy="9" r="2.5"/><path class="acc" d="M13 13h5v5h-5z"/></symbol>
+<symbol id="i-ungroup" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><path d="M13 13h7v7h-7z"/><path class="acc" d="M10 14l-4 4M14 10l4-4"/></symbol>
+<symbol id="i-gedit" viewBox="0 0 24 24"><rect x="3" y="3" width="12" height="12" stroke-dasharray="3 2"/><path class="acc" d="M12 21l8-8-2-2-8 8v2z"/></symbol>
+<symbol id="i-gsel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" stroke-dasharray="3 2"/><path class="acc" d="M9 8l8 4-3 1 3 3-2 2-3-3-1 3z"/></symbol>
+<symbol id="i-dist" viewBox="0 0 24 24"><circle cx="5" cy="17" r="2"/><circle cx="19" cy="7" r="2"/><path class="acc" d="M6.5 15.5 17.5 8.5" stroke-dasharray="2 2"/></symbol>
+<symbol id="i-area" viewBox="0 0 24 24"><path d="M4 5h12l4 6-3 8H5z"/><path class="acc" d="M7 8l10 8M7 16l10-8" stroke-width="1" opacity=".8"/></symbol>
+<symbol id="i-id" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18"/><circle class="acc" cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-qselect" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z"/><path class="acc" d="M13 13l7 3-3 1 3 3-2 2-3-3-1 3z"/></symbol>
+<symbol id="i-selsim" viewBox="0 0 24 24"><circle cx="7" cy="7" r="3"/><circle class="acc" cx="17" cy="7" r="3"/><circle class="acc" cx="7" cy="17" r="3"/><circle class="acc" cx="17" cy="17" r="3"/></symbol>
+<symbol id="i-calc" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18"/><path d="M8 6h8v4H8z"/><path class="acc" d="M8 14h2M12 14h2M16 14h2M8 18h2M12 18h2M16 18h2"/></symbol>
+<symbol id="i-purge" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 14h8l1-14"/><path class="acc" d="M10 11v6M14 11v6"/></symbol>
+<symbol id="i-audit" viewBox="0 0 24 24"><path d="M5 3h9l4 4v14H5z"/><path d="M14 3v4h4"/><path class="acc" d="M8 14l3 3 5-6"/></symbol>
+<symbol id="i-units" viewBox="0 0 24 24"><path d="M3 9h18v6H3z"/><path class="acc" d="M6 9v3M9 9v2M12 9v3M15 9v2M18 9v3"/></symbol>
+<symbol id="i-paste" viewBox="0 0 24 24"><path d="M6 5h12v16H6z"/><path d="M9 3h6v4H9z"/><path class="acc" d="M9 12h6M9 16h6"/></symbol>
+<symbol id="i-cut" viewBox="0 0 24 24"><circle cx="7" cy="17" r="3"/><circle cx="17" cy="17" r="3"/><path class="acc" d="M9 15 19 3M15 15 5 3"/></symbol>
+<symbol id="i-copyclip" viewBox="0 0 24 24"><path d="M6 5h9v13H6z"/><path class="acc" d="M10 8h9v13h-9"/></symbol>
+<symbol id="i-copybase" viewBox="0 0 24 24"><path d="M6 5h9v13H6z"/><path class="acc" d="M10 8h9v13h-9"/><circle class="fw" cx="6" cy="18" r="2" stroke="none"/></symbol>
+<symbol id="i-pasteblock" viewBox="0 0 24 24"><path d="M6 5h12v16H6z"/><path d="M9 3h6v4H9z"/><path class="acc" d="M9 13l3-2 3 2-3 2z"/></symbol>
+<!-- view / status -->
+<symbol id="i-zoomin" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5"/><path class="acc" d="M10 7v6M7 10h6"/></symbol>
+<symbol id="i-zoomout" viewBox="0 0 24 24"><circle cx="10" cy="10" r="6"/><path d="M15 15l5 5"/><path class="acc" d="M7 10h6"/></symbol>
+<symbol id="i-zoomext" viewBox="0 0 24 24"><path d="M3 8V3h5M16 3h5v5M21 16v5h-5M8 21H3v-5"/><rect class="acc" x="8" y="8" width="8" height="8"/></symbol>
+<symbol id="i-zoomwin" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" stroke-dasharray="2 2"/><circle class="acc" cx="11" cy="11" r="4"/><path class="acc" d="M14 14l4 4"/></symbol>
+<symbol id="i-pan" viewBox="0 0 24 24"><path d="M9 11V5a1.5 1.5 0 0 1 3 0v6M12 6a1.5 1.5 0 0 1 3 0v6M15 8a1.5 1.5 0 0 1 3 0v7a6 6 0 0 1-12 0v-3"/><path class="acc" d="M6 12l3 2v-3"/></symbol>
+<symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h18v18H3z"/><path class="acc" d="M9 3v18M15 3v18M3 9h18M3 15h18" stroke-width="1"/></symbol>
+<symbol id="i-snap" viewBox="0 0 24 24"><path d="M6 6h.01M12 6h.01M18 6h.01M6 12h.01M18 12h.01M6 18h.01M12 18h.01M18 18h.01" stroke-width="2.4"/><rect class="acc" x="9" y="9" width="6" height="6"/></symbol>
+<symbol id="i-ortho" viewBox="0 0 24 24"><path d="M4 20V4M4 20h16"/><path class="acc" d="M4 8h4v-4" stroke-width="1.2"/><path class="acc" d="M12 12h8M12 12v-8"/></symbol>
+<symbol id="i-polar" viewBox="0 0 24 24"><path d="M4 20h16"/><path class="acc" d="M4 20 18 6M4 20l10-4"/><path d="M10 20a6 6 0 0 0-1.5-4" stroke-width="1"/></symbol>
+<symbol id="i-osnap" viewBox="0 0 24 24"><path d="M4 18 20 6"/><rect class="acc" x="8" y="9" width="8" height="8" transform="rotate(-37 12 13)"/></symbol>
+<symbol id="i-otrack" viewBox="0 0 24 24"><path d="M4 20V4"/><path class="acc" d="M4 12h16" stroke-dasharray="2 2"/><path class="acc" d="M17 9l3 3-3 3"/><circle class="fw" cx="4" cy="12" r="1.5" stroke="none"/></symbol>
+<symbol id="i-dyn" viewBox="0 0 24 24"><path d="M3 20 13 8"/><rect class="acc" x="12" y="4" width="9" height="6"/><path class="acc" d="M14 7h5" stroke-width="1"/></symbol>
+<symbol id="i-lwt" viewBox="0 0 24 24"><path d="M4 6h16" stroke-width="1"/><path d="M4 11h16" stroke-width="2"/><path class="acc" d="M4 17h16" stroke-width="3.5"/></symbol>
+<symbol id="i-isodraft" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path class="acc" d="M12 12l8-4.5M12 12 4 7.5M12 12v9"/></symbol>
+<symbol id="i-model" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path class="acc" d="M3 9h18M8 4v16" stroke-width="1"/></symbol>
+<symbol id="i-viewports" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path class="acc" d="M12 3v18M3 12h9"/></symbol>
+<symbol id="i-ucs" viewBox="0 0 24 24"><path d="M5 19h14M5 19V5"/><path class="acc" d="M19 19l-3-3M19 19l-3 3M5 5 2 8M5 5l3 3" stroke-width="1.2"/><rect class="fw" x="3" y="17" width="4" height="4" stroke="none"/></symbol>
+<symbol id="i-viewcube" viewBox="0 0 24 24"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12 4 7.5M12 12v9"/><path class="acc" d="M8 9.7l4 2.3 4-2.3" stroke-width="1"/></symbol>
+<symbol id="i-navbar" viewBox="0 0 24 24"><rect x="8" y="3" width="8" height="18"/><path class="acc" d="M12 6v.01M12 10v.01M12 14v.01M12 18v.01" stroke-width="2.4"/></symbol>
+<symbol id="i-namedview" viewBox="0 0 24 24"><path d="M3 12s3-6 9-6 9 6 9 6-3 6-9 6-9-6-9-6z"/><circle class="acc" cx="12" cy="12" r="3"/></symbol>
+<symbol id="i-cmdline" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14"/><path class="acc" d="M6 9l3 3-3 3M11 15h6"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path class="acc" d="M12 7v5l3 3"/></symbol>
+<symbol id="i-palette" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M8 3v18"/><path class="acc" d="M11 7h7M11 11h7M11 15h5"/></symbol>
+<symbol id="i-toolpal" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18"/><path d="M8 3v18"/><path class="acc" d="M11 7h3v3h-3zM15 7h3v3h-3zM11 12h3v3h-3zM15 12h3v3h-3z" stroke-width="1.2"/></symbol>
+<symbol id="i-cui" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16"/><path d="M3 9h18"/><path class="acc" d="M6 6.5h.01M9 6.5h.01" stroke-width="2.2"/><path class="acc" d="M6 13h5v4H6z"/></symbol>
+<symbol id="i-loadapp" viewBox="0 0 24 24"><path d="M4 10V4h16v6"/><path d="M4 14v6h16v-6"/><path class="acc" d="M4 12h16M12 7v10"/></symbol>
+<symbol id="i-options" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path class="acc" d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></symbol>
+<symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path class="acc" d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.01" stroke-width="1.6"/></symbol>
+<symbol id="i-pin" viewBox="0 0 24 24"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path class="acc" d="M12 14v7"/></symbol>
+<symbol id="i-repeat" viewBox="0 0 24 24"><path d="M4 12a8 8 0 0 1 14-5"/><path class="acc" d="M18 3v4h-4"/><path d="M20 12a8 8 0 0 1-14 5"/><path class="acc" d="M6 21v-4h4"/></symbol>
+<symbol id="i-deselect" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" stroke-dasharray="3 2"/><path class="acc" d="M9 9l6 6M15 9l-6 6"/></symbol>
+<symbol id="i-draworder" viewBox="0 0 24 24"><rect x="3" y="3" width="11" height="11"/><rect class="acc" x="10" y="10" width="11" height="11" fill="#2b2b2b"/></symbol>
+<symbol id="i-addsel" viewBox="0 0 24 24"><circle cx="9" cy="9" r="4"/><path class="acc" d="M16 12v8M12 16h8"/></symbol>
+</svg>
+
+<main>
+<div class="eyebrow">NewSIcad · proposta visual · setembro de 2026</div>
+<h1>Ribbon NewSIcad 2.15</h1>
+<p class="lead">Menu superior do NewSIcad redesenhado sobre a planta do ribbon do AutoCAD 2020, com um conjunto novo de ícones em SVG. Esta página é a especificação visual: o que for aprovado aqui vira o port para Qt na etapa seguinte. Nada no código do NewSIcad foi alterado.</p>
+<div class="meta"><span><b>Base</b> NewSIcad 2.14.0, PySide6, tema escuro fixo</span><span><b>Referência</b> AutoCAD 2020, workspace Drafting &amp; Annotation, tema dark</span><span><b>Ícones</b> <span id="count">…</span> símbolos, grade 24 px, traço 1,5 px</span></div>
+
+<h2>1. O ribbon em tamanho real</h2>
+<p>Largura de 1420 px, escala 1:1 em zoom 100 %. Role para o lado se não couber. As abas são clicáveis. Botões apagados são comandos que o AutoCAD tem e o NewSIcad ainda não; eles ficam no mesmo lugar, desabilitados com tooltip, como manda o README.</p>
+<div class="ctl">
+  <span>Estilo de cor</span>
+  <span class="seg" role="group" aria-label="Estilo de cor"><button class="on" data-style="b">B · famílias coloridas</button><button data-style="a">A · AutoCAD neutro + azul</button></span>
+  <span style="color:var(--ink3)">Escolha de 03/09: estilo B.</span>
+</div>
+
+<div class="frame"><div class="app b" id="app">
+<div class="title">
+  <div class="appbtn" title="Menu do aplicativo"><img alt="NewSI" src="data:image/x-icon;base64,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"></div>
+  <div class="qat"><div class="q" title="New (Ctrl+N)"><svg><use href="#i-new"/></svg></div><div class="q" title="Open (Ctrl+O)"><svg><use href="#i-open"/></svg></div><div class="q" title="Save (Ctrl+S)"><svg><use href="#i-save"/></svg></div><div class="q" title="Save As (Ctrl+Shift+S)"><svg><use href="#i-saveas"/></svg></div><div class="q" title="Plot / Export PDF (Ctrl+P)"><svg><use href="#i-plot"/></svg></div><div class="q" title="Undo (Ctrl+Z)"><svg><use href="#i-undo"/></svg></div><span class="v">▾</span><div class="q" title="Redo (Ctrl+Y)"><svg><use href="#i-redo"/></svg></div><span class="v">▾</span></div>
+  <div class="ws">Drafting &amp; Annotation ▾</div>
+  <div class="ttl">NewSIcad 2.15 &nbsp;&nbsp; CASA PAU BRASIL R01.dwg</div>
+  <div class="srch"><svg viewBox="0 0 24 24"><use href="#i-search"/></svg>Type a command</div>
+</div>
+<div class="tabs" role="tablist">
+  <span class="tab on" role="tab" tabindex="0" data-tab="home">Home</span><span class="tab" role="tab" tabindex="0" data-tab="insert">Insert</span><span class="tab" role="tab" tabindex="0" data-tab="annotate">Annotate</span><span class="tab dim">Parametric</span><span class="tab" role="tab" tabindex="0" data-tab="view">View</span><span class="tab" role="tab" tabindex="0" data-tab="manage">Manage</span><span class="tab" role="tab" tabindex="0" data-tab="output">Output</span><span class="tab dim">Add-ins</span><span class="tab dim">Collaborate</span><span class="tab dim">Express Tools</span><span class="tab dim">Featured Apps</span><span class="tab">▾</span>
+</div>
+
+<!-- HOME -->
+<div class="row on" data-row="home">
+<div class="panel dr"><div class="pb">
+  <div class="lg"><svg><use href="#i-line"/></svg>Line</div>
+  <div class="lg"><svg><use href="#i-pline"/></svg>Polyline</div>
+  <div class="lg"><svg><use href="#i-circle"/></svg>Circle<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-arc"/></svg>Arc<span class="v">▾</span></div>
+  <div class="col"><div class="io" title="Rectangle / Polygon"><svg><use href="#i-rect"/></svg><span class="v">▾</span></div><div class="io" title="Ellipse"><svg><use href="#i-ellipse"/></svg><span class="v">▾</span></div><div class="io" title="Hatch / Boundary"><svg><use href="#i-hatch"/></svg><span class="v">▾</span></div></div>
+</div><div class="pt">Draw&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel md"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-move"/></svg>Move</div><div class="sm"><svg><use href="#i-copy"/></svg>Copy</div><div class="sm"><svg><use href="#i-stretch"/></svg>Stretch</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-rotate"/></svg>Rotate</div><div class="sm"><svg><use href="#i-mirror"/></svg>Mirror</div><div class="sm"><svg><use href="#i-scale"/></svg>Scale</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-trim"/></svg>Trim<span class="v">▾</span></div><div class="sm"><svg><use href="#i-fillet"/></svg>Fillet<span class="v">▾</span></div><div class="sm"><svg><use href="#i-array"/></svg>Array<span class="v">▾</span></div></div>
+  <div class="col"><div class="io" title="Erase"><svg><use href="#i-erase"/></svg></div><div class="io" title="Explode"><svg><use href="#i-explode"/></svg></div><div class="io" title="Offset"><svg><use href="#i-offset"/></svg></div></div>
+</div><div class="pt">Modify&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel an"><div class="pb">
+  <div class="lg"><svg><use href="#i-text"/></svg>Text<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-dim"/></svg>Dimension<span class="v">▾</span></div>
+  <div class="col"><div class="sm"><svg><use href="#i-dim"/></svg>Linear<span class="v">▾</span></div><div class="sm"><svg><use href="#i-leader"/></svg>Leader<span class="v">▾</span></div><div class="sm"><svg><use href="#i-table"/></svg>Table</div></div>
+</div><div class="pt">Annotation&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-layers"/></svg>Layer<br>Properties</div>
+  <div class="col">
+    <div class="cb" style="width:176px"><svg><use href="#i-bulb"/></svg><svg><use href="#i-thaw"/></svg><svg><use href="#i-unlock"/></svg><span class="sw"></span><span>0</span><span class="ar">▾</span></div>
+    <div style="display:flex"><div class="io" title="Off"><svg><use href="#i-bulboff"/></svg></div><div class="io" title="Isolate"><svg><use href="#i-layiso"/></svg></div><div class="io off" title="Freeze (não implementado)"><svg><use href="#i-freeze"/></svg></div><div class="io" title="Lock"><svg><use href="#i-lock"/></svg></div><div class="io" title="Match Layer"><svg><use href="#i-laymch"/></svg></div><div class="io off" title="Layer States (não implementado)"><svg><use href="#i-laystate"/></svg><span class="v">▾</span></div></div>
+    <div style="display:flex"><div class="io" title="Make Current"><svg><use href="#i-laycur"/></svg></div><div class="io" title="Unisolate"><svg><use href="#i-layuniso"/></svg></div><div class="io" title="Turn All Layers On"><svg><use href="#i-layon"/></svg></div><div class="io" title="Unlock"><svg><use href="#i-unlock"/></svg></div><div class="io" title="Rename"><svg><use href="#i-rename"/></svg></div><div class="io off" title="Previous (não implementado)"><svg><use href="#i-layprev"/></svg></div></div>
+  </div>
+</div><div class="pt">Layers&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel bl"><div class="pb">
+  <div class="lg"><svg><use href="#i-insert"/></svg>Insert<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-block"/></svg>Create</div>
+  <div class="lg"><svg><use href="#i-bedit"/></svg>Edit</div>
+  <div class="col off"><div class="io" title="Define Attributes"><svg><use href="#i-attr"/></svg></div><div class="io" title="Manage Attributes"><svg><use href="#i-attr"/></svg><span class="v">▾</span></div><div class="io" title="Attribute Sync"><svg><use href="#i-attrsync"/></svg></div></div>
+</div><div class="pt">Block&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-matchprop"/></svg>Match<br>Properties</div>
+  <div class="col off">
+    <div class="cb" style="width:124px"><span class="sw"></span><span>ByLayer</span><span class="ar">▾</span></div>
+    <div class="cb" style="width:124px"><span style="width:28px;border-top:1.5px solid #d0d0d0"></span><span>ByLayer</span><span class="ar">▾</span></div>
+    <div class="cb" style="width:124px"><span style="width:28px;border-top:3px solid #d0d0d0"></span><span>ByLayer</span><span class="ar">▾</span></div>
+  </div>
+  <div class="col"><div class="io off" title="Transparency"><svg><use href="#i-transp"/></svg></div><div class="io" title="List / Properties"><svg><use href="#i-list"/></svg></div></div>
+</div><div class="pt">Properties&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="lg"><svg><use href="#i-group"/></svg>Group</div>
+  <div class="col"><div class="sm"><svg><use href="#i-ungroup"/></svg>Ungroup</div><div class="sm"><svg><use href="#i-gedit"/></svg>Group Edit</div><div class="sm"><svg><use href="#i-gsel"/></svg>Group Selection</div></div>
+</div><div class="pt">Groups&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-measure"/></svg>Measure<span class="v">▾</span></div>
+  <div class="col"><div class="sm"><svg><use href="#i-qselect"/></svg>Quick Select</div><div class="sm off"><svg><use href="#i-calc"/></svg>Quick Calculator</div><div class="sm"><svg><use href="#i-id"/></svg>ID Point</div></div>
+</div><div class="pt">Utilities&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-paste"/></svg>Paste<span class="v">▾</span></div>
+  <div class="col"><div class="io" title="Cut"><svg><use href="#i-cut"/></svg></div><div class="io" title="Copy Clip"><svg><use href="#i-copyclip"/></svg></div><div class="io" title="Copy with Base Point"><svg><use href="#i-copybase"/></svg></div></div>
+</div><div class="pt">Clipboard</div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="col"><div class="io" title="UCS Icon"><svg><use href="#i-ucs"/></svg></div><div class="io" title="View Cube"><svg><use href="#i-viewcube"/></svg></div><div class="io" title="Navigation Bar"><svg><use href="#i-navbar"/></svg></div></div>
+</div><div class="pt">View&nbsp;▾</div></div>
+</div>
+
+<!-- INSERT -->
+<div class="row" data-row="insert">
+<div class="panel bl"><div class="pb">
+  <div class="lg"><svg><use href="#i-insert"/></svg>Insert<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-block"/></svg>Create<br>Block</div>
+  <div class="lg"><svg><use href="#i-bedit"/></svg>Block<br>Editor</div>
+  <div class="col off"><div class="sm"><svg><use href="#i-attr"/></svg>Define Attributes</div><div class="sm"><svg><use href="#i-attr"/></svg>Manage Attributes</div><div class="sm"><svg><use href="#i-attrsync"/></svg>Attribute Sync</div></div>
+</div><div class="pt">Block Definition&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-xref"/></svg>Attach<br>XREF</div>
+  <div class="lg"><svg><use href="#i-image"/></svg>Attach<br>Image</div>
+  <div class="lg"><svg><use href="#i-clip"/></svg>Clip</div>
+  <div class="col"><div class="sm"><svg><use href="#i-xrefpanel"/></svg>External References</div><div class="sm"><svg><use href="#i-clipoff"/></svg>Remove Clip</div><div class="sm off"><svg><use href="#i-clip"/></svg>Frames<span class="v">▾</span></div></div>
+</div><div class="pt">Reference&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-importpdf"/></svg>PDF<br>Import</div>
+  <div class="lg off"><svg><use href="#i-open"/></svg>Import</div>
+</div><div class="pt">Import</div></div>
+<div class="sep"></div>
+<div class="panel bl"><div class="pb">
+  <div class="lg"><svg><use href="#i-field"/></svg>Field</div>
+  <div class="lg"><svg><use href="#i-datalink"/></svg>Data<br>Link</div>
+  <div class="col"><div class="sm off"><svg><use href="#i-ole"/></svg>OLE Object</div><div class="sm off"><svg><use href="#i-updatefield"/></svg>Update Fields</div><div class="sm off"><svg><use href="#i-dataextract"/></svg>Extract Data</div></div>
+</div><div class="pt">Data&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="lg"><svg><use href="#i-namedview"/></svg>Attach</div>
+  <div class="col"><div class="sm"><svg><use href="#i-clip"/></svg>Crop</div><div class="sm"><svg><use href="#i-list"/></svg>Point Cloud Manager</div></div>
+</div><div class="pt">Point Cloud&nbsp;▾</div></div>
+</div>
+
+<!-- ANNOTATE -->
+<div class="row" data-row="annotate">
+<div class="panel an"><div class="pb">
+  <div class="lg"><svg><use href="#i-mtext"/></svg>Multiline<br>Text<span class="v">▾</span></div>
+  <div class="col">
+    <div class="cb" style="width:150px"><svg><use href="#i-textstyle"/></svg><span>Standard</span><span class="ar">▾</span></div>
+    <div class="cb" style="width:150px"><svg><use href="#i-text"/></svg><span>2.5</span><span class="ar">▾</span></div>
+    <div style="display:flex"><div class="io" title="Find text"><svg><use href="#i-find"/></svg></div><div class="io" title="Edit text"><svg><use href="#i-ddedit"/></svg></div><div class="io off" title="Check Spelling"><svg><use href="#i-spell"/></svg></div></div>
+  </div>
+</div><div class="pt">Text&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel an"><div class="pb">
+  <div class="lg"><svg><use href="#i-dim"/></svg>Dimension</div>
+  <div class="col">
+    <div class="cb" style="width:150px"><svg><use href="#i-dimstyle"/></svg><span>NEW SI</span><span class="ar">▾</span></div>
+    <div style="display:flex"><div class="sm"><svg><use href="#i-dim"/></svg>Linear<span class="v">▾</span></div><div class="io" title="Aligned"><svg><use href="#i-dimaligned"/></svg></div><div class="io" title="Angular"><svg><use href="#i-dimangular"/></svg></div></div>
+    <div style="display:flex"><div class="sm"><svg><use href="#i-dimradius"/></svg>Radius<span class="v">▾</span></div><div class="io" title="Diameter"><svg><use href="#i-dimdiameter"/></svg></div><div class="io off" title="Continue"><svg><use href="#i-dimcont"/></svg></div></div>
+  </div>
+  <div class="col"><div class="io" title="Center Mark"><svg><use href="#i-centermark"/></svg></div><div class="io" title="Dimension Break"><svg><use href="#i-dimbreak"/></svg></div><div class="io" title="Distance"><svg><use href="#i-dist"/></svg></div></div>
+</div><div class="pt">Dimensions&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel an"><div class="pb">
+  <div class="lg"><svg><use href="#i-leader"/></svg>Leader</div>
+  <div class="col">
+    <div class="cb" style="width:150px"><svg><use href="#i-mleaderstyle"/></svg><span>Standard</span><span class="ar">▾</span></div>
+    <div class="col off"><div class="sm"><svg><use href="#i-addsel"/></svg>Add Leader</div><div class="sm"><svg><use href="#i-align"/></svg>Align</div></div>
+  </div>
+</div><div class="pt">Leaders&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel an"><div class="pb">
+  <div class="lg"><svg><use href="#i-table"/></svg>Table</div>
+  <div class="col">
+    <div class="cb" style="width:150px"><svg><use href="#i-tablestyle"/></svg><span>Standard</span><span class="ar">▾</span></div>
+    <div class="col off"><div class="sm"><svg><use href="#i-dataextract"/></svg>Extract Data</div><div class="sm"><svg><use href="#i-datalink"/></svg>Link Data</div></div>
+  </div>
+</div><div class="pt">Tables&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel dr"><div class="pb">
+  <div class="lg"><svg><use href="#i-revcloud"/></svg>Revision<br>Cloud<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-wipeout"/></svg>Wipeout</div>
+</div><div class="pt">Markup</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="col">
+    <div class="cb" style="width:96px"><span>1:100</span><span class="ar">▾</span></div>
+    <div class="sm off"><svg><use href="#i-addsel"/></svg>Add Current Scale</div>
+    <div class="sm off"><svg><use href="#i-list"/></svg>Scale List</div>
+  </div>
+</div><div class="pt">Annotation Scaling&nbsp;▾</div></div>
+</div>
+
+<!-- VIEW -->
+<div class="row" data-row="view">
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-zoomext"/></svg>Extents</div>
+  <div class="col"><div class="sm"><svg><use href="#i-zoomin"/></svg>Zoom In</div><div class="sm"><svg><use href="#i-zoomout"/></svg>Zoom Out</div><div class="sm"><svg><use href="#i-pan"/></svg>Pan</div></div>
+</div><div class="pt">Navigate</div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-ucs"/></svg>UCS Icon</div><div class="sm"><svg><use href="#i-viewcube"/></svg>View Cube</div><div class="sm"><svg><use href="#i-navbar"/></svg>Navigation Bar</div></div>
+</div><div class="pt">Viewport Tools&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-viewports"/></svg>Viewport<br>Configuration<span class="v">▾</span></div>
+  <div class="col off"><div class="sm"><svg><use href="#i-model"/></svg>Restore</div><div class="sm"><svg><use href="#i-join"/></svg>Join</div><div class="sm"><svg><use href="#i-namedview"/></svg>Named</div></div>
+</div><div class="pt">Model Viewports</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-props"/></svg>Properties</div>
+  <div class="lg"><svg><use href="#i-layers"/></svg>Layers</div>
+  <div class="lg"><svg><use href="#i-cmdline"/></svg>Command<br>Line</div>
+  <div class="col"><div class="sm"><svg><use href="#i-history"/></svg>History</div><div class="sm"><svg><use href="#i-xrefpanel"/></svg>External References</div><div class="sm off"><svg><use href="#i-toolpal"/></svg>Tool Palettes</div></div>
+</div><div class="pt">Palettes&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-grid"/></svg>Grid</div><div class="sm"><svg><use href="#i-snap"/></svg>Snap</div><div class="sm"><svg><use href="#i-ortho"/></svg>Ortho</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-polar"/></svg>Polar</div><div class="sm"><svg><use href="#i-osnap"/></svg>Object Snap</div><div class="sm"><svg><use href="#i-dyn"/></svg>Dynamic Input</div></div>
+</div><div class="pt">Drafting Settings<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-viewports"/></svg>Tile Vertically</div><div class="sm"><svg><use href="#i-viewports"/></svg>Tile Horizontally</div><div class="sm"><svg><use href="#i-copy"/></svg>Cascade</div></div>
+</div><div class="pt">Interface</div></div>
+</div>
+
+<!-- MANAGE -->
+<div class="row" data-row="manage">
+<div class="panel nt off"><div class="pb">
+  <div class="lg"><svg><use href="#i-history"/></svg>Record</div>
+  <div class="col"><div class="sm"><svg><use href="#i-list"/></svg>Play</div><div class="sm"><svg><use href="#i-options"/></svg>Preference</div></div>
+</div><div class="pt">Action Recorder&nbsp;▾</div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="lg"><svg><use href="#i-cui"/></svg>User<br>Interface</div>
+  <div class="lg"><svg><use href="#i-toolpal"/></svg>Tool<br>Palettes</div>
+</div><div class="pt">Customization</div></div>
+<div class="sep"></div>
+<div class="panel nt off"><div class="pb">
+  <div class="lg"><svg><use href="#i-loadapp"/></svg>Load<br>Application</div>
+</div><div class="pt">Applications</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-purge"/></svg>Purge</div>
+  <div class="col"><div class="sm off"><svg><use href="#i-audit"/></svg>Audit</div><div class="sm"><svg><use href="#i-units"/></svg>Drawing Units</div><div class="sm"><svg><use href="#i-rename"/></svg>Rename</div></div>
+</div><div class="pt">Cleanup</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-options"/></svg>Options</div>
+  <div class="lg"><svg><use href="#i-help"/></svg>Help</div>
+</div><div class="pt">Settings</div></div>
+</div>
+
+<!-- OUTPUT -->
+<div class="row" data-row="output">
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-plot"/></svg>Plot</div>
+  <div class="lg off"><svg><use href="#i-batchplot"/></svg>Batch<br>Plot</div>
+  <div class="col"><div class="sm off"><svg><use href="#i-preview"/></svg>Preview</div><div class="sm off"><svg><use href="#i-pagesetup"/></svg>Page Setup</div><div class="sm off"><svg><use href="#i-plot"/></svg>Plotter Manager</div></div>
+</div><div class="pt">Plot&nbsp;▾<span class="ln">↘</span></div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-exportpdf"/></svg>Export<br>PDF<span class="v">▾</span></div>
+  <div class="lg"><svg><use href="#i-exportdwg"/></svg>Export<br>DWG</div>
+  <div class="col off"><div class="sm"><svg><use href="#i-pagesetup"/></svg>Page Setup</div><div class="sm"><svg><use href="#i-preview"/></svg>Preview</div></div>
+</div><div class="pt">Export to DWG/PDF</div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="lg"><svg><use href="#i-closetab"/></svg>Close<br>Tab</div>
+</div><div class="pt">Window</div></div>
+</div>
+
+<div class="ftabs"><span class="ft">Start</span><span class="ft on">CASA PAU BRASIL R01*</span><span class="ft">ANA BEATRIZ R01</span><span class="ft">+</span></div>
+<div class="canvas"></div>
+</div></div>
+<p class="figcap">Abas Parametric, Add-ins, Collaborate, Express Tools e Featured Apps ficam apagadas: existem no AutoCAD, não terão função no NewSIcad. Os painéis Groups, View (Home), Point Cloud, Viewport Tools, Interface, Action Recorder, Customization e Applications estão inteiros desabilitados pelo mesmo motivo.</p>
+
+<h3>Painéis expandidos (slide-out do título ▾)</h3>
+<p>No AutoCAD, clicar no título do painel abre uma segunda linha com os comandos secundários; o pino mantém aberta. É aqui que ficam os comandos que hoje estão só no menu clássico do NewSIcad.</p>
+<div class="frame"><div class="app b" data-styled>
+<div class="row on" style="min-height:0">
+<div class="panel dr"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-spline"/></svg>Spline<span class="v">▾</span></div><div class="sm"><svg><use href="#i-xline"/></svg>Construction Line</div><div class="sm"><svg><use href="#i-ray"/></svg>Ray</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-point"/></svg>Point<span class="v">▾</span></div><div class="sm"><svg><use href="#i-donut"/></svg>Donut</div><div class="sm"><svg><use href="#i-mline"/></svg>Multiline</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-revcloud"/></svg>Revision Cloud<span class="v">▾</span></div><div class="sm"><svg><use href="#i-wipeout"/></svg>Wipeout</div><div class="sm"><svg><use href="#i-boundary"/></svg>Boundary</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-polygon"/></svg>Polygon</div><div class="sm off"><svg><use href="#i-region"/></svg>Region</div><div class="sm off"><svg><use href="#i-gradient"/></svg>Gradient</div></div>
+</div><div class="pt">Draw&nbsp;▴ &nbsp;<svg style="width:12px;height:12px" viewBox="0 0 24 24"><use href="#i-pin"/></svg></div></div>
+<div class="sep"></div>
+<div class="panel md"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-extend"/></svg>Extend</div><div class="sm"><svg><use href="#i-chamfer"/></svg>Chamfer</div><div class="sm"><svg><use href="#i-break"/></svg>Break</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-breakpt"/></svg>Break at Point</div><div class="sm"><svg><use href="#i-join"/></svg>Join</div><div class="sm"><svg><use href="#i-lengthen"/></svg>Lengthen</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-pedit"/></svg>Edit Polyline</div><div class="sm"><svg><use href="#i-hatchedit"/></svg>Edit Hatch</div><div class="sm"><svg><use href="#i-ddedit"/></svg>Edit Text</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-align"/></svg>Align</div><div class="sm"><svg><use href="#i-divide"/></svg>Divide</div><div class="sm"><svg><use href="#i-measure"/></svg>Measure</div></div>
+  <div class="col off"><div class="sm"><svg><use href="#i-layers"/></svg>Set to ByLayer</div><div class="sm"><svg><use href="#i-model"/></svg>Change Space</div><div class="sm"><svg><use href="#i-reverse"/></svg>Reverse</div></div>
+</div><div class="pt">Modify&nbsp;▴ &nbsp;<svg style="width:12px;height:12px" viewBox="0 0 24 24"><use href="#i-pin"/></svg></div></div>
+<div class="sep"></div>
+<div class="panel an"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-textstyle"/></svg>Text Style</div><div class="sm"><svg><use href="#i-dimstyle"/></svg>Dimension Style</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-mleaderstyle"/></svg>Multileader Style</div><div class="sm"><svg><use href="#i-tablestyle"/></svg>Table Style</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-dimaligned"/></svg>Aligned</div><div class="sm"><svg><use href="#i-dimangular"/></svg>Angular</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-dimradius"/></svg>Radius</div><div class="sm"><svg><use href="#i-dimdiameter"/></svg>Diameter</div></div>
+</div><div class="pt">Annotation&nbsp;▴ &nbsp;<svg style="width:12px;height:12px" viewBox="0 0 24 24"><use href="#i-pin"/></svg></div></div>
+<div class="sep"></div>
+<div class="panel nt"><div class="pb">
+  <div class="col"><div class="sm"><svg><use href="#i-dist"/></svg>Distance</div><div class="sm"><svg><use href="#i-area"/></svg>Area</div><div class="sm"><svg><use href="#i-id"/></svg>ID Point</div></div>
+  <div class="col"><div class="sm"><svg><use href="#i-selsim"/></svg>Select Similar</div><div class="sm"><svg><use href="#i-deselect"/></svg>Deselect All</div><div class="sm"><svg><use href="#i-purge"/></svg>Purge</div></div>
+</div><div class="pt">Utilities&nbsp;▴ &nbsp;<svg style="width:12px;height:12px" viewBox="0 0 24 24"><use href="#i-pin"/></svg></div></div>
+</div></div></div>
+
+<h2>2. Status bar</h2>
+<p>Como no AutoCAD: só ícones, azul quando ligado, ▾ nos que têm configuração, apagados os que o NewSIcad não tem. Coordenadas à esquerda em fonte monoespaçada, escala de anotação e a marca à direita.</p>
+<div class="frame"><div class="sb b" data-styled>
+  <span class="coord">1234.5678, 987.6543, 0.0000</span>
+  <span class="sp"></span>
+  <span class="tg on" title="Model / Paper"><svg><use href="#i-model"/></svg>MODEL</span>
+  <span class="tg on" title="Grid (F7)"><svg><use href="#i-grid"/></svg></span>
+  <span class="tg" title="Snap (F9)"><svg><use href="#i-snap"/></svg><span class="v">▾</span></span>
+  <span class="tg on" title="Dynamic Input (F12)"><svg><use href="#i-dyn"/></svg></span>
+  <span class="tg" title="Ortho (F8)"><svg><use href="#i-ortho"/></svg></span>
+  <span class="tg on" title="Polar Tracking (F10)"><svg><use href="#i-polar"/></svg><span class="v">▾</span></span>
+  <span class="tg off" title="Isometric Drafting"><svg><use href="#i-isodraft"/></svg><span class="v">▾</span></span>
+  <span class="tg off" title="Object Snap Tracking (F11)"><svg><use href="#i-otrack"/></svg></span>
+  <span class="tg on" title="Object Snap (F3)"><svg><use href="#i-osnap"/></svg><span class="v">▾</span></span>
+  <span class="tg off" title="Lineweight"><svg><use href="#i-lwt"/></svg></span>
+  <span class="tg off" title="Transparency"><svg><use href="#i-transp"/></svg></span>
+  <span class="tg" title="Annotation scale"><svg><use href="#i-text"/></svg>1:100<span class="v">▾</span></span>
+  <span class="tg" title="Workspace"><svg><use href="#i-options"/></svg><span class="v">▾</span></span>
+  <span class="tg" title="Units"><svg><use href="#i-units"/></svg></span>
+  <span class="tg" title="Customization"><svg><use href="#i-list"/></svg></span>
+  <span class="brand">NewSIcad 2.15 · Developed by HRichter</span>
+</div></div>
+<p class="figcap">Ligados de fábrica: MODEL, GRID, DYN, POLAR, OSNAP (como o AutoCAD). No NewSIcad hoje GRID e DYN nascem ligados; POLAR e OSNAP passariam a nascer ligados também.</p>
+
+<h2>3. Menu de contexto do canvas</h2>
+<p>Botão direito com uma seleção ativa. Segue a ordem do AutoCAD; os itens que o NewSIcad já tem estão em cor cheia.</p>
+<div class="stage b" data-styled>
+  <div class="menu nt">
+    <div class="mi"><svg><use href="#i-repeat"/></svg>Repeat LINE</div>
+    <div class="mi dis"><svg><use href="#i-history"/></svg>Recent Input<span class="k">▸</span></div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-paste"/></svg>Clipboard<span class="k">▸</span></div>
+    <div class="mi"><svg><use href="#i-layiso"/></svg>Isolate<span class="k">▸</span></div>
+    <div class="msep"></div>
+    <div class="mi md"><svg><use href="#i-erase"/></svg><span style="color:#d0d0d0">Erase</span></div>
+    <div class="mi md"><svg><use href="#i-move"/></svg><span style="color:#d0d0d0">Move</span></div>
+    <div class="mi md"><svg><use href="#i-copy"/></svg><span style="color:#d0d0d0">Copy Selection</span></div>
+    <div class="mi md"><svg><use href="#i-scale"/></svg><span style="color:#d0d0d0">Scale</span></div>
+    <div class="mi md"><svg><use href="#i-rotate"/></svg><span style="color:#d0d0d0">Rotate</span></div>
+    <div class="mi dis"><svg><use href="#i-draworder"/></svg>Draw Order<span class="k">▸</span></div>
+    <div class="mi dis"><svg><use href="#i-group"/></svg>Group<span class="k">▸</span></div>
+    <div class="msep"></div>
+    <div class="mi dis"><svg><use href="#i-addsel"/></svg>Add Selected</div>
+    <div class="mi"><svg><use href="#i-selsim"/></svg>Select Similar</div>
+    <div class="mi"><svg><use href="#i-deselect"/></svg>Deselect All</div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-qselect"/></svg>Quick Select…</div>
+    <div class="mi dis"><svg><use href="#i-calc"/></svg>QuickCalc</div>
+    <div class="mi"><svg><use href="#i-find"/></svg>Find…<span class="k">Ctrl+F</span></div>
+    <div class="mi"><svg><use href="#i-props"/></svg>Properties<span class="k">Ctrl+1</span></div>
+  </div>
+  <div class="menu nt">
+    <div class="mi"><svg><use href="#i-repeat"/></svg>Repeat CIRCLE</div>
+    <div class="mi dis"><svg><use href="#i-history"/></svg>Recent Input<span class="k">▸</span></div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-paste"/></svg>Clipboard<span class="k">▸</span></div>
+    <div class="mi"><svg><use href="#i-layiso"/></svg>Isolate<span class="k">▸</span></div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-undo"/></svg>Undo Circle<span class="k">Ctrl+Z</span></div>
+    <div class="mi dis"><svg><use href="#i-redo"/></svg>Redo<span class="k">Ctrl+Y</span></div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-pan"/></svg>Pan</div>
+    <div class="mi"><svg><use href="#i-zoomwin"/></svg>Zoom</div>
+    <div class="msep"></div>
+    <div class="mi"><svg><use href="#i-qselect"/></svg>Quick Select…</div>
+    <div class="mi"><svg><use href="#i-find"/></svg>Find…<span class="k">Ctrl+F</span></div>
+    <div class="mi"><svg><use href="#i-options"/></svg>Options…</div>
+  </div>
+</div>
+<p class="figcap">À esquerda, com seleção. À direita, sem seleção (fundo do canvas).</p>
+
+<h2>4. Catálogo dos ícones</h2>
+<p>Todos os símbolos do sprite, em 32 px (botão grande) e 16 px (botão pequeno, status bar, menus). O nome em monoespaçado é o id do símbolo e vira o nome do arquivo SVG no port.</p>
+<div class="fam"><span><i style="background:#e8935a"></i>Draw</span><span><i style="background:#5b9bd5"></i>Modify</span><span><i style="background:#a586d9"></i>Annotation e Block</span><span><i style="background:#b8b8b8"></i>Neutro: arquivo, camadas, propriedades, utilidades, view, status</span><span><i style="background:#f0c33e"></i>Cor de dado (lâmpada)</span><span><i style="background:#fff;border:1px solid #999"></i>Acento branco</span></div>
+<div class="cat b" id="cat" data-styled></div>
+
+<h2>5. Especificação de desenho</h2>
+<div class="grid2">
+<div>
+<h3>Ícone</h3>
+<ul>
+<li>Grade de 24 × 24 (viewBox), margem de 2 px, traço 1,5 px, caps e joins redondos, sem preenchimento salvo os pontos de âncora.</li>
+<li>Cor do traço = cor da família do painel (<code>currentColor</code>). Um acento branco por ícone, no que a ferramenta faz: a parte movida, a cópia, a aresta cortada.</li>
+<li>Cor de verdade só onde é dado: lâmpada de camada amarela, swatch de cor, traços de espessura.</li>
+<li>Silhueta reconhecível a 16 px; nenhum texto dentro do ícone, exceto glifos únicos (A, ⌀, R).</li>
+<li>Renderizado a 32 px nos botões grandes e 16 px nos pequenos, sempre por SVG, sem bitmap.</li>
+</ul>
+</div>
+<div>
+<h3>Ribbon</h3>
+<table>
+<tr><th>Elemento</th><th>Medida</th></tr>
+<tr><td>Botão grande</td><td class="n">48 × 66 px, ícone 32, rótulo até 2 linhas, ▾ opcional</td></tr>
+<tr><td>Botão pequeno</td><td class="n">22 px de altura, ícone 16 + rótulo à direita</td></tr>
+<tr><td>Botão só ícone</td><td class="n">20 × 22 px</td></tr>
+<tr><td>Combo</td><td class="n">20 px de altura, borda #4a4a4a, fundo #262626</td></tr>
+<tr><td>Título do painel</td><td class="n">18 px, linha superior #3a3a3a, launcher ↘ à direita</td></tr>
+<tr><td>Separador</td><td class="n">1 px #3f3f3f</td></tr>
+<tr><td>Faixa de abas</td><td class="n">11–12 px Segoe UI, ativa #2f2f2f + linha #4da3ff</td></tr>
+<tr><td>Fundo ribbon / painéis</td><td class="n">#232323 / #2f2f2f, hover #3a3a3a, ligado #3a5a8c</td></tr>
+</table>
+</div>
+</div>
+<h3>Famílias de cor</h3>
+<table>
+<tr><th>Família</th><th>Cor</th><th>Painéis</th></tr>
+<tr><td>Draw</td><td class="n">#e8935a</td><td>Draw, Markup</td></tr>
+<tr><td>Modify</td><td class="n">#5b9bd5</td><td>Modify (inclui os antigos Edit Geometry em verde, que somem)</td></tr>
+<tr><td>Annotation e Block</td><td class="n">#a586d9</td><td>Annotation, Text, Dimensions, Leaders, Tables, Block, Data</td></tr>
+<tr><td>Neutro</td><td class="n">#b8b8b8</td><td>QAT, Layers, Properties, Groups, Utilities, Clipboard, View, Reference, Import, Palettes, Cleanup, Plot, Export, status bar, menus</td></tr>
+</table>
+<div class="note">A família verde (Edit Geometry, <code>#5cb88a</code>) deixa de existir: no AutoCAD Trim, Extend, Fillet, Chamfer, Break, Join, Lengthen, Explode e Stretch são todos do painel Modify, e o mockup segue isso.</div>
+
+<h2>6. O que a pesquisa do AutoCAD deu</h2>
+<p>Estrutura do workspace Drafting &amp; Annotation, reproduzida acima:</p>
+<ul>
+<li>Abas: Home, Insert, Annotate, Parametric, View, Manage, Output, Add-ins, Collaborate, Express Tools, Featured Apps.</li>
+<li>Home: Draw, Modify, Annotation, Layers, Block, Properties, Groups, Utilities, Clipboard, View, nesta ordem.</li>
+<li>Botão grande = ícone 32 px com rótulo embaixo; botão pequeno = ícone 16 px com rótulo à direita, em pilhas de três; split-button executa em cima e abre o flyout no ▾; título do painel embaixo, com ▾ para o slide-out (que o pino mantém aberto) e ↘ quando existe diálogo.</li>
+<li>Ícones desde o 2019: flat, refeitos para telas de alta resolução, cinza-claro no tema escuro e cinza-escuro no claro, com um só acento de cor; cor de verdade apenas em camadas, hatch, gradiente e swatches.</li>
+<li>QAT padrão: New, Open, Save, Save As, Plot, Undo▾, Redo▾, seletor de workspace.</li>
+</ul>
+<p>Fontes consultadas em 03/09/2026: <a href="https://www.autodesk.com/blogs/autocad/a-guide-to-autocad-ribbon-customization/">A Guide to AutoCAD Ribbon Customization</a> (Autodesk), <a href="https://autocadeverything.com/autocad-ribbon/">Exploring AutoCAD Ribbon</a>, <a href="https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-MEP/files/GUID-B0E324F0-FEC2-488E-A109-9BE5BD621961.htm">About Home Tab</a> (help AutoCAD MEP 2022), <a href="https://help.autodesk.com/cloudhelp/2023/ENU/AutoCAD-WhatsNew/files/GUID-4B04BE19-E966-4EE1-A21D-D00540BFE635.htm">What's New in AutoCAD 2019</a> e <a href="https://cadfmconsult.wordpress.com/2019/04/01/one-autocad-gets-one-vision-part-6/">One AutoCAD Gets One Vision</a>. As páginas de help do AutoCAD 2025 sobre o ribbon retornaram erro 404/403; o detalhamento painel por painel vem do conhecimento consolidado do produto e deve ser conferido contra uma instalação real antes do port.</p>
+
+<h2>7. Próximos passos</h2>
+<ul>
+<li>Aprovar ou marcar ajustes nesta página (ícones específicos, ordem, o que fica desabilitado).</li>
+<li>Port para Qt: exportar cada símbolo para <code>newsicad/resources/icons/&lt;id&gt;.svg</code>, carregar por QSvgRenderer com a cor da família injetada, incluir o plugin QtSvg no <code>build_windows.spec</code>.</li>
+<li>Reescrever <code>_build_home_tab</code> e irmãs com botões grandes, pequenos, só-ícone, split e slide-out; combos de camada e de propriedades; ícones na status bar, no menu clássico e no menu de contexto.</li>
+<li>Estimativa: 2 a 3 sessões. Verificação visual por print, já que os testes atuais não cobrem a UI.</li>
+</ul>
+</main>
+
+<script>
+(function(){
+  var tabs=document.querySelectorAll('.tab[data-tab]'),rows=document.querySelectorAll('.row[data-row]');
+  function show(n){tabs.forEach(function(t){t.classList.toggle('on',t.dataset.tab===n)});rows.forEach(function(r){r.classList.toggle('on',r.dataset.row===n)})}
+  tabs.forEach(function(t){t.addEventListener('click',function(){show(t.dataset.tab)});t.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();show(t.dataset.tab)}})});
+  var styled=document.querySelectorAll('#app,[data-styled]'),segs=document.querySelectorAll('.seg button');
+  function setStyle(s){styled.forEach(function(el){el.classList.remove('a','b');el.classList.add(s)});segs.forEach(function(b){b.classList.toggle('on',b.dataset.style===s)});try{localStorage.setItem('ribbonStyle',s)}catch(e){}}
+  segs.forEach(function(b){b.addEventListener('click',function(){setStyle(b.dataset.style)})});
+  var fam={dr:['line','pline','circle','arc','rect','polygon','ellipse','spline','xline','ray','point','donut','revcloud','wipeout','mline','region','hatch','gradient','boundary'],
+    md:['move','rotate','trim','extend','copy','mirror','fillet','chamfer','stretch','scale','array','erase','explode','offset','break','breakpt','join','lengthen','pedit','hatchedit','align','divide','measure','reverse'],
+    an:['text','mtext','ddedit','find','spell','textstyle','dim','dimaligned','dimangular','dimradius','dimdiameter','centermark','dimbreak','dimcont','dimstyle','leader','mleaderstyle','table','tablestyle','dataextract','insert','block','bedit','attr','attrsync','field','datalink','ole','updatefield']};
+  var names={new:'New',open:'Open',save:'Save',saveas:'Save As',plot:'Plot',batchplot:'Batch Plot',preview:'Preview',pagesetup:'Page Setup',exportpdf:'Export PDF',exportdwg:'Export DWG',closetab:'Close Tab',undo:'Undo',redo:'Redo',search:'Search',line:'Line',pline:'Polyline',circle:'Circle',arc:'Arc',rect:'Rectangle',polygon:'Polygon',ellipse:'Ellipse',spline:'Spline',xline:'Construction Line',ray:'Ray',point:'Point',donut:'Donut',revcloud:'Revision Cloud',wipeout:'Wipeout',mline:'Multiline',region:'Region',hatch:'Hatch',gradient:'Gradient',boundary:'Boundary',move:'Move',rotate:'Rotate',trim:'Trim',extend:'Extend',copy:'Copy',mirror:'Mirror',fillet:'Fillet',chamfer:'Chamfer',stretch:'Stretch',scale:'Scale',array:'Array',erase:'Erase',explode:'Explode',offset:'Offset','break':'Break',breakpt:'Break at Point',join:'Join',lengthen:'Lengthen',pedit:'Edit Polyline',hatchedit:'Edit Hatch',align:'Align',divide:'Divide',measure:'Measure',reverse:'Reverse',text:'Text',mtext:'Multiline Text',ddedit:'Edit Text',find:'Find',spell:'Check Spelling',textstyle:'Text Style',dim:'Dimension / Linear',dimaligned:'Aligned',dimangular:'Angular',dimradius:'Radius',dimdiameter:'Diameter',centermark:'Center Mark',dimbreak:'Dimension Break',dimcont:'Continue',dimstyle:'Dimension Style',leader:'Leader',mleaderstyle:'Multileader Style',table:'Table',tablestyle:'Table Style',dataextract:'Extract Data',layers:'Layer Properties',bulb:'Layer On',bulboff:'Layer Off',freeze:'Freeze',thaw:'Thaw',lock:'Lock',unlock:'Unlock',layiso:'Isolate',layuniso:'Unisolate',laymch:'Match Layer',laycur:'Make Current',layon:'Turn All On',laystate:'Layer States',layprev:'Layer Previous',rename:'Rename',insert:'Insert Block',block:'Create Block',bedit:'Block Editor',attr:'Define Attributes',attrsync:'Attribute Sync',image:'Attach Image',xref:'Attach XREF',xrefpanel:'External References',clip:'Clip',clipoff:'Remove Clip',importpdf:'PDF Import',field:'Field',datalink:'Data Link',ole:'OLE Object',updatefield:'Update Fields',matchprop:'Match Properties',list:'List',transp:'Transparency',props:'Properties',group:'Group',ungroup:'Ungroup',gedit:'Group Edit',gsel:'Group Selection',dist:'Distance',area:'Area',id:'ID Point',qselect:'Quick Select',selsim:'Select Similar',calc:'Quick Calculator',purge:'Purge',audit:'Audit',units:'Drawing Units',paste:'Paste',cut:'Cut',copyclip:'Copy Clip',copybase:'Copy with Base Point',pasteblock:'Paste as Block',zoomin:'Zoom In',zoomout:'Zoom Out',zoomext:'Zoom Extents',zoomwin:'Zoom Window',pan:'Pan',grid:'Grid',snap:'Snap',ortho:'Ortho',polar:'Polar Tracking',osnap:'Object Snap',otrack:'Object Snap Tracking',dyn:'Dynamic Input',lwt:'Lineweight',isodraft:'Isometric Drafting',model:'Model / Paper',viewports:'Viewport Configuration',ucs:'UCS Icon',viewcube:'View Cube',navbar:'Navigation Bar',namedview:'Named Views',cmdline:'Command Line',history:'Command History',palette:'Palette',toolpal:'Tool Palettes',cui:'User Interface',loadapp:'Load Application',options:'Options',help:'Help',pin:'Pin',repeat:'Repeat',deselect:'Deselect All',draworder:'Draw Order',addsel:'Add Selected'};
+  var cat=document.getElementById('cat'),syms=document.querySelectorAll('symbol'),html='';
+  syms.forEach(function(s){var id=s.id.replace(/^i-/,''),f='nt';for(var k in fam){if(fam[k].indexOf(id)>=0)f=k}
+    html+='<div class="ci '+f+'"><svg class="big"><use href="#'+s.id+'"/></svg><svg class="small"><use href="#'+s.id+'"/></svg><div class="t"><b>'+(names[id]||id)+'</b><i>'+s.id+'</i></div></div>'});
+  cat.innerHTML=html;document.getElementById('count').textContent=syms.length;
+  var saved=null;try{saved=localStorage.getItem('ribbonStyle')}catch(e){}
+  setStyle(saved==='a'?'a':'b');
+})();
+</script>

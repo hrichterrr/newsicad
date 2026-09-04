@@ -171,6 +171,11 @@ class LayerPanel(QDockWidget):
     def refresh(self) -> None:
         document = self.main_window.document
         names = sorted(document.layers.keys())
+        # O combo de camada atual do ribbon (painel Layers da aba Home) mostra
+        # o mesmo estado desta tabela — atualiza junto, pelo mesmo caminho.
+        refresh_combo = getattr(self.main_window, "refresh_layer_combo", None)
+        if refresh_combo is not None:
+            refresh_combo()
         self.table.setRowCount(len(names))
 
         for row, name in enumerate(names):

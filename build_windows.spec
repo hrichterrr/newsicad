@@ -28,6 +28,10 @@ datas += [("newsicad/resources/libredwg/windows", "resources/libredwg/windows")]
 # _icon_path) — mesmo raciocínio de "resources/" solto na raiz do bundle.
 datas += [("newsicad/resources/newsi_icon.ico", "resources")]
 
+# Ícones SVG do ribbon/menus/status bar (newsicad/ui/icon_utils.py:svg_icon
+# resolve "resources/icons" do mesmo jeito que o logo acima).
+datas += [("newsicad/resources/icons", "resources/icons")]
+
 a = Analysis(
     ["newsicad/main.py"],
     pathex=[],

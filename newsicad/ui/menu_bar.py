@@ -10,6 +10,8 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import QMenuBar, QMessageBox
 
+from newsicad.ui.icon_utils import FAMILY_NEUTRAL, command_icon, svg_icon
+
 if TYPE_CHECKING:
     from newsicad.ui.main_window import MainWindow
 
@@ -41,7 +43,10 @@ MENU_BAR_STYLE = """
         padding: 3px 0px;
     }
     QMenu::item {
-        padding: 5px 28px 5px 14px;
+        padding: 5px 28px 5px 10px;
+    }
+    QMenu::icon {
+        padding-left: 6px;
     }
     QMenu::item:selected {
         background-color: #3a5a8c;
@@ -60,6 +65,7 @@ MENU_BAR_STYLE = """
 
 def _add_command_action(menu, label: str, command_name: str, window: "MainWindow", shortcut: str | None = None) -> QAction:
     action = QAction(label, window)
+    action.setIcon(command_icon(command_name))
     if shortcut:
         action.setShortcut(QKeySequence(shortcut))
     action.triggered.connect(lambda: window._start_command(command_name))
@@ -96,38 +102,45 @@ def _build_file_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&File")
 
     new_action = QAction("New", window)
+    new_action.setIcon(svg_icon("new", FAMILY_NEUTRAL, 16))
     new_action.setShortcut(QKeySequence("Ctrl+N"))
     new_action.triggered.connect(window._new_document)
     menu.addAction(new_action)
 
     open_action = QAction("Open...", window)
+    open_action.setIcon(svg_icon("open", FAMILY_NEUTRAL, 16))
     open_action.setShortcut(QKeySequence("Ctrl+O"))
     open_action.triggered.connect(window._open_file)
     menu.addAction(open_action)
 
     save_action = QAction("Save", window)
+    save_action.setIcon(svg_icon("save", FAMILY_NEUTRAL, 16))
     save_action.setShortcut(QKeySequence("Ctrl+S"))
     save_action.triggered.connect(window._save_file)
     menu.addAction(save_action)
 
     save_as_action = QAction("Save As...", window)
+    save_as_action.setIcon(svg_icon("saveas", FAMILY_NEUTRAL, 16))
     save_as_action.setShortcut(QKeySequence("Ctrl+Shift+S"))
     save_as_action.triggered.connect(window._save_file_as)
     menu.addAction(save_as_action)
 
     menu.addSeparator()
     close_tab_action = QAction("Close Tab", window)
+    close_tab_action.setIcon(svg_icon("closetab", FAMILY_NEUTRAL, 16))
     close_tab_action.setShortcut(QKeySequence("Ctrl+W"))
     close_tab_action.triggered.connect(window._close_current_tab)
     menu.addAction(close_tab_action)
 
     menu.addSeparator()
     export_pdf_action = QAction("Print/Export PDF...", window)
+    export_pdf_action.setIcon(svg_icon("plot", FAMILY_NEUTRAL, 16))
     export_pdf_action.setShortcut(QKeySequence("Ctrl+P"))
     export_pdf_action.triggered.connect(window._export_pdf)
     menu.addAction(export_pdf_action)
 
     export_dwg_action = QAction("Export DWG...", window)
+    export_dwg_action.setIcon(svg_icon("exportdwg", FAMILY_NEUTRAL, 16))
     export_dwg_action.triggered.connect(window._export_dwg)
     menu.addAction(export_dwg_action)
 
@@ -145,11 +158,13 @@ def _build_edit_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Edit")
 
     undo_action = QAction("Undo", window)
+    undo_action.setIcon(svg_icon("undo", FAMILY_NEUTRAL, 16))
     undo_action.setShortcut(QKeySequence("Ctrl+Z"))
     undo_action.triggered.connect(window._do_undo)
     menu.addAction(undo_action)
 
     redo_action = QAction("Redo", window)
+    redo_action.setIcon(svg_icon("redo", FAMILY_NEUTRAL, 16))
     redo_action.setShortcut(QKeySequence("Ctrl+Y"))
     redo_action.triggered.connect(window._do_redo)
     menu.addAction(redo_action)
@@ -161,6 +176,7 @@ def _build_edit_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
 
     menu.addSeparator()
     copy_base_action = QAction("Copy with Base Point", window)
+    copy_base_action.setIcon(svg_icon("copybase", FAMILY_NEUTRAL, 16))
     copy_base_action.setShortcut(QKeySequence("Ctrl+Shift+C"))
     copy_base_action.setToolTip(
         "Duplica os objetos DENTRO do desenho atual (comando COPY) — diferente de "
@@ -171,16 +187,19 @@ def _build_edit_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
 
     menu.addSeparator()
     select_all_action = QAction("Select All", window)
+    select_all_action.setIcon(svg_icon("gsel", FAMILY_NEUTRAL, 16))
     select_all_action.setShortcut(QKeySequence("Ctrl+A"))
     select_all_action.triggered.connect(window._select_all)
     menu.addAction(select_all_action)
 
     select_similar_action = QAction("Select Similar", window)
+    select_similar_action.setIcon(svg_icon("selsim", FAMILY_NEUTRAL, 16))
     select_similar_action.triggered.connect(lambda: window._start_command("SELECTSIMILAR"))
     menu.addAction(select_similar_action)
 
     menu.addSeparator()
     find_action = QAction("Find...", window)
+    find_action.setIcon(svg_icon("find", FAMILY_NEUTRAL, 16))
     find_action.setShortcut(QKeySequence("Ctrl+F"))
     find_action.triggered.connect(lambda: window._start_command("FIND"))
     menu.addAction(find_action)
@@ -190,14 +209,17 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&View")
 
     zoom_in = QAction("Zoom In", window)
+    zoom_in.setIcon(svg_icon("zoomin", FAMILY_NEUTRAL, 16))
     zoom_in.triggered.connect(lambda: window.canvas.zoom_in())
     menu.addAction(zoom_in)
 
     zoom_out = QAction("Zoom Out", window)
+    zoom_out.setIcon(svg_icon("zoomout", FAMILY_NEUTRAL, 16))
     zoom_out.triggered.connect(lambda: window.canvas.zoom_out())
     menu.addAction(zoom_out)
 
     zoom_extents = QAction("Zoom Extents", window)
+    zoom_extents.setIcon(svg_icon("zoomext", FAMILY_NEUTRAL, 16))
     zoom_extents.triggered.connect(lambda: window.canvas.zoom_extents())
     menu.addAction(zoom_extents)
 
@@ -225,6 +247,7 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
 
     menu.addSeparator()
     cmdline_action = QAction("Command Line", window)
+    cmdline_action.setIcon(svg_icon("cmdline", FAMILY_NEUTRAL, 16))
     cmdline_action.setCheckable(True)
     cmdline_action.setChecked(True)
     cmdline_action.setShortcut(QKeySequence("Ctrl+9"))
@@ -232,11 +255,13 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(cmdline_action)
 
     history_action = QAction("Command History...", window)
+    history_action.setIcon(svg_icon("history", FAMILY_NEUTRAL, 16))
     history_action.setShortcut(QKeySequence("F2"))
     history_action.triggered.connect(window._show_command_history)
     menu.addAction(history_action)
 
     properties_action = QAction("Properties", window)
+    properties_action.setIcon(svg_icon("props", FAMILY_NEUTRAL, 16))
     properties_action.setCheckable(True)
     properties_action.setChecked(True)
     properties_action.setShortcut(QKeySequence("Ctrl+1"))
@@ -244,10 +269,12 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(properties_action)
 
     layers_action = QAction("Layers...", window)
+    layers_action.setIcon(svg_icon("layers", FAMILY_NEUTRAL, 16))
     layers_action.triggered.connect(lambda: window._start_command("LAYER"))
     menu.addAction(layers_action)
 
     rename_layer_action = QAction("Rename Current Layer...", window)
+    rename_layer_action.setIcon(svg_icon("rename", FAMILY_NEUTRAL, 16))
     rename_layer_action.triggered.connect(lambda: window._start_command("RENAME"))
     menu.addAction(rename_layer_action)
 
@@ -365,6 +392,7 @@ def _build_help_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu = menu_bar.addMenu("&Help")
 
     about_action = QAction("About NewSIcad...", window)
+    about_action.setIcon(svg_icon("help", FAMILY_NEUTRAL, 16))
 
     def show_about() -> None:
         QMessageBox.about(
@@ -377,6 +405,7 @@ def _build_help_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(about_action)
 
     readme_action = QAction("Ver README no GitHub (Help)", window)
+    readme_action.setIcon(svg_icon("help", FAMILY_NEUTRAL, 16))
     readme_action.setShortcut(QKeySequence("F1"))
     readme_action.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))
     menu.addAction(readme_action)

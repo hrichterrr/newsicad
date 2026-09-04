@@ -12,7 +12,7 @@ import re
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QCloseEvent, QCursor, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -58,13 +58,14 @@ from newsicad.ui.block_editor_dialog import BlockEditorDialog
 from newsicad.ui.canvas import PDF_PAGE_SIZES, CanvasView
 from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.document_session import DocumentSession
+from newsicad.ui.icon_utils import FAMILY_NEUTRAL, command_icon, svg_icon, svg_toggle_icon
 from newsicad.ui.layer_panel import LayerPanel
-from newsicad.ui.menu_bar import build_menu_bar
+from newsicad.ui.menu_bar import MENU_BAR_STYLE, build_menu_bar
 from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.14.3"
+APP_VERSION = "2.15.0"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
@@ -79,6 +80,16 @@ STATUS_TOGGLE_STYLE = """
         background-color: #3a5a8c;
         color: #ffffff;
     }
+    QPushButton[iconOnly="true"] {
+        background-color: transparent;
+        border: none;
+        border-radius: 2px;
+        padding: 0px;
+        color: transparent;
+        font-size: 1px;
+    }
+    QPushButton[iconOnly="true"]:hover { background-color: #3a3a3a; }
+    QPushButton[iconOnly="true"]:checked { background-color: #3a5a8c; }
 """
 
 DARK_TEXT_STYLE = """
@@ -387,20 +398,23 @@ class MainWindow(QMainWindow):
         self.coord_label.setStyleSheet("color: #d8d8d8; font-family: Menlo; padding: 0 8px;")
         status.addWidget(self.coord_label)
 
-        self.grid_button = self._make_toggle("GRID", "F7", self._toggle_grid, checked=True)
-        self.snap_button = self._make_toggle("SNAP", "F9", self._toggle_snap)
-        self.ortho_button = self._make_toggle("ORTHO", "F8", self._toggle_ortho)
+        # Toggles só de ícone, como a barra de status do AutoCAD 2020 (azul
+        # quando ligado); o nome e o atalho ficam no tooltip. Os ícones são
+        # os mesmos do ribbon (newsicad/resources/icons).
+        self.grid_button = self._make_toggle("GRID", "F7", self._toggle_grid, checked=True, icon="grid")
+        self.snap_button = self._make_toggle("SNAP", "F9", self._toggle_snap, icon="snap")
+        self.ortho_button = self._make_toggle("ORTHO", "F8", self._toggle_ortho, icon="ortho")
         self.polar_button = self._make_toggle(
-            "POLAR", "F10", self._toggle_polar,
-            tooltip="Rastreamento polar — gruda em múltiplos de 15° a partir do último ponto",
+            "POLAR", "F10", self._toggle_polar, icon="polar",
+            tooltip="POLAR (F10) — rastreamento polar, gruda em múltiplos de 15° a partir do último ponto",
         )
         self.osnap_button = self._make_toggle(
-            "OSNAP", "F3", self._toggle_osnap,
-            tooltip="Snap a objetos (Endpoint/Midpoint/Center/Intersection/Node/Insert)",
+            "OSNAP", "F3", self._toggle_osnap, icon="osnap",
+            tooltip="OSNAP (F3) — snap a objetos (Endpoint/Midpoint/Center/Intersection/Node/Insert)",
         )
         self.osnap_tracking_button = self._make_toggle(
-            "OTRACK", "F11", self._toggle_osnap_tracking,
-            tooltip="Rastreamento de OSNAP — ainda não implementado (previsto para um próximo marco)",
+            "OTRACK", "F11", self._toggle_osnap_tracking, icon="otrack",
+            tooltip="OTRACK (F11) — rastreamento de OSNAP, ainda não implementado (previsto para um próximo marco)",
         )
         # Diferente de todo outro controle "ainda não implementado" no app
         # (que vem desabilitado), este ficava clicável/marcável mas sem
@@ -408,8 +422,8 @@ class MainWindow(QMainWindow):
         # auditoria, 2026-08-22).
         self.osnap_tracking_button.setEnabled(False)
         self.dynamic_input_button = self._make_toggle(
-            "DYN", "F12", self._toggle_dynamic_input, checked=True,
-            tooltip="Entrada dinâmica (distância/ângulo perto do cursor)",
+            "DYN", "F12", self._toggle_dynamic_input, checked=True, icon="dyn",
+            tooltip="DYN (F12) — entrada dinâmica (distância/ângulo perto do cursor)",
         )
 
         for button in (
@@ -454,12 +468,19 @@ class MainWindow(QMainWindow):
         self.tabifyDockWidget(self.properties_dock, self.layer_dock)
         self.properties_dock.raise_()
 
-    def _make_toggle(self, label, shortcut, handler, checked=False, tooltip=None) -> QPushButton:
+    def _make_toggle(self, label, shortcut, handler, checked=False, tooltip=None, icon=None) -> QPushButton:
         button = QPushButton(label)
         button.setCheckable(True)
         button.setChecked(checked)
         button.setStyleSheet(STATUS_TOGGLE_STYLE)
         button.setToolTip(tooltip or f"{label} ({shortcut})")
+        if icon is not None:
+            # Só o ícone (o rótulo continua em text() pra busca/testes, mas
+            # não é desenhado — ver STATUS_TOGGLE_STYLE, que zera a fonte).
+            button.setIcon(svg_toggle_icon(icon, 16))
+            button.setIconSize(QSize(16, 16))
+            button.setProperty("iconOnly", True)
+            button.setFixedSize(26, 22)
         button.toggled.connect(handler)
 
         action = QAction(self)
@@ -605,16 +626,67 @@ class MainWindow(QMainWindow):
         menu.exec(QCursor.pos())
 
     def _build_selection_context_menu(self) -> QMenu:
+        """Menu do botão direito com seleção, na ordem do menu de contexto do
+        AutoCAD (Repeat, Clipboard, Isolate, Erase/Move/Copy/Scale/Rotate,
+        Select Similar/Deselect All, Quick Select/Find/Properties), com os
+        mesmos ícones do ribbon e do menu clássico (icon_utils.command_icon).
+        Itens que o AutoCAD tem e o NewSIcad não ficam desabilitados."""
         menu = QMenu(self)
-        menu.addAction("Move", lambda: self._start_command("MOVE"))
-        menu.addAction("Copy", lambda: self._start_command("COPY"))
-        menu.addAction("Rotate", lambda: self._start_command("ROTATE"))
-        menu.addAction("Erase", self._delete_selected)
+        menu.setStyleSheet(MENU_BAR_STYLE)  # mesmo tema escuro do menu clássico
+        cmd = lambda name: (lambda: self._start_command(name))  # noqa: E731
+
+        last = self.interpreter.last_command_name
+        repeat = menu.addAction(svg_icon("repeat", FAMILY_NEUTRAL, 16), f"Repeat {last}" if last else "Repeat")
+        if last:
+            repeat.triggered.connect(cmd(last))
+        else:
+            repeat.setEnabled(False)
+        recent = menu.addAction(svg_icon("history", FAMILY_NEUTRAL, 16), "Recent Input")
+        recent.setEnabled(False)
         menu.addSeparator()
-        menu.addAction("Select Similar", lambda: self._start_command("SELECTSIMILAR"))
+
+        clipboard = menu.addMenu(svg_icon("paste", FAMILY_NEUTRAL, 16), "Clipboard")
+        clipboard.addAction(command_icon("CUTCLIP"), "Cut\tCtrl+X", cmd("CUTCLIP"))
+        clipboard.addAction(command_icon("COPYCLIP"), "Copy\tCtrl+C", cmd("COPYCLIP"))
+        clipboard.addAction(svg_icon("copybase", FAMILY_NEUTRAL, 16), "Copy with Base Point\tCtrl+Shift+C", cmd("COPY"))
+        clipboard.addAction(command_icon("PASTECLIP"), "Paste\tCtrl+V", cmd("PASTECLIP"))
+        isolate = menu.addMenu(command_icon("LAYISO"), "Isolate")
+        isolate.addAction(command_icon("LAYISO"), "Isolate Layer(s)", cmd("LAYISO"))
+        isolate.addAction(command_icon("LAYUNISO"), "Unisolate Layer(s)", cmd("LAYUNISO"))
         menu.addSeparator()
-        menu.addAction("Properties", self._show_properties_dock)
+
+        menu.addAction(command_icon("ERASE"), "Erase", self._delete_selected)
+        menu.addAction(command_icon("MOVE"), "Move", cmd("MOVE"))
+        menu.addAction(command_icon("COPY"), "Copy Selection", cmd("COPY"))
+        menu.addAction(command_icon("SCALE"), "Scale", cmd("SCALE"))
+        menu.addAction(command_icon("ROTATE"), "Rotate", cmd("ROTATE"))
+        draw_order = menu.addAction(svg_icon("draworder", FAMILY_NEUTRAL, 16), "Draw Order")
+        draw_order.setEnabled(False)
+        group = menu.addAction(svg_icon("group", FAMILY_NEUTRAL, 16), "Group")
+        group.setEnabled(False)
+        menu.addSeparator()
+
+        menu.addAction(command_icon("SELECTSIMILAR"), "Select Similar", cmd("SELECTSIMILAR"))
+        menu.addAction(svg_icon("deselect", FAMILY_NEUTRAL, 16), "Deselect All", self._deselect_all)
+        menu.addSeparator()
+
+        menu.addAction(command_icon("QSELECT"), "Quick Select...", cmd("QSELECT"))
+        menu.addAction(command_icon("FIND"), "Find...\tCtrl+F", cmd("FIND"))
+        menu.addAction(svg_icon("props", FAMILY_NEUTRAL, 16), "Properties\tCtrl+1", self._show_properties_dock)
         return menu
+
+    def _deselect_all(self) -> None:
+        self.selection.clear()
+        self.canvas.refresh_selection_highlight()
+        self.canvas.viewport().update()
+
+    def refresh_layer_combo(self) -> None:
+        """Atualiza o combo de camada atual do ribbon (painel Layers da aba
+        Home) — chamado por LayerPanel.refresh, que já é o ponto único por
+        onde toda mudança de camada passa."""
+        combo = getattr(self, "layer_combo", None)
+        if combo is not None:
+            combo.refresh()
 
     def _show_properties_dock(self) -> None:
         self.properties_dock.setVisible(True)
