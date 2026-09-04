@@ -96,7 +96,7 @@ _REINDEX_THRESHOLD = 1000
 _PROGRESS_BATCH = 1000
 #: Janela (ms) em que os eventos de roda do mouse são acumulados num único
 #: passo de zoom — ver CanvasView.wheelEvent.
-_ZOOM_COALESCE_MS = 10
+_ZOOM_COALESCE_MS = 60
 ENTITY_COLOR = "#e8e8e8"
 # Chave arbitrária pra QGraphicsItem.setData/.data — QGraphicsItem não é um
 # QObject (diferente da maioria dos outros widgets Qt), então não tem
@@ -662,6 +662,13 @@ class CanvasView(QGraphicsView):
         self._zoom_timer.setSingleShot(True)
         self._zoom_timer.setInterval(_ZOOM_COALESCE_MS)
         self._zoom_timer.timeout.connect(self._apply_pending_zoom)
+        # Retrato da viewport usado durante arrastar/zoom (ver paintEvent):
+        # enquanto ele existe, a tela mostra o pixmap deslocado/escalado em
+        # vez de repintar a cena a cada evento.
+        self._snapshot: QPixmap | None = None
+        self._snapshot_offset = QPoint(0, 0)
+        self._snapshot_anchor = QPointF(0, 0)
+        self._snapshot_scale = 1.0
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -2316,9 +2323,14 @@ class CanvasView(QGraphicsView):
 
         if self._panning:
             delta = pos - self._pan_start
+            if self._snapshot is None:
+                self._begin_snapshot()
+            # Só desloca o retrato: mover as barras de rolagem aqui obrigaria
+            # a repintar os 50 mil itens a cada evento (60 ms na planta
+            # pesada). O deslocamento real é aplicado no soltar do botão.
+            self._snapshot_offset += delta
             self._pan_start = pos
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            self.viewport().update()
             event.accept()
             return
 
@@ -2383,13 +2395,51 @@ class CanvasView(QGraphicsView):
     def _apply_pending_zoom(self) -> None:
         """Aplica de uma vez o zoom acumulado desde o último repaint."""
         factor, self._pending_zoom_factor = self._pending_zoom_factor, 1.0
+        if not self._panning:
+            self._snapshot = None
+            self._snapshot_scale = 1.0
         if abs(factor - 1.0) > 1e-9:
             self.scale(factor, factor)
+        else:
+            self.viewport().update()
+
+    # ------------------------------------------------------------------ #
+    # retrato da viewport durante arrastar/zoom
+    # ------------------------------------------------------------------ #
+    def _begin_snapshot(self) -> None:
+        """Tira um retrato da viewport como está e passa a desenhá-lo no
+        lugar da cena até `_end_pan_snapshot`/`_apply_pending_zoom`."""
+        self._snapshot = self.viewport().grab()
+        self._snapshot_offset = QPoint(0, 0)
+        self._snapshot_scale = 1.0
+        self._snapshot_anchor = QPointF(0, 0)
+
+    def _end_pan_snapshot(self) -> None:
+        offset, self._snapshot_offset = self._snapshot_offset, QPoint(0, 0)
+        self._snapshot = None
+        if offset.x() or offset.y():
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - offset.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - offset.y())
+        self.viewport().update()
+
+    def paintEvent(self, event) -> None:  # noqa: D401 - contrato do Qt
+        if self._snapshot is None:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self.viewport())
+        painter.fillRect(self.viewport().rect(), QColor(BACKGROUND_COLOR))
+        if abs(self._snapshot_scale - 1.0) > 1e-9:
+            painter.translate(self._snapshot_anchor)
+            painter.scale(self._snapshot_scale, self._snapshot_scale)
+            painter.translate(-self._snapshot_anchor)
+        painter.drawPixmap(self._snapshot_offset, self._snapshot)
+        painter.end()
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = False
             self.setCursor(Qt.CursorShape.BlankCursor)
+            self._end_pan_snapshot()
             event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._selection_drag_start_scene is not None:
@@ -2407,8 +2457,13 @@ class CanvasView(QGraphicsView):
         fator total — o resultado final é idêntico (a escala é multiplicativa)
         e a sensação é de resposta imediata em vez de arrastada."""
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+        if self._snapshot is None and not self._panning:
+            self._begin_snapshot()
+            self._snapshot_anchor = QPointF(self._event_pos(event))
         self._pending_zoom_factor *= factor
+        self._snapshot_scale *= factor
         self._zoom_timer.start()
+        self.viewport().update()
         event.accept()
 
     def keyPressEvent(self, event) -> None:
