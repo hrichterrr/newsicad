@@ -1252,19 +1252,36 @@ class CanvasView(QGraphicsView):
         child_ctx = (insert_color, insert_layer)
 
         definition = self.document.block_definitions.get(entity.block_name, [])
+        merged_paths: dict[str, QPainterPath] = {}
         for child_entity in definition:
             if not self._block_child_visible(child_entity, insert_layer):
                 continue
             try:
                 if isinstance(child_entity, BlockReference):
                     child_item = self._create_block_reference_item(child_entity, _depth + 1, child_ctx)
+                    child_color = None
                 else:
-                    child_item = self._create_item(child_entity, self._effective_color(child_entity, child_ctx))
+                    child_color = self._effective_color(child_entity, child_ctx)
+                    child_item = self._create_item(child_entity, child_color)
             except TypeError:
+                continue
+            # Fusão por cor: o item puramente geométrico NÃO entra no grupo —
+            # seu traçado é acumulado e vira um item só por cor no fim. Antes
+            # a fusão criava tudo e depois removia um a um, e cada
+            # removeFromGroup recalcula o grupo inteiro: numa planta com
+            # blocos grandes (NEWSI-CASA PAU BRASIL-R01, 110 mil segmentos em
+            # definições) montar a cena passou de 17 s para 5 MINUTOS.
+            path = None if child_color is None else self._plain_geometry_path(child_item)
+            if path is not None:
+                merged_paths.setdefault(child_color, QPainterPath()).addPath(path)
                 continue
             group.addToGroup(child_item)
 
-        self._merge_geometry_children(group)
+        for merged_color, merged_path in merged_paths.items():
+            merged_item = QGraphicsPathItem(merged_path)
+            merged_item.setPen(_entity_pen(merged_color))
+            merged_item.setData(_BASE_COLOR_DATA_KEY, merged_color)
+            group.addToGroup(merged_item)
 
         pos = cad_to_scene(entity.insertion_point)
         group.setPos(pos)
@@ -1284,57 +1301,31 @@ class CanvasView(QGraphicsView):
         group.setTransform(transform)
         return group
 
-    def _merge_geometry_children(self, group: QGraphicsItemGroup) -> None:
-        """Funde os filhos puramente geométricos do grupo num item por cor.
+    @staticmethod
+    def _plain_geometry_path(item: QGraphicsItem) -> QPainterPath | None:
+        """Traçado de um item cuja aparência é só "uma caneta" — ou None.
 
-        Só entram itens cuja aparência é "um traçado com uma caneta": linha,
-        caminho (polilinha/arco/spline), elipse e retângulo. Texto, hachura
-        (que tem preenchimento próprio), imagem e sub-grupos ficam como
-        estão. A caneta de cada item já vem com a cor efetiva resolvida
-        (BYBLOCK/camada 0), então agrupar por cor preserva exatamente o que
-        aparece na tela — inclusive o destaque de seleção, que continua sendo
-        aplicado a cada filho do grupo."""
-        by_color: dict[str, QPainterPath] = {}
-        merged_children: list[QGraphicsItem] = []
-        for child in list(group.childItems()):
-            path: QPainterPath | None = None
-            if type(child) is QGraphicsLineItem:
-                line = child.line()
-                path = QPainterPath(QPointF(line.x1(), line.y1()))
-                path.lineTo(QPointF(line.x2(), line.y2()))
-            elif type(child) is QGraphicsPathItem:
-                path = QPainterPath(child.path())
-            elif type(child) is QGraphicsEllipseItem:
-                path = QPainterPath()
-                path.addEllipse(child.rect())
-            elif type(child) is QGraphicsRectItem:
-                path = QPainterPath()
-                path.addRect(child.rect())
-            if path is None:
-                continue
-            brush = getattr(child, "brush", None)
-            if brush is not None and brush().style() != Qt.BrushStyle.NoBrush:
-                # Item preenchido (texto vetorizado, hachura sólida): a fusão
-                # por caneta perderia o preenchimento — fica como está.
-                # QGraphicsLineItem não tem brush(), daí o getattr.
-                continue
-            transform = child.transform() * QTransform.fromTranslate(child.pos().x(), child.pos().y())
-            color = child.data(_BASE_COLOR_DATA_KEY) or child.pen().color().name()
-            by_color.setdefault(color, QPainterPath()).addPath(transform.map(path))
-            merged_children.append(child)
-
-        if len(merged_children) < 2:
-            return
-        for child in merged_children:
-            group.removeFromGroup(child)
-            scene = child.scene()
-            if scene is not None:
-                scene.removeItem(child)
-        for color, path in by_color.items():
-            item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen(color))
-            item.setData(_BASE_COLOR_DATA_KEY, color)
-            group.addToGroup(item)
+        Itens com preenchimento (texto vetorizado, hachura), grupos e imagens
+        ficam de fora: fundi-los perderia brush/recorte."""
+        brush = getattr(item, "brush", None)
+        if brush is not None and brush().style() != Qt.BrushStyle.NoBrush:
+            return None
+        if type(item) is QGraphicsLineItem:
+            line = item.line()
+            path = QPainterPath(QPointF(line.x1(), line.y1()))
+            path.lineTo(QPointF(line.x2(), line.y2()))
+            return path
+        if type(item) is QGraphicsPathItem:
+            return QPainterPath(item.path())
+        if type(item) is QGraphicsEllipseItem:
+            path = QPainterPath()
+            path.addEllipse(item.rect())
+            return path
+        if type(item) is QGraphicsRectItem:
+            path = QPainterPath()
+            path.addRect(item.rect())
+            return path
+        return None
 
     def _create_image_item(self, entity: ImageReference) -> QGraphicsItem:
         """ImageReference: insertion_point é o canto inferior-esquerdo (em
