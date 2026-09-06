@@ -28,8 +28,14 @@ def test_store_and_load_roundtrip_and_invalidation(tmp_path, monkeypatch):
     assert int(loaded_skipped) == 2 and loaded_skipped.by_type == {"REGION": 2}
     assert loaded_skipped.notes == ["nota"]
 
-    # outra versão do app ou arquivo alterado -> entrada inválida
-    assert open_cache.load_cached(drawing, "9.9.9") is None
+    # outra versao do app NAO invalida (cada release esfriava o cache: 90 s de
+    # parser por planta grande); mudanca de esquema (CACHE_VERSION) ou do
+    # arquivo, sim
+    assert open_cache.load_cached(drawing, "9.9.9") is not None
+    monkeypatch.setattr(open_cache, "CACHE_VERSION", "esquema-novo")
+    assert open_cache.load_cached(drawing, "2.14.0") is None
+    monkeypatch.undo()
+    monkeypatch.setenv("NEWSICAD_CACHE_DIR", str(tmp_path / "cache"))
     drawing.write_text("xy")
     assert open_cache.load_cached(drawing, "2.14.0") is None
 

@@ -105,7 +105,9 @@ def test_modo_padrao_e_leve_sempre_e_full_true_e_a_passada_profunda(window):
     é pega pela passada profunda explícita (full=True)."""
     doc, canvas = window.document, window.canvas
     poly = doc.add_entity(LWPolyline(points=[Point(0, 0), Point(10, 0), Point(10, 10)]))
-    canvas.refresh_entities()
+    # A passada profunda guarda o repr de base; so a partir dela uma mutacao
+    # no lugar e detectavel (a incremental nao guarda repr: 1 s por abertura).
+    canvas.refresh_entities(full=True)
     criados = _conta_criacoes(canvas)
     poly.points.append(Point(0, 500))
 

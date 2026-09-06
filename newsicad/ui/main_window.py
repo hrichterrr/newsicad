@@ -1389,7 +1389,9 @@ class MainWindow(QMainWindow):
             QApplication.processEvents()
 
         try:
-            session.canvas.refresh_entities(full=True, progress=progress)
+            # Cena vazia: a passada incremental cria tudo; a profunda só
+            # acrescentaria o repr() de cada entidade (1 s numa planta grande).
+            session.canvas.refresh_entities(full=False, progress=progress)
         finally:
             dialog.close()
             dialog.deleteLater()

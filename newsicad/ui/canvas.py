@@ -181,10 +181,84 @@ def _pick_grid_step(scale: float, min_px: float = 20.0) -> float:
     return _GRID_STEPS[-1]
 
 
+_PEN_CACHE: dict[str, QPen] = {}
+
+
 def _entity_pen(color: str = ENTITY_COLOR) -> QPen:
-    pen = QPen(QColor(color))
-    pen.setWidth(0)
+    """Caneta cosmética da cor dada, cacheada por cor: setPen copia a caneta,
+    então compartilhar o objeto é seguro — criar 185 mil QPen ao montar a
+    Casa Pau Brasil custava 1,6 s (medição de 2026-09-06)."""
+    pen = _PEN_CACHE.get(color)
+    if pen is None:
+        pen = QPen(QColor(color))
+        pen.setWidth(0)
+        _PEN_CACHE[color] = pen
     return pen
+
+
+def _plain_entity_path(entity: Entity) -> QPainterPath | None:
+    """Traçado "só caneta" de uma entidade geométrica simples, com a MESMA
+    geometria que `CanvasView._create_item` produz para ela — usado na fusão
+    por cor dentro de blocos, onde criar um item por segmento só para ler o
+    path dele era o grosso do custo de abrir uma planta. Tipos com
+    preenchimento, texto, tabela, imagem, bloco ou marcador dependente do
+    zoom devolvem None (caem no caminho do item)."""
+    if isinstance(entity, Line):
+        p1 = cad_to_scene(entity.start)
+        p2 = cad_to_scene(entity.end)
+        path = QPainterPath(p1)
+        path.lineTo(p2)
+        return path
+    if isinstance(entity, LWPolyline):
+        path = QPainterPath()
+        pts = entity.points
+        if pts:
+            path.moveTo(cad_to_scene(pts[0]))
+            for p in pts[1:]:
+                path.lineTo(cad_to_scene(p))
+            if entity.closed:
+                path.closeSubpath()
+        return path
+    if isinstance(entity, Circle):
+        if entity.inner_radius > 1e-9:
+            return None
+        c = cad_to_scene(entity.center)
+        r = entity.radius
+        path = QPainterPath()
+        path.addEllipse(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r))
+        return path
+    if isinstance(entity, Arc):
+        c = cad_to_scene(entity.center)
+        r = entity.radius
+        start_deg = -math.degrees(entity.start_angle)
+        sweep_world_deg = math.degrees((entity.end_angle - entity.start_angle) % (2 * math.pi))
+        rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        path = QPainterPath()
+        path.arcMoveTo(rect, start_deg)
+        path.arcTo(rect, start_deg, -sweep_world_deg)
+        return path
+    if isinstance(entity, Ellipse):
+        c = cad_to_scene(entity.center)
+        path = QPainterPath()
+        path.addEllipse(QPointF(0, 0), entity.radius_major, entity.radius_minor)
+        transform = QTransform()
+        transform.translate(c.x(), c.y())
+        transform.rotate(-math.degrees(entity.rotation))
+        return transform.map(path)
+    if isinstance(entity, Spline):
+        path = QPainterPath()
+        pts = entity.points
+        if len(pts) == 1:
+            path.moveTo(cad_to_scene(pts[0]))
+        elif pts:
+            segments = catmull_rom_bezier(pts, entity.closed)
+            path.moveTo(cad_to_scene(segments[0][0]))
+            for _p0, ctrl1, ctrl2, p3 in segments:
+                path.cubicTo(cad_to_scene(ctrl1), cad_to_scene(ctrl2), cad_to_scene(p3))
+            if entity.closed:
+                path.closeSubpath()
+        return path
+    return None
 
 
 def _selected_pen() -> QPen:
@@ -694,6 +768,10 @@ class CanvasView(QGraphicsView):
         #: ids dos textos com FIELD (valor vivo recalculado a cada passada).
         self._last_layer_signature: tuple = ()
         self._last_visibility_signature: tuple = ()
+        #: Geometria fundida por definição de bloco e contexto (cor, camada)
+        #: do INSERT — ver _create_block_reference_item. Descartada quando
+        #: uma definição, uma cor ou uma visibilidade de camada muda.
+        self._block_geom_cache: dict[tuple, tuple[dict[str, QPainterPath], list]] = {}
         self._max_z: float = 0.0
         self._field_ids: set[str] = set()
         #: Cache ENTRE refreshes da impressão digital das definições de
@@ -780,10 +858,13 @@ class CanvasView(QGraphicsView):
         # Visibilidade de camada não recria nada: e so setVisible nos itens
         # (mesmo caminho do clique na lampada, apply_layer_visibility).
         visibility_signature = tuple(layer.visible for layer in layers.values())
-        if visibility_signature != self._last_visibility_signature:
+        visibility_changed = visibility_signature != self._last_visibility_signature
+        if visibility_changed:
             self._last_visibility_signature = visibility_signature
             if items:
                 self.apply_layer_visibility()
+        if defs_changed or layers_changed or visibility_changed:
+            self._block_geom_cache.clear()
 
         # 1) removidos
         removed = [entity_id for entity_id in items if entity_id not in entities]
@@ -825,22 +906,11 @@ class CanvasView(QGraphicsView):
                 if entities.get(entity_id) is entity:
                     candidates.append((entity_id, entity))
 
-        def definition_fp(block_name: str, _visiting: frozenset[str] = frozenset()) -> str:
-            if block_name in _visiting:
-                return ""  # definição cíclica: corta, igual ao render faz
-            cached = self._def_fp_cache.get(block_name)
-            if cached is not None:
-                return cached
-            parts: list[str] = []
-            for child in document.block_definitions.get(block_name, []):
-                parts.append(repr(child))
-                if isinstance(child, BlockReference):
-                    parts.append(definition_fp(child.block_name, _visiting | {block_name}))
-            # Guarda só um resumo (hash) — a string completa de uma definição
-            # grande seria concatenada na impressão digital de CADA instância.
-            fp = f"{hash(chr(0).join(parts)):x}"
-            self._def_fp_cache[block_name] = fp
-            return fp
+        # Conteúdo das definições de bloco: coberto por block_defs_revision
+        # (define_block/PURGE bumpam) — antes cada abertura calculava o repr
+        # de todas as entidades de todas as definições (110 mil na Casa Pau
+        # Brasil, 2,4 s) só para montar esta impressão digital.
+        defs_revision = document.block_defs_revision
 
         def layer_colors_fp(block_name: str) -> str:
             # Cores das camadas que a definição usa — e SÓ elas (um resumo de
@@ -857,7 +927,7 @@ class CanvasView(QGraphicsView):
             visible = document.is_layer_visible(entity)
             fingerprint = f"{id(entity):x}\x00{entity.version}\x00{self._effective_color(entity)}"
             if isinstance(entity, BlockReference):
-                fingerprint += "\x00" + definition_fp(entity.block_name) + "\x00" + layer_colors_fp(entity.block_name)
+                fingerprint += f"\x00{defs_revision}\x00" + layer_colors_fp(entity.block_name)
             item = items.get(entity_id)
             unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
             if unchanged and full:
@@ -865,7 +935,10 @@ class CanvasView(QGraphicsView):
                 # (lista alterada sem atribuição) não bumpa a versão, mas
                 # muda o repr.
                 current_repr = repr(entity)
-                if self._entity_reprs.get(entity_id) != current_repr:
+                stored_repr = self._entity_reprs.get(entity_id)
+                if stored_repr is None:
+                    self._entity_reprs[entity_id] = current_repr
+                elif stored_repr != current_repr:
                     unchanged = False
                     self._entity_reprs[entity_id] = current_repr
             if unchanged:
@@ -917,7 +990,12 @@ class CanvasView(QGraphicsView):
                     self._scene.addItem(item)
                     items[entity_id] = item
                     self._entity_fingerprints[entity_id] = fingerprint
-                    self._entity_reprs[entity_id] = repr(entity)
+                    if full:
+                        # Baseline da rede de segurança (repr) só quando a
+                        # passada profunda é usada: 43 mil reprs = 1 s.
+                        self._entity_reprs[entity_id] = repr(entity)
+                    else:
+                        self._entity_reprs.pop(entity_id, None)
                     if isinstance(entity, Text) and entity.field_type:
                         self._field_ids.add(entity_id)
                     recreated.append(entity_id)
@@ -1408,34 +1486,60 @@ class CanvasView(QGraphicsView):
         insert_layer = ctx[1] if (ctx is not None and entity.layer == "0") else entity.layer
         child_ctx = (insert_color, insert_layer)
 
-        definition = self.document.block_definitions.get(entity.block_name, [])
-        merged_paths: dict[str, QPainterPath] = {}
-        for child_entity in definition:
-            if not self._block_child_visible(child_entity, insert_layer):
-                continue
-            try:
+        # A geometria "só caneta" da definição é fundida por cor UMA vez por
+        # (bloco, contexto) e reaproveitada por todas as instâncias — 862
+        # INSERTs de ~40 definições na Casa Pau Brasil eram reconstruídos um
+        # a um a partir das 110 mil entidades das definições (10,7 s dos 18 s
+        # de montagem, medição de 2026-09-06). Filhos que não fundem (texto,
+        # hachura, imagem, bloco aninhado) continuam sendo criados por
+        # instância. O cache é descartado quando uma definição, uma cor ou
+        # uma visibilidade de camada muda (ver refresh_entities). Fusão por
+        # cor em vez de item por segmento: antes a fusão criava tudo e depois
+        # removia um a um, e cada removeFromGroup recalcula o grupo inteiro
+        # (17 s viravam 5 minutos numa planta com blocos grandes).
+        cache_key = (entity.block_name, child_ctx)
+        cached = self._block_geom_cache.get(cache_key)
+        if cached is None:
+            definition = self.document.block_definitions.get(entity.block_name, [])
+            merged_paths: dict[str, QPainterPath] = {}
+            specials: list[tuple[Entity, str | None]] = []
+            for child_entity in definition:
+                if not self._block_child_visible(child_entity, insert_layer):
+                    continue
                 if isinstance(child_entity, BlockReference):
-                    child_item = self._create_block_reference_item(child_entity, _depth + 1, child_ctx)
-                    child_color = None
+                    specials.append((child_entity, None))
+                    continue
+                child_color = self._effective_color(child_entity, child_ctx)
+                # Traçado direto da entidade (sem criar um QGraphicsItem só
+                # para extrair o path dele): 111 mil itens descartados por
+                # abertura, 4 s (medição de 2026-09-06).
+                path = _plain_entity_path(child_entity)
+                if path is None:
+                    try:
+                        child_item = self._create_item(child_entity, child_color)
+                    except TypeError:
+                        continue
+                    path = self._plain_geometry_path(child_item)
+                if path is not None:
+                    merged_paths.setdefault(child_color, QPainterPath()).addPath(path)
                 else:
-                    child_color = self._effective_color(child_entity, child_ctx)
+                    specials.append((child_entity, child_color))
+            cached = (merged_paths, specials)
+            self._block_geom_cache[cache_key] = cached
+        merged_paths, specials = cached
+
+        for child_entity, child_color in specials:
+            try:
+                if child_color is None:
+                    child_item = self._create_block_reference_item(child_entity, _depth + 1, child_ctx)
+                else:
                     child_item = self._create_item(child_entity, child_color)
             except TypeError:
-                continue
-            # Fusão por cor: o item puramente geométrico NÃO entra no grupo —
-            # seu traçado é acumulado e vira um item só por cor no fim. Antes
-            # a fusão criava tudo e depois removia um a um, e cada
-            # removeFromGroup recalcula o grupo inteiro: numa planta com
-            # blocos grandes (NEWSI-CASA PAU BRASIL-R01, 110 mil segmentos em
-            # definições) montar a cena passou de 17 s para 5 MINUTOS.
-            path = None if child_color is None else self._plain_geometry_path(child_item)
-            if path is not None:
-                merged_paths.setdefault(child_color, QPainterPath()).addPath(path)
                 continue
             group.addToGroup(child_item)
 
         for merged_color, merged_path in merged_paths.items():
-            merged_item = QGraphicsPathItem(merged_path)
+            merged_item = QGraphicsPathItem(QPainterPath(merged_path))
             merged_item.setPen(_entity_pen(merged_color))
             merged_item.setData(_BASE_COLOR_DATA_KEY, merged_color)
             group.addToGroup(merged_item)

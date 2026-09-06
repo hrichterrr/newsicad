@@ -6,8 +6,8 @@ planta Casa Pau Brasil só no `ezdxf.readfile`; DXF binário do dwg2dxf não
 ajuda — 12% mais rápido). Os testers abrem o MESMO arquivo várias vezes por
 dia, então o ganho real está em não reparsear: o Document (dataclasses puras,
 sem nada do Qt) e o SkippedCount vão pra um pickle em %LOCALAPPDATA%/NewSIcad/
-cache, chaveado por caminho + tamanho + mtime + versão do app. Qualquer
-mudança no arquivo ou no NewSIcad invalida a entrada; qualquer erro de
+cache, chaveado por caminho + tamanho + mtime + CACHE_VERSION (esquema). Qualquer
+mudança no arquivo ou no esquema invalida a entrada; qualquer erro de
 leitura/escrita do cache é ignorado silenciosamente (o pior caso é só
 reparsear). Mantém as 20 entradas mais recentes."""
 
@@ -19,7 +19,12 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-CACHE_VERSION = "1"
+# Versao do ESQUEMA do cache: bumpar sempre que o formato pickled mudar
+# (campo novo/renomeado em Document ou nas entidades de core/entities.py).
+# A chave nao inclui mais a versao do app: chavear por versao fazia cada
+# release "esfriar" o cache de todos os arquivos (90 s de parser por planta
+# grande na primeira abertura de cada versao, medicao de 2026-09-05).
+CACHE_VERSION = "2"
 MAX_ENTRIES = 20
 
 
@@ -30,7 +35,8 @@ def cache_dir() -> Path:
 
 def cache_key(path: Path, app_version: str) -> str:
     stat = path.stat()
-    raw = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{app_version}|{CACHE_VERSION}"
+    del app_version  # mantido na assinatura pelos chamadores; ver CACHE_VERSION
+    raw = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{CACHE_VERSION}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
