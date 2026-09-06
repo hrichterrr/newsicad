@@ -1600,7 +1600,10 @@ class MainWindow(QMainWindow):
         self.canvas.refresh_entities()
         if not self.interpreter.active:
             self.canvas.clear_transient_overlays()
-        self.canvas.viewport().update()
+        # Só a região dos overlays: a cena repinta sozinha o que mudou nela
+        # (ver CanvasView.update_overlays — 203 ms por passo de comando numa
+        # planta real quando isto repintava a viewport inteira).
+        self.canvas.update_overlays()
         self._refresh_prompt()
         self._refresh_properties_panel()
         # Cobre PURGE/BLOCK/qualquer comando que possa mudar o conjunto de

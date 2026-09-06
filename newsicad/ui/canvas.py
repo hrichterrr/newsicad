@@ -808,6 +808,9 @@ class CanvasView(QGraphicsView):
         self.osnap_enabled = False
         self.polar_enabled = False
         self._osnap_marker: tuple[Point, str] | None = None
+        #: Retângulo (em pixels da viewport) coberto pelos overlays na última
+        #: invalidação — ver update_overlays.
+        self._last_overlay_rect = QRect()
 
         self._dyn_text = QGraphicsSimpleTextItem()
         self._dyn_text.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
@@ -2152,13 +2155,61 @@ class CanvasView(QGraphicsView):
     def set_polar_enabled(self, enabled: bool) -> None:
         self.polar_enabled = enabled
 
+    def _overlay_rect_viewport(self) -> QRect:
+        """Retângulo em pixels da viewport que os overlays de `drawForeground`
+        (crosshair + pickbox, preview, marcador de OSNAP, retângulo de
+        seleção) ocupam agora. Vazio quando não há nenhum."""
+        rects: list[QRectF] = []
+        if self._mouse_scene_pos is not None:
+            visible = self.mapToScene(self.viewport().rect()).boundingRect()
+            half_w = visible.width() * CROSSHAIR_SIZE_PERCENT / 100 / 2
+            half_h = visible.height() * CROSSHAIR_SIZE_PERCENT / 100 / 2
+            x, y = self._mouse_scene_pos.x(), self._mouse_scene_pos.y()
+            rects.append(QRectF(x - half_w, y - half_h, half_w * 2, half_h * 2))
+        if self._preview_path is not None and not self._preview_path.isEmpty():
+            rects.append(self._preview_path.boundingRect())
+        if self._osnap_marker is not None:
+            center = cad_to_scene(self._osnap_marker[0])
+            size = _OSNAP_MARKER_SIZE_PX / max(self.transform().m11(), 1e-6)
+            rects.append(QRectF(center.x() - size, center.y() - size, size * 2, size * 2))
+        if self._selection_drag_start_scene is not None and self._selection_drag_current_scene is not None:
+            rects.append(QRectF(self._selection_drag_start_scene, self._selection_drag_current_scene).normalized())
+        if not rects:
+            return QRect()
+        total = rects[0]
+        for rect in rects[1:]:
+            total = total.united(rect)
+        return self.mapFromScene(total).boundingRect().adjusted(-2, -2, 2, 2)
+
+    def update_overlays(self) -> None:
+        """Repinta SÓ a região dos overlays (a atual e a anterior), em vez da
+        viewport inteira.
+
+        Entidade criada, alterada ou removida já é repintada pela própria
+        cena do Qt, que invalida a região do item — o `viewport().update()`
+        que era feito a cada passo de comando repintava os 50 mil itens da
+        planta NEWSI-CASA PAU BRASIL-R01 inteiros: 203 ms dos 228 ms de cada
+        passo (medição de 2026-09-06). O que a cena NÃO conhece são os
+        overlays desenhados por `drawForeground`; é essa região, e só ela,
+        que precisa ser invalidada à mão."""
+        rect = self._overlay_rect_viewport()
+        previous = self._last_overlay_rect
+        self._last_overlay_rect = QRect(rect)
+        if rect.isNull():
+            rect = previous
+        elif not previous.isNull():
+            rect = rect.united(previous)
+        if rect.isNull():
+            return
+        self.viewport().update(rect)
+
     def clear_transient_overlays(self) -> None:
         """Limpa preview/dynamic-input residuais quando um comando termina,
         sem esperar o próximo movimento do mouse."""
         self._preview_path = None
         self._dyn_text.hide()
         self._osnap_marker = None
-        self.viewport().update()
+        self.update_overlays()
 
     def set_dynamic_input_enabled(self, enabled: bool) -> None:
         self.dynamic_input_enabled = enabled
