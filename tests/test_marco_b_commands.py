@@ -325,6 +325,7 @@ def test_mtext_default_justify_is_top_left():
     interp, doc = make_interpreter()
     interp.start("MTEXT")
     interp.submit_point(Point(0, 0))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("Hello")
     assert not interp.active
     text = next(e for e in doc.all_entities() if isinstance(e, Text))
@@ -337,6 +338,7 @@ def test_mtext_justify_suboption_sets_justify_field():
     interp.submit_text("Justify")
     interp.submit_text("MC")
     interp.submit_point(Point(0, 0))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("Hello")
     assert not interp.active
     text = next(e for e in doc.all_entities() if isinstance(e, Text))

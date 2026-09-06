@@ -120,6 +120,13 @@ class Document:
         # do AutoCAD, que não se aplica sem paper space) — multiplica a
         # altura padrão de Text/Dimension/Table/Leader na hora de criar.
         self.annotation_scale: float = 1.0
+        # Altura de texto lembrada do último MTEXT (igual à TEXTSIZE do
+        # AutoCAD) e, ao abrir um arquivo, a altura mais comum dos textos que
+        # ele já tem — sem isso, digitar um texto numa planta em metros saía
+        # com 2,5 unidades, ~500x maior que o resto do desenho (teste de
+        # 2026-09-06 na NEWSI-ANA BEATRIZ-R01). `None` = nunca definida:
+        # cai no padrão histórico (DEFAULT_TEXT_HEIGHT x annotation_scale).
+        self.text_height: float | None = None
         # Revisão do que muda FORA da pilha de undo e ainda assim vai pro
         # arquivo: camadas (cor/visível/travada/nome/criação/purge) e
         # unidades. Junto com `UndoStack.state_id()` e

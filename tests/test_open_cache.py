@@ -68,3 +68,21 @@ def test_load_dxf_without_layout_content_has_no_notes(tmp_path):
     dxf.saveas(path)
     _doc, skipped = load_dxf(path)
     assert skipped.notes == []
+
+
+def test_altura_padrao_de_texto_vem_do_desenho_aberto(tmp_path):
+    """Achado do teste de duas abas (2026-09-06): numa planta em metros os
+    textos medem centésimos de unidade, e o MTEXT usava 2,5 fixo. Ao abrir,
+    a altura mais comum do arquivo vira o padrão (Document.text_height)."""
+    from newsicad.io.dxf_io import load_dxf as _load
+
+    dxf = ezdxf.new("R2000")
+    msp = dxf.modelspace()
+    for _ in range(3):
+        msp.add_text("A", dxfattribs={"height": 0.05}).set_placement((0, 0))
+    msp.add_text("B", dxfattribs={"height": 1.5}).set_placement((1, 1))
+    path = tmp_path / "alturas.dxf"
+    dxf.saveas(path)
+
+    doc, _ = _load(path)
+    assert doc.text_height == 0.05

@@ -31,6 +31,7 @@ def test_mtext_command_creates_text_entity():
     interp, doc = make_interpreter()
     interp.start("MTEXT")
     interp.submit_point(Point(1, 2))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("Hello NewSIcad")
     assert not interp.active
     texts = [e for e in doc.all_entities() if isinstance(e, Text)]
@@ -44,6 +45,7 @@ def test_mtext_alias_t_works():
     interp, doc = make_interpreter()
     interp.start("T")
     interp.submit_point(Point(0, 0))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("linha1\nlinha2")
     texts = [e for e in doc.all_entities() if isinstance(e, Text)]
     assert len(texts) == 1
@@ -54,6 +56,7 @@ def test_mtext_empty_content_creates_nothing():
     interp, doc = make_interpreter()
     interp.start("MT")
     interp.submit_point(Point(0, 0))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("")  # Enter sem digitar nada
     assert not interp.active
     assert not [e for e in doc.all_entities() if isinstance(e, Text)]
@@ -234,3 +237,46 @@ def test_leader_single_point_creates_nothing():
     interp.submit_text("")  # Enter direto: só 1 ponto, não é um leader válido
     assert not interp.active
     assert not doc.all_entities()
+
+
+# ---------------------------------------------------------------------- #
+# MTEXT: altura (achado do teste de duas abas, 2026-09-06 — o comando não
+# perguntava a altura e todo texto saía com 2,5 unidades, ~500x maior que o
+# resto de uma planta em metros)
+# ---------------------------------------------------------------------- #
+def test_mtext_pergunta_a_altura_e_usa_a_digitada():
+    interp, doc = make_interpreter()
+    interp.start("MTEXT")
+    interp.submit_point(Point(0, 0))
+    assert "height" in (interp.current_prompt.message or "").lower()
+    interp.submit_text("0.05")
+    interp.submit_text("Sala")
+    assert not interp.active
+    text = next(e for e in doc.all_entities() if isinstance(e, Text))
+    assert text.height == 0.05
+
+
+def test_mtext_lembra_a_ultima_altura_como_padrao():
+    interp, doc = make_interpreter()
+    interp.start("MTEXT")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("0.08")
+    interp.submit_text("primeiro")
+    assert doc.text_height == 0.08
+
+    interp.start("MTEXT")
+    interp.submit_point(Point(1, 1))
+    assert "0.08" in interp.current_prompt.message
+    interp.submit_text("")  # Enter aceita a altura lembrada
+    interp.submit_text("segundo")
+    alturas = [e.height for e in doc.all_entities() if isinstance(e, Text)]
+    assert alturas == [0.08, 0.08]
+
+
+def test_mtext_recusa_altura_nao_positiva():
+    interp, doc = make_interpreter()
+    interp.start("MTEXT")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("0")
+    assert not interp.active
+    assert not [e for e in doc.all_entities() if isinstance(e, Text)]

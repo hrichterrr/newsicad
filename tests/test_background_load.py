@@ -80,3 +80,65 @@ def test_abrir_arquivo_usa_a_thread_e_mostra_o_desenho(tmp_path, monkeypatch):
     assert session.is_dirty() is False
     win.hide()
     win.deleteLater()
+
+
+def test_salvar_roda_em_thread_com_progresso(tmp_path, monkeypatch):
+    """Achado do teste de duas abas (2026-09-06): gravar um desenho herdado de
+    uma planta real levou 19 s TRAVANDO a janela, porque `save_dxf` era
+    chamado direto na thread da interface — a abertura já usava
+    `run_with_progress`, a gravação não."""
+    from pathlib import Path
+
+    from newsicad.core.entities import Line, Point
+    from newsicad.ui import main_window as mw
+
+    _app()
+    win = mw.MainWindow()
+    win.document.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+
+    usados: list[str] = []
+    original = mw.run_with_progress
+
+    def espiao(parent, titulo, texto, fn):
+        usados.append(titulo)
+        return original(parent, titulo, texto, fn)
+
+    monkeypatch.setattr(mw, "run_with_progress", espiao)
+    destino = Path(tmp_path) / "saida.dxf"
+    win._write_dxf(destino)
+
+    assert destino.exists()
+    assert usados and "Salvando" in usados[0]
+
+
+def test_abrir_arquivo_preserva_as_configuracoes_do_desenho(tmp_path):
+    """Achado de 2026-09-06: `load_dxf` lia DimStyle proporcional ao arquivo,
+    estilos de texto e unidades, e `_populate_session_from_loaded` descartava
+    tudo — uma planta em metros abria com texto de cota de 2 unidades, maior
+    que a própria planta."""
+    from pathlib import Path
+
+    from newsicad.core.document import DimStyle, Document, TextStyle
+    from newsicad.core.entities import Line, Point
+    from newsicad.ui.main_window import MainWindow
+
+    _app()
+    win = MainWindow()
+
+    carregado = Document()
+    carregado.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    carregado.units = "m"
+    carregado.dim_style = DimStyle(text_height=0.05, arrow_size=0.02)
+    carregado.text_styles["Prancha"] = TextStyle()
+    carregado.current_text_style = "Prancha"
+    carregado.text_height = 0.03
+
+    sessao = win._make_untitled_session()
+    win._populate_session_from_loaded(sessao, carregado, Path(tmp_path) / "planta.dxf", 0)
+
+    assert sessao.document.units == "m"
+    assert sessao.document.dim_style.text_height == 0.05
+    assert sessao.document.dim_style.arrow_size == 0.02
+    assert "Prancha" in sessao.document.text_styles
+    assert sessao.document.current_text_style == "Prancha"
+    assert sessao.document.text_height == 0.03

@@ -56,17 +56,31 @@ def mtext_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             continue
         break
 
+    # Altura ANTES do texto, como o DTEXT do AutoCAD (ponto -> altura ->
+    # texto). O padrão é a última altura usada no desenho — ou, num arquivo
+    # recém-aberto, a altura mais comum dos textos que ele já tem — para que
+    # Enter produza um texto na escala do desenho, e não 2,5 unidades fixas.
+    default_height = ctx.document.text_height
+    if not default_height or default_height <= 0:
+        default_height = DEFAULT_TEXT_HEIGHT * ctx.document.annotation_scale
+    height_raw = yield Prompt(f"Specify text height <{default_height:.4g}>:", kind="distance")
+    height = default_height if height_raw is ENTER else float(height_raw)
+    if height <= 0:
+        yield Prompt("MTEXT: a altura do texto deve ser positiva.", kind="info")
+        return
+
     content = yield Prompt("Enter text:", kind="text")
     if content is ENTER:
         return
     text = str(content).strip("\r")
     if text == "":
         return
+    ctx.document.text_height = height
     ctx.document.add_entity(
         Text(
             insertion_point=insertion,
             content=text,
-            height=DEFAULT_TEXT_HEIGHT * ctx.document.annotation_scale,
+            height=height,
             rotation=0.0,
             justify=justify,
             layer=ctx.document.current_layer,

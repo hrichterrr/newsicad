@@ -24,7 +24,9 @@ from typing import Any
 # A chave nao inclui mais a versao do app: chavear por versao fazia cada
 # release "esfriar" o cache de todos os arquivos (90 s de parser por planta
 # grande na primeira abertura de cada versao, medicao de 2026-09-05).
-CACHE_VERSION = "2"
+# "3": Document ganhou `text_height` (2026-09-06); uma entrada gravada antes
+# disso volta sem o atributo e quebraria quem o lê.
+CACHE_VERSION = "3"
 MAX_ENTRIES = 20
 
 

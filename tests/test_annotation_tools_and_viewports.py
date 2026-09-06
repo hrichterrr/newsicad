@@ -52,6 +52,7 @@ def test_mtext_applies_current_text_style_and_annotation_scale():
 
     interp.start("MTEXT")
     interp.submit_point(Point(0, 0))
+    interp.submit_text("")  # altura: aceita o padrao
     interp.submit_text("Oi")
     assert not interp.active
 

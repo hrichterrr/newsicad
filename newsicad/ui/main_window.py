@@ -66,7 +66,7 @@ from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.15.6"
+APP_VERSION = "2.15.7"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
@@ -1375,6 +1375,19 @@ class MainWindow(QMainWindow):
             document.define_block(name, entities)
         for entity in loaded.all_entities():
             document.add_entity(entity)
+        # Configurações do DESENHO lidas do arquivo. Sem isto elas eram lidas
+        # por `load_dxf` e jogadas fora aqui: uma planta em metros abria com o
+        # DimStyle padrão (texto de cota 2,0 unidades, maior que a própria
+        # planta — justamente o que `read_dim_style` existe para evitar), com
+        # os estilos de texto do arquivo perdidos e com as unidades voltando
+        # para "mm" (achado de 2026-09-06, junto com a altura do MTEXT).
+        document.units = loaded.units
+        document.dim_style = loaded.dim_style
+        document.table_style = loaded.table_style
+        document.mleader_style = loaded.mleader_style
+        document.text_styles = dict(loaded.text_styles)
+        document.current_text_style = loaded.current_text_style
+        document.text_height = getattr(loaded, "text_height", None)
         session.current_path = path
         # Montar a cena precisa da thread da interface (itens Qt); em lotes,
         # com o diálogo de progresso, a janela segue viva (10 s numa planta
@@ -1483,7 +1496,7 @@ class MainWindow(QMainWindow):
 
         self._backup_before_overwrite(self.current_path)
         try:
-            save_dxf(self.document, self.current_path)
+            self._write_dxf(self.current_path)
         except DxfIoError as exc:
             QMessageBox.critical(self, "Erro ao salvar arquivo", str(exc))
             return False
@@ -1516,7 +1529,7 @@ class MainWindow(QMainWindow):
 
         self._backup_before_overwrite(path)
         try:
-            save_dxf(self.document, path)
+            self._write_dxf(path)
         except DxfIoError as exc:
             QMessageBox.critical(self, "Erro ao salvar arquivo", str(exc))
             return False
@@ -1533,6 +1546,22 @@ class MainWindow(QMainWindow):
         self._active_session().mark_saved()
         self._refresh_tab_labels()
         return True
+
+    def _write_dxf(self, path: Path) -> None:
+        """Grava o .dxf numa thread, com diálogo de progresso — mesmo
+        tratamento que a abertura já tinha.
+
+        Gravar não é barato: um desenho de 77 entidades herdado de uma planta
+        real levou 19 s, porque as 424 definições de bloco do arquivo original
+        vão todas para o disco (o AutoCAD também só as descarta no PURGE). Na
+        thread da interface isso era uma travada total, sem nenhum aviso, e o
+        Windows carimba a janela como "não respondendo" (teste de 2026-09-06).
+        `save_dxf` mexe só em `Document` e ezdxf, nada de Qt — mesma condição
+        da leitura (ver newsicad/ui/background_load.py)."""
+        document = self.document
+        run_with_progress(
+            self, "Salvando desenho", f"Gravando {path.name}…", lambda: save_dxf(document, path)
+        )
 
     def _backup_before_overwrite(self, path: Path) -> None:
         """Igual ao AutoCAD: se já existe um arquivo nesse caminho, guarda a

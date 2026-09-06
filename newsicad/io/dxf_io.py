@@ -343,6 +343,17 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     text_height, arrow_size = read_dim_style(dxf_doc.header, importer.dimension_text_heights)
     document.dim_style = DimStyle(text_height=text_height, arrow_size=arrow_size)
 
+    # Altura padrão do MTEXT neste desenho: a mais comum entre os textos que
+    # ele já tem (ver Document.text_height). Numa planta em metros os textos
+    # medem centésimos de unidade, e o padrão fixo de 2,5 saía gigante.
+    heights = collections.Counter(
+        round(entity.height, 9)
+        for entity in document.entities.values()
+        if isinstance(entity, Text) and entity.height > 0
+    )
+    if heights:
+        document.text_height = heights.most_common(1)[0][0]
+
     skipped = SkippedCount(sum(skipped_by_type.values()), dict(skipped_by_type), _file_notes(dxf_doc))
     return document, skipped
 
