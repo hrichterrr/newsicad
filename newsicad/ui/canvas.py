@@ -203,19 +203,21 @@ def _plain_entity_path(entity: Entity) -> QPainterPath | None:
     path dele era o grosso do custo de abrir uma planta. Tipos com
     preenchimento, texto, tabela, imagem, bloco ou marcador dependente do
     zoom devolvem None (caem no caminho do item)."""
+    # Line e LWPolyline sao 93% das entidades de uma planta real: aqui o
+    # cad_to_scene (Y invertido) vai inline, sem a chamada de funcao.
     if isinstance(entity, Line):
-        p1 = cad_to_scene(entity.start)
-        p2 = cad_to_scene(entity.end)
-        path = QPainterPath(p1)
-        path.lineTo(p2)
+        start, end = entity.start, entity.end
+        path = QPainterPath(QPointF(start.x, -start.y))
+        path.lineTo(QPointF(end.x, -end.y))
         return path
     if isinstance(entity, LWPolyline):
         path = QPainterPath()
         pts = entity.points
         if pts:
-            path.moveTo(cad_to_scene(pts[0]))
+            first = pts[0]
+            path.moveTo(QPointF(first.x, -first.y))
             for p in pts[1:]:
-                path.lineTo(cad_to_scene(p))
+                path.lineTo(QPointF(p.x, -p.y))
             if entity.closed:
                 path.closeSubpath()
         return path
@@ -761,7 +763,7 @@ class CanvasView(QGraphicsView):
         #: gráfico dela foi criado (ver refresh_entities) — permite pular a
         #: recriação de itens cujas entidades não mudaram desde o último
         #: refresh.
-        self._entity_fingerprints: dict[str, str] = {}
+        self._entity_fingerprints: dict[str, tuple] = {}
         self._entity_reprs: dict[str, str] = {}
         #: Estado da passada incremental de refresh_entities: assinatura
         #: (nome, cor) das camadas na ultima passada, maior zValue em uso e
@@ -772,6 +774,11 @@ class CanvasView(QGraphicsView):
         #: do INSERT — ver _create_block_reference_item. Descartada quando
         #: uma definição, uma cor ou uma visibilidade de camada muda.
         self._block_geom_cache: dict[tuple, tuple[dict[str, QPainterPath], list]] = {}
+        #: Linhas de preenchimento por hachura (id da entidade + versão) — a
+        #: mesma hachura dentro de uma definição de bloco era recalculada em
+        #: cada instância (336 cálculos para ~40 hachuras distintas na Casa
+        #: Pau Brasil, 0,6 s por abertura). Descartado junto com a geometria.
+        self._hatch_lines_cache: dict[tuple, list] = {}
         self._max_z: float = 0.0
         self._field_ids: set[str] = set()
         #: Cache ENTRE refreshes da impressão digital das definições de
@@ -865,6 +872,7 @@ class CanvasView(QGraphicsView):
                 self.apply_layer_visibility()
         if defs_changed or layers_changed or visibility_changed:
             self._block_geom_cache.clear()
+            self._hatch_lines_cache.clear()
 
         # 1) removidos
         removed = [entity_id for entity_id in items if entity_id not in entities]
@@ -922,12 +930,14 @@ class CanvasView(QGraphicsView):
                 self._def_layers_cache[block_name] = names
             return "|".join(f"{n}={layers[n].color}" for n in names if n in layers)
 
-        plan: list[tuple[str, Entity, str, bool]] = []
+        plan: list[tuple[str, Entity, tuple, bool]] = []
         for entity_id, entity in candidates:
             visible = document.is_layer_visible(entity)
-            fingerprint = f"{id(entity):x}\x00{entity.version}\x00{self._effective_color(entity)}"
+            # Tupla, não string formatada: montar 43 mil f-strings custava
+            # 0,5 s por passada completa (medição de 2026-09-06).
+            fingerprint = (id(entity), entity.version, self._effective_color(entity))
             if isinstance(entity, BlockReference):
-                fingerprint += f"\x00{defs_revision}\x00" + layer_colors_fp(entity.block_name)
+                fingerprint += (defs_revision, layer_colors_fp(entity.block_name))
             item = items.get(entity_id)
             unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
             if unchanged and full:
@@ -1305,7 +1315,12 @@ class CanvasView(QGraphicsView):
             path, outer_scene = _hatch_boundary_path(entity)
             item = _HatchItem(path)
             item.setPen(_entity_pen(color))
-            item.set_hatch_lines(_hatch_fill_lines(outer_scene, entity.angle, entity.spacing))
+            cache_key = (id(entity), entity.version)
+            lines = self._hatch_lines_cache.get(cache_key)
+            if lines is None:
+                lines = _hatch_fill_lines(outer_scene, entity.angle, entity.spacing)
+                self._hatch_lines_cache[cache_key] = lines
+            item.set_hatch_lines(lines)
             item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 

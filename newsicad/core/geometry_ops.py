@@ -7,6 +7,7 @@ import copy
 import math
 import uuid
 
+from newsicad.core.entities import _new_id
 from newsicad.core.entities import (
     Arc,
     BlockReference,
@@ -134,7 +135,7 @@ def catmull_rom_bezier(points: list[Point], closed: bool) -> list[tuple[Point, P
 # ---------------------------------------------------------------------- #
 def clone_entity(entity: Entity) -> Entity:
     clone = copy.deepcopy(entity)
-    clone.id = uuid.uuid4().hex
+    clone.id = _new_id()
     return clone
 
 

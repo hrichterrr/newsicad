@@ -13,6 +13,7 @@ import ezdxf
 import ezdxf.colors
 import ezdxf.recover
 
+import newsicad.core.entities as entities_module
 from newsicad.core.document import DimStyle, Document, TextStyle
 from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
@@ -168,6 +169,18 @@ def load_dxf(path: str | Path) -> tuple[Document, int]:
             ) from recover_exc
 
     document = Document()
+    # Leitura em massa: nao registrar cada atribuicao no diario de alteracoes
+    # do canvas (1,15 milhao de insercoes inuteis nesta planta) — as entidades
+    # novas sao descobertas pelo id que ainda nao tem item grafico.
+    bulk = entities_module.bulk_load()
+    bulk.__enter__()
+    try:
+        return _load_dxf_body(dxf_doc, document)
+    finally:
+        bulk.__exit__(None, None, None)
+
+
+def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     for layer in dxf_doc.layers:
         # Cor negativa no DXF = camada desligada (convenção do formato); o
         # valor absoluto é a cor ACI de verdade. Sem isso, cor/visibilidade/

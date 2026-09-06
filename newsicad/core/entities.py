@@ -24,8 +24,17 @@ class Point:
         return (self.x, self.y)
 
 
+#: Prefixo aleatório sorteado UMA vez por processo + contador: ids únicos
+#: dentro da sessão e entre sessões (dois processos nunca compartilham o
+#: prefixo), a um custo desprezível. Era `uuid.uuid4().hex` por entidade:
+#: 2,7 s só de UUID ao ler a Casa Pau Brasil, com 186 mil entidades entre
+#: desenho e definições de bloco (medição de 2026-09-06).
+_ID_PREFIX = uuid.uuid4().hex[:8]
+_ID_COUNTER = itertools.count(1)
+
+
 def _new_id() -> str:
-    return uuid.uuid4().hex
+    return f"{_ID_PREFIX}{next(_ID_COUNTER):012x}"
 
 
 #: Valor-sentinela de `Entity.color` para "BYBLOCK" (cor 0 do DXF): a entidade
@@ -50,6 +59,25 @@ _MUTATION_CLOCK = itertools.count(1)
 # por passo só de varredura, medição de 2026-09-05). Chave = id() do objeto,
 # valor = o próprio objeto (referência forte até o próximo drain).
 _DIRTY: dict[int, "Entity"] = {}
+#: Ligado por padrão; desligado durante a leitura de arquivo (ver bulk_load).
+_TRACKING = True
+
+
+class bulk_load:
+    """Suspende o registro de alterações enquanto um desenho é LIDO de um
+    arquivo: as entidades novas ainda não têm item gráfico, então o canvas
+    as descobre pelo id que falta, não pelo registro. Sem isto, ler a Casa
+    Pau Brasil fazia 1,15 milhão de inserções inúteis no registro."""
+
+    def __enter__(self) -> "bulk_load":
+        global _TRACKING
+        _TRACKING = False
+        return self
+
+    def __exit__(self, *exc) -> None:
+        global _TRACKING
+        _TRACKING = True
+        _DIRTY.clear()
 
 
 def drain_dirty() -> list["Entity"]:
@@ -80,7 +108,8 @@ class Entity:
         object.__setattr__(self, name, value)
         if name != "_version":
             object.__setattr__(self, "_version", next(_MUTATION_CLOCK))
-            _DIRTY[id(self)] = self
+            if _TRACKING:
+                _DIRTY[id(self)] = self
 
     def touch(self) -> None:
         """Marca a entidade como alterada sem trocar nenhum atributo."""
