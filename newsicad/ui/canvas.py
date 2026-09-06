@@ -6,6 +6,8 @@ janela/crossing) para os comandos MODIFY."""
 
 from __future__ import annotations
 
+import itertools
+
 import math
 from dataclasses import dataclass
 from typing import Callable
@@ -41,6 +43,7 @@ from PySide6.QtWidgets import (
 
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.core.document import Document
+from newsicad.core.entities import drain_dirty
 from newsicad.core.entities import (
     BYBLOCK,
     Arc,
@@ -686,6 +689,13 @@ class CanvasView(QGraphicsView):
         #: refresh.
         self._entity_fingerprints: dict[str, str] = {}
         self._entity_reprs: dict[str, str] = {}
+        #: Estado da passada incremental de refresh_entities: assinatura
+        #: (nome, cor) das camadas na ultima passada, maior zValue em uso e
+        #: ids dos textos com FIELD (valor vivo recalculado a cada passada).
+        self._last_layer_signature: tuple = ()
+        self._last_visibility_signature: tuple = ()
+        self._max_z: float = 0.0
+        self._field_ids: set[str] = set()
         #: Cache ENTRE refreshes da impressão digital das definições de
         #: bloco (nome -> digest) — elas são o grosso do custo num .dwg real
         #: (milhares de entidades dentro das definições) e só mudam via
@@ -734,44 +744,86 @@ class CanvasView(QGraphicsView):
     # sincronização com o Document
     # ------------------------------------------------------------------ #
     def refresh_entities(self, full: bool | None = None, progress=None) -> None:
-        """Sincroniza os itens da cena com o documento.
+        """Sincroniza os itens da cena com o documento, INCREMENTALMENTE.
 
-        `full=None` (padrão) decide sozinho: passada LEVE enquanto um comando
-        está em andamento (compara identidade + versão de cada entidade, ver
-        `Entity.__setattr__`) e passada COMPLETA quando não há comando ativo
-        (também confere o `repr()` guardado, pegando qualquer mutação feita
-        no lugar sem passar por atribuição). Antes toda passada calculava o
-        repr de todas as entidades: 0,59 s por clique numa planta de 43 mil
-        entidades (medição de 2026-09-04).
+        A passada padrão (`full` omitido ou False) só olha o que pode ter
+        mudado: entidades removidas (ids que sumiram do documento), entidades
+        novas (ids que ainda não têm item) e entidades alteradas (registro
+        `entities.drain_dirty()`, alimentado por `Entity.__setattr__` e
+        `touch()`). Sem nada disso, custa milissegundos mesmo numa planta de
+        43 mil entidades — antes toda passada varria todas as entidades
+        (0,4-0,6 s por passo de comando) e a passada de fim de comando ainda
+        calculava o repr() de cada uma (0,95 s), medições de 2026-09-05 na
+        NEWSI-CASA PAU BRASIL-R01. Mudança de cor de camada ou de definição
+        de bloco reconfere todas as impressões digitais (rara; ~0,4 s).
 
-        `progress(feitos, total)` é chamado a cada lote de itens recriados —
-        a abertura usa isso para manter um diálogo de progresso vivo."""
-        if full is None:
-            full = not self.interpreter.active
-        doc_ids = set(self.document.entities.keys())
-        existing_ids = set(self._entity_items.keys())
+        `full=True` é a passada profunda: reconfere tudo e ainda compara o
+        repr() guardado (rede de segurança para mutação feita no lugar sem
+        `touch()`); usada ao abrir o arquivo e por quem sabe que mutou no
+        lugar. `progress(feitos, total)` é chamado a cada lote de itens
+        recriados — a abertura usa isso para manter um diálogo vivo."""
+        full = bool(full)
+        document = self.document
+        entities = document.entities
+        items = self._entity_items
 
-        for stale_id in existing_ids - doc_ids:
-            item = self._entity_items.pop(stale_id)
+        defs_changed = self._def_fp_cache_revision != document.block_defs_revision
+        if defs_changed:
+            self._def_fp_cache.clear()
+            self._def_layers_cache.clear()
+            self._def_fp_cache_revision = document.block_defs_revision
+
+        layers = document.layers
+        layer_signature = tuple((name, layer.color) for name, layer in layers.items())
+        layers_changed = layer_signature != self._last_layer_signature
+        self._last_layer_signature = layer_signature
+        # Visibilidade de camada não recria nada: e so setVisible nos itens
+        # (mesmo caminho do clique na lampada, apply_layer_visibility).
+        visibility_signature = tuple(layer.visible for layer in layers.values())
+        if visibility_signature != self._last_visibility_signature:
+            self._last_visibility_signature = visibility_signature
+            if items:
+                self.apply_layer_visibility()
+
+        # 1) removidos
+        removed = [entity_id for entity_id in items if entity_id not in entities]
+        for stale_id in removed:
+            item = items.pop(stale_id)
             self._entity_fingerprints.pop(stale_id, None)
             self._entity_reprs.pop(stale_id, None)
             self._scene.removeItem(item)
+        if removed:
+            self._field_ids -= set(removed)
 
-        # MOVE/ROTATE/SCALE mutam a entidade em memória sem trocar de id —
-        # não dá pra saber por diff de ids se a geometria mudou. A versão
-        # antiga resolvia isso recriando TODOS os itens a cada chamada, com
-        # um comentário de "custo desprezível" que a medição desmentiu: num
-        # .dwg real de arquiteto (~7 mil entidades → ~35 mil QGraphicsItems),
-        # cada refresh custava 6-8s, e `_after_interpreter_step` chama isto
-        # a CADA passo de comando (auditoria 2026-08-28 — a "lentidão"
-        # reportada pelos testers). Agora cada entidade ganha uma "impressão
-        # digital" barata (repr do dataclass + cor efetiva + definição do
-        # bloco, se houver) e o item só é recriado quando ela muda — um
-        # refresh sem mudanças vira só o custo de calcular os reprs.
-        if self._def_fp_cache_revision != self.document.block_defs_revision:
-            self._def_fp_cache.clear()
-            self._def_layers_cache.clear()
-            self._def_fp_cache_revision = self.document.block_defs_revision
+        # 2) campos (FIELD): valor vivo recalculado antes da impressão digital;
+        # só atribui se mudou (atribuir carimba versão nova e entra no registro).
+        for field_id in list(self._field_ids):
+            entity = entities.get(field_id)
+            if not isinstance(entity, Text) or not entity.field_type:
+                self._field_ids.discard(field_id)
+                continue
+            live = resolve_field_text(entity, document)
+            if live != entity.content:
+                entity.content = live
+
+        # 3) candidatos a (re)criar
+        dirty = drain_dirty()
+        added = [entity_id for entity_id in entities if entity_id not in items]
+        added_set = set(added)
+        rescan_all = full or layers_changed or defs_changed
+        if rescan_all:
+            candidates = list(entities.items())
+        else:
+            candidates = [(entity_id, entities[entity_id]) for entity_id in added]
+            for entity in dirty:
+                entity_id = entity.id
+                if entity_id in added_set:
+                    continue
+                # Só entidades DESTE documento: o registro é global, e uma
+                # entidade de definição de bloco (BEDIT) ou de outra aba não
+                # tem item aqui — bloco muda via block_defs_revision.
+                if entities.get(entity_id) is entity:
+                    candidates.append((entity_id, entity))
 
         def definition_fp(block_name: str, _visiting: frozenset[str] = frozenset()) -> str:
             if block_name in _visiting:
@@ -780,63 +832,36 @@ class CanvasView(QGraphicsView):
             if cached is not None:
                 return cached
             parts: list[str] = []
-            for child in self.document.block_definitions.get(block_name, []):
+            for child in document.block_definitions.get(block_name, []):
                 parts.append(repr(child))
                 if isinstance(child, BlockReference):
                     parts.append(definition_fp(child.block_name, _visiting | {block_name}))
             # Guarda só um resumo (hash) — a string completa de uma definição
-            # grande (milhares de entidades) seria concatenada na impressão
-            # digital de CADA instância do bloco, custo real medido num .dwg
-            # de arquiteto. O cache vive ENTRE refreshes; qualquer mudança de
-            # definição (define_block/PURGE bumpam block_defs_revision)
-            # descarta ele inteiro logo acima.
+            # grande seria concatenada na impressão digital de CADA instância.
             fp = f"{hash(chr(0).join(parts)):x}"
             self._def_fp_cache[block_name] = fp
             return fp
 
-        # Cor de camada muda a aparência de quem está nela (coberto pela cor
-        # efetiva no fingerprint) e dos FILHOS de um bloco (resolvida na
-        # criação do item). Por isso cada instância de bloco leva na
-        # impressão digital as cores das camadas que a definição usa — e SÓ
-        # elas. Antes entrava aqui um resumo de TODAS as camadas (cor +
-        # visível + travada) em TODAS as entidades: qualquer clique no painel
-        # de camadas, inclusive o cadeado, recriava os 43 mil itens de uma
-        # planta real — 178 s por clique (medição de 2026-09-03).
-        # Visibilidade não entra: é `setVisible` no item, ver abaixo.
-        layers = self.document.layers
-
         def layer_colors_fp(block_name: str) -> str:
+            # Cores das camadas que a definição usa — e SÓ elas (um resumo de
+            # todas as camadas em todas as entidades recriava a planta inteira
+            # a cada clique no painel de camadas: 178 s, medição de 2026-09-03).
             names = self._def_layers_cache.get(block_name)
             if names is None:
                 names = self._definition_layer_names(block_name)
                 self._def_layers_cache[block_name] = names
             return "|".join(f"{n}={layers[n].color}" for n in names if n in layers)
 
-        # Percorre na ORDEM do dict (ordem de criação / ordem de desenho do
-        # arquivo), não num set: a posição vira o zValue do item (ver
-        # _DRAW_ORDER_Z_STEP), então a cena empilha igual ao documento.
-        # Primeiro decide o que recriar; a recriação em si vem depois, para
-        # poder desligar o índice espacial quando for muita coisa.
-        plan: list[tuple[int, str, Entity, str, bool]] = []
-        for index, (entity_id, entity) in enumerate(self.document.entities.items()):
-            if isinstance(entity, Text) and entity.field_type:
-                # FIELD (comando FIELD): recalcula o valor vivo a cada
-                # refresh, ANTES da impressão digital ser calculada e antes
-                # de qualquer código ler `entity.content` — hit-test/bbox/
-                # render usam esse mesmo atributo (ver `_text_top_left_world`).
-                # Só atribui se mudou: atribuir carimba versão nova.
-                live = resolve_field_text(entity, self.document)
-                if live != entity.content:
-                    entity.content = live
-            visible = self.document.is_layer_visible(entity)
+        plan: list[tuple[str, Entity, str, bool]] = []
+        for entity_id, entity in candidates:
+            visible = document.is_layer_visible(entity)
             fingerprint = f"{id(entity):x}\x00{entity.version}\x00{self._effective_color(entity)}"
             if isinstance(entity, BlockReference):
                 fingerprint += "\x00" + definition_fp(entity.block_name) + "\x00" + layer_colors_fp(entity.block_name)
-            z_value = index * _DRAW_ORDER_Z_STEP
-            item = self._entity_items.get(entity_id)
+            item = items.get(entity_id)
             unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
             if unchanged and full:
-                # Rede de segurança da passada completa: mutação no lugar
+                # Rede de segurança da passada profunda: mutação no lugar
                 # (lista alterada sem atribuição) não bumpa a versão, mas
                 # muda o repr.
                 current_repr = repr(entity)
@@ -844,56 +869,82 @@ class CanvasView(QGraphicsView):
                     unchanged = False
                     self._entity_reprs[entity_id] = current_repr
             if unchanged:
-                item.setZValue(z_value)
-                # Camada desligada no painel: o item fica na cena, só
-                # invisível — assim ligar/desligar não recria nada e o
-                # pré-filtro do hit-test (que exige item por entidade)
-                # continua valendo. Hit-test/seleção/zoom-extents já
-                # ignoram entidade de camada invisível por conta própria.
-                if item.isVisible() != visible:
+                if rescan_all and item.isVisible() != visible:
+                    # Camada desligada: o item fica na cena, só invisível (ver
+                    # apply_layer_visibility, que cuida disso no clique).
                     item.setVisible(visible)
                 continue
-            plan.append((z_value, entity_id, entity, fingerprint, visible))
+            plan.append((entity_id, entity, fingerprint, visible))
+
+        # 4) ordem de desenho (zValue = posição no documento): entidade nova
+        # no FIM do documento (o caso de todo comando de desenho) só precisa
+        # de um z acima do maior; restauração no meio (undo) ou passada
+        # completa renumeram tudo.
+        appended = bool(added) and set(itertools.islice(reversed(entities), len(added))) == added_set
+        z_of: dict[str, float] = {}
+        if appended:
+            z = self._max_z
+            for entity_id in added:
+                z += _DRAW_ORDER_Z_STEP
+                z_of[entity_id] = z
+            self._max_z = z
+        renumber = (bool(added) and not appended) or rescan_all
 
         recreated: list[str] = []
         if plan:
-            # Recriar milhares de itens numa cena cheia é dominado pelo
-            # índice espacial (BSP) sendo refeito a cada removeItem/addItem:
-            # 178 s contra 10,7 s de montar do zero, na mesma planta. Com
+            # Recriar milhares de itens numa cena cheia é dominado pelo índice
+            # espacial (BSP) sendo refeito a cada removeItem/addItem: com
             # muita coisa a trocar, desliga o índice durante a troca.
             mass = len(plan) > _REINDEX_THRESHOLD
             if mass:
                 self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
             try:
-                for done, (z_value, entity_id, entity, fingerprint, visible) in enumerate(plan):
+                for done, (entity_id, entity, fingerprint, visible) in enumerate(plan):
                     if progress is not None and done % _PROGRESS_BATCH == 0:
                         progress(done, len(plan))
-                    old_item = self._entity_items.pop(entity_id, None)
+                    old_item = items.pop(entity_id, None)
                     if old_item is not None:
                         self._scene.removeItem(old_item)
                     item = self._create_item(entity)
-                    item.setZValue(z_value)
+                    z = z_of.get(entity_id)
+                    if z is None and old_item is not None:
+                        z = old_item.zValue()
+                    if z is not None:
+                        item.setZValue(z)
                     item.setData(_ENTITY_ID_DATA_KEY, entity_id)
                     if not visible:
                         item.setVisible(False)
                     self._scene.addItem(item)
-                    self._entity_items[entity_id] = item
+                    items[entity_id] = item
                     self._entity_fingerprints[entity_id] = fingerprint
                     self._entity_reprs[entity_id] = repr(entity)
+                    if isinstance(entity, Text) and entity.field_type:
+                        self._field_ids.add(entity_id)
                     recreated.append(entity_id)
             finally:
                 if mass:
                     self._scene.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.BspTreeIndex)
 
+        if renumber:
+            z = 0.0
+            for index, entity_id in enumerate(entities):
+                z = index * _DRAW_ORDER_Z_STEP
+                item = items.get(entity_id)
+                if item is not None:
+                    item.setZValue(z)
+            self._max_z = z
+
         # Destaque de seleção só no que acabou de ser recriado (item novo
         # nasce com a caneta base): varrer todos os itens aqui custava uma
         # passada completa por refresh.
         selected_ids = set(self.interpreter.context.selection.ids)
-        self._highlighted_ids -= set(recreated)
-        self._highlighted_ids &= set(self._entity_items)
+        if recreated:
+            self._highlighted_ids -= set(recreated)
+        if removed:
+            self._highlighted_ids &= set(items)
         for entity_id in recreated:
             if entity_id in selected_ids:
-                self._apply_pen(self._entity_items[entity_id], _selected_pen())
+                self._apply_pen(items[entity_id], _selected_pen())
                 self._highlighted_ids.add(entity_id)
 
     def _definition_layer_names(self, block_name: str, _visiting: frozenset[str] = frozenset()) -> tuple[str, ...]:

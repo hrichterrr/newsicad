@@ -98,20 +98,25 @@ def test_passada_completa_pega_mutacao_no_lugar(window):
     assert canvas._entity_items[poly.id].sceneBoundingRect().height() > 400
 
 
-def test_modo_padrao_e_leve_durante_comando_e_completo_fora(window):
+def test_modo_padrao_e_leve_sempre_e_full_true_e_a_passada_profunda(window):
+    """Desde a etapa 6 (v2.15.5) a passada padrão é incremental também FORA
+    de comando — o fim de comando não paga mais o repr() de todas as
+    entidades (0,95 s na Casa Pau Brasil). Mutação no lugar sem touch() só
+    é pega pela passada profunda explícita (full=True)."""
     doc, canvas = window.document, window.canvas
     poly = doc.add_entity(LWPolyline(points=[Point(0, 0), Point(10, 0), Point(10, 10)]))
     canvas.refresh_entities()
     criados = _conta_criacoes(canvas)
     poly.points.append(Point(0, 500))
 
-    window._handle_text_submitted("LINE")  # comando ativo: passada leve
+    window._handle_text_submitted("LINE")  # comando ativo
     assert window.interpreter.active
     canvas.refresh_entities()
     assert criados["n"] == 0
 
-    window.interpreter.cancel() if hasattr(window.interpreter, "cancel") else window._handle_text_submitted("")
-    if window.interpreter.active:
-        pytest.skip("não foi possível encerrar o comando neste ambiente")
+    window.interpreter.cancel()
     canvas.refresh_entities()
-    assert criados["n"] == 1
+    assert criados["n"] == 0  # fora de comando continua incremental
+
+    canvas.refresh_entities(full=True)
+    assert criados["n"] == 1  # a profunda confere o repr e recria

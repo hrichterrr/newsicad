@@ -50,7 +50,23 @@ class UndoStack:
         return pickle.dumps(self.document.entities, protocol=pickle.HIGHEST_PROTOCOL)
 
     def _restore(self, snapshot: bytes) -> None:
-        self.document.entities = pickle.loads(snapshot)
+        """Volta ao snapshot PRESERVANDO os objetos atuais que não mudaram.
+
+        `pickle.loads` devolve objetos novos para todas as entidades; o
+        canvas identifica cada item gráfico pela identidade do objeto, então
+        trocar todas de uma vez o obrigava a recriar a cena inteira em cima
+        de uma cena cheia — 292 s num Ctrl+Z na planta NEWSI-CASA PAU
+        BRASIL-R01 (43 mil entidades; 265 s só em QGraphicsScene.addItem,
+        medição de 2026-09-05). Comparar cada entidade restaurada com a
+        atual (== do dataclass, sem a versão) custa décimos de segundo e
+        deixa só o que o undo de fato desfez para o canvas recriar."""
+        restored = pickle.loads(snapshot)
+        current = self.document.entities
+        for key, entity in restored.items():
+            old = current.get(key)
+            if old is not None and old == entity:
+                restored[key] = old
+        self.document.entities = restored
 
     def _trim(self) -> None:
         while len(self._undo_stack) > _MAX_UNDO_DEPTH:

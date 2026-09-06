@@ -44,6 +44,22 @@ BYBLOCK = "BYBLOCK"
 # dataclass — fica só em __dict__ — então não entra em ==, repr nem astuple.
 _MUTATION_CLOCK = itertools.count(1)
 
+# Registro das entidades alteradas desde o último `drain_dirty()`: quem
+# consome (CanvasView.refresh_entities) descobre O QUE mudou sem percorrer
+# as 43 mil entidades de uma planta real a cada passo de comando (0,4-0,6 s
+# por passo só de varredura, medição de 2026-09-05). Chave = id() do objeto,
+# valor = o próprio objeto (referência forte até o próximo drain).
+_DIRTY: dict[int, "Entity"] = {}
+
+
+def drain_dirty() -> list["Entity"]:
+    """Devolve (e esvazia) a lista de entidades alteradas por atribuição ou
+    `touch()` desde a chamada anterior — inclui as recém-criadas, já que o
+    __init__ do dataclass também passa por __setattr__."""
+    items = list(_DIRTY.values())
+    _DIRTY.clear()
+    return items
+
 
 @dataclass
 class Entity:
@@ -64,10 +80,12 @@ class Entity:
         object.__setattr__(self, name, value)
         if name != "_version":
             object.__setattr__(self, "_version", next(_MUTATION_CLOCK))
+            _DIRTY[id(self)] = self
 
     def touch(self) -> None:
         """Marca a entidade como alterada sem trocar nenhum atributo."""
         object.__setattr__(self, "_version", next(_MUTATION_CLOCK))
+        _DIRTY[id(self)] = self
 
     @property
     def version(self) -> int:
