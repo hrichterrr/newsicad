@@ -222,7 +222,13 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     # fontes-shx-fallback).
     for style in dxf_doc.styles:
         name = style.dxf.name
-        font = style.dxf.get("font", "") or "Menlo"
+        # O nome CRU, como está no arquivo. Guardar só o que tivesse ponto
+        # ("romans.shx") fazia um STYLE com fonte "txt" — nome sem extensão,
+        # comum em desenho antigo — ser regravado como "txt.ttf", um arquivo
+        # que não existe (auditoria de 2026-09-07). Vazio continua querendo
+        # dizer "estilo criado aqui, sem fonte de origem".
+        font_cru = style.dxf.get("font", "") or ""
+        font = font_cru or "Menlo"
         family = font.rsplit(".", 1)[0] if "." in font else font
         height = style.dxf.get("height", 0.0) or 2.5
         document.text_styles[name] = TextStyle(
@@ -230,7 +236,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             font_family=family,
             height=height,
             width=float(style.dxf.get("width", 1.0) or 1.0),
-            font_file=font if "." in font else "",
+            font_file=font_cru,
         )
 
     clayer = dxf_doc.header.get("$CLAYER")
@@ -1011,9 +1017,24 @@ def _write_hatch(msp, entity: Hatch, attribs: dict) -> None:
         hatch.set_solid_fill(color=attribs.get("color", 256))
         return
     pattern = entity.pattern_name or "ANSI31"
-    if pattern not in _known_pattern_names():
-        pattern = "ANSI31"
-    hatch.set_pattern_fill(pattern, color=attribs.get("color", 256), scale=max(entity.spacing, 0.1), angle=math.degrees(entity.angle))
+    if pattern in _known_pattern_names():
+        hatch.set_pattern_fill(pattern, color=attribs.get("color", 256), scale=max(entity.spacing, 0.1), angle=math.degrees(entity.angle))
+    else:
+        # Padrão de biblioteca de terceiro (veio num .dxf de fora, com nome
+        # que a tabela do ezdxf não conhece). Antes o nome era trocado por
+        # "ANSI31" e a hachura voltava com outro nome e outro desenho pra
+        # quem abrisse o arquivo (auditoria de 2026-09-07). O nome original
+        # fica, e junto vai uma definição própria — as mesmas linhas
+        # paralelas que o NewSIcad de fato desenha (`angle`/`spacing`, ver
+        # Hatch em core/entities.py) — pra não gravar um HATCH sem definição
+        # nenhuma, que abre vazio no AutoCAD.
+        hatch.set_pattern_fill(
+            pattern,
+            color=attribs.get("color", 256),
+            scale=1.0,
+            angle=0.0,
+            definition=[[math.degrees(entity.angle), (0.0, 0.0), (0.0, max(entity.spacing, 0.1)), []]],
+        )
     # o "scale"/"angle" do padrão do ezdxf não mapeia 1:1 de volta pro nosso
     # `spacing`/`angle` ao reler — grava os valores exatos como XDATA, igual
     # à Dimension, pra round-trip fiel dentro do NewSIcad.

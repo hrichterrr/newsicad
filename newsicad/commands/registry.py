@@ -114,6 +114,12 @@ COMMAND_REGISTRY = {
 # desfazer nada visível (bug real de auditoria, 2026-08-22).
 READ_ONLY_COMMANDS = {
     "ZOOM", "PAN", "DIST", "AREA", "ID", "SELECTSIMILAR", "QSELECT", "COPYCLIP",
+    # DIMSTYLE só imprime um aviso; empilhava um snapshot idêntico e o
+    # primeiro Ctrl+Z depois dele parecia não fazer nada (auditoria de
+    # 2026-09-07). LAYISO/LAYUNISO ficam de FORA de propósito: desde a
+    # v2.15.9 o undo cobre a visibilidade de camada, então desfazê-los é
+    # útil e o passo não é mais fantasma.
+    "DIMSTYLE",
 }
 
 # Comandos conhecidos (do guia de atalhos do AutoCAD) que ainda não têm

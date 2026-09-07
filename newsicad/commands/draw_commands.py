@@ -29,6 +29,12 @@ from newsicad.core.geometry_ops import (
 )
 
 
+#: Teto de lados do POLYGON — acima disso é engano de digitação, não
+#: desenho (um milhão de lados criava uma polilinha de um milhão de
+#: vértices, que trava o programa ao renderizar).
+_MAX_POLYGON_SIDES = 1024
+
+
 def line_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     first = yield Prompt("Specify first point:", kind="point")
     prev = first
@@ -56,6 +62,12 @@ def line_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 def circle_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     center = yield Prompt("Specify center point for circle:", kind="point")
     radius = yield Prompt("Specify radius of circle:", kind="distance")
+    if radius <= 0:
+        # ELLIPSE já recusava; o CIRCLE gravava um raio 0 ou negativo, que
+        # atravessava a ida e volta do .dxf sem nenhum aviso em lugar nenhum
+        # (auditoria de 2026-09-07).
+        yield Prompt("CIRCLE: o raio deve ser maior que zero.", kind="info")
+        return
     ctx.document.add_entity(Circle(center=center, radius=radius, layer=ctx.document.current_layer))
 
 
@@ -86,6 +98,9 @@ def arc_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 def rectangle_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     p1 = yield Prompt("Specify first corner point:", kind="point")
     p2 = yield Prompt("Specify other corner point:", kind="point")
+    if abs(p2.x - p1.x) < 1e-9 or abs(p2.y - p1.y) < 1e-9:
+        yield Prompt("RECTANG: os dois cantos não podem estar alinhados nem coincidir.", kind="info")
+        return
     points = [Point(p1.x, p1.y), Point(p2.x, p1.y), Point(p2.x, p2.y), Point(p1.x, p2.y)]
     ctx.document.add_entity(LWPolyline(points=points, closed=True, layer=ctx.document.current_layer))
 
@@ -138,7 +153,16 @@ def polygon_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     Circumscribed about circle (raio informado é a distância do centro até o
     meio de cada lado, os vértices ficam num raio maior)."""
     sides_raw = yield Prompt("Enter number of sides <4>:", kind="distance")
-    sides = 4 if sides_raw is ENTER else max(3, int(sides_raw))
+    sides = 4 if sides_raw is ENTER else int(sides_raw)
+    if sides_raw is not ENTER and not (3 <= sides <= _MAX_POLYGON_SIDES):
+        # Antes um `max(3, ...)` mascarava 0 e negativo virando triângulo, e
+        # não havia teto: 1.000.000 de lados criava uma polilinha de um milhão
+        # de vértices sem aviso (auditoria de 2026-09-07).
+        yield Prompt(
+            f"POLYGON: o número de lados deve estar entre 3 e {_MAX_POLYGON_SIDES}.",
+            kind="info",
+        )
+        return
     center = yield Prompt("Specify center of polygon:", kind="point")
     option = yield Prompt(
         "Enter an option [Inscribed in circle/Circumscribed about circle] <Inscribed>:",
@@ -146,6 +170,9 @@ def polygon_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         options=["Inscribed", "Circumscribed"],
     )
     radius = yield Prompt("Specify radius of circle:", kind="distance")
+    if radius <= 0:
+        yield Prompt("POLYGON: o raio deve ser maior que zero.", kind="info")
+        return
     vertex_radius = radius / math.cos(math.pi / sides) if option == "CIRCUMSCRIBED" else radius
     points = [
         Point(

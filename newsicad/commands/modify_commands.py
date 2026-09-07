@@ -15,13 +15,17 @@ from newsicad.core.entities import (
     Arc,
     BlockReference,
     Circle,
+    Dimension,
+    Ellipse,
     Entity,
+    Hatch,
     ImageReference,
     Line,
     LWPolyline,
     Point,
     PointEntity,
     Spline,
+    Table,
     Text,
     _new_id,
 )
@@ -61,7 +65,18 @@ def _select_for_transform(
     """Como `_select_objects`, mas recusa a seleção inteira ANTES de mexer em
     qualquer coisa se houver um tipo que as transformações não sabem tratar —
     metade movida e metade parada é pior do que não mover nada."""
-    selected = yield from _select_objects(ctx, message)
+    if ctx.selection.ids:
+        # Já existe seleção: é ela que o comando usa, sem pedir de novo. O
+        # menu de contexto só abre COM objetos selecionados e ainda assim
+        # Move/Copy/Scale/Rotate jogavam a seleção fora e voltavam a pedir
+        # "Select objects" (auditoria de 2026-09-07) — o mesmo valia para
+        # selecionar no canvas e depois digitar o comando, que é o fluxo
+        # normal do AutoCAD. "Erase" do mesmo menu já funcionava porque usa
+        # outro caminho (`MainWindow._delete_selected`), o que deixava a
+        # inconsistência à vista.
+        selected = list(ctx.selection.entities(ctx.document))
+    else:
+        selected = yield from _select_objects(ctx, message)
     faltando = unsupported_for_transform(selected)
     if faltando:
         yield Prompt(
@@ -199,7 +214,16 @@ def align_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     if scale_choice == "YES":
         src_len = dst1.distance_to(src2_translated)
         dst_len = dst1.distance_to(dst2)
-        if src_len > 1e-9:
+        if dst_len <= 1e-9:
+            # Os dois pontos de destino no mesmo lugar davam fator 0 e a
+            # geometria sumia sem aviso — o SCALE já tinha guarda para fator
+            # <= 0, o ALIGN não (auditoria de 2026-09-07).
+            yield Prompt(
+                "ALIGN: os dois pontos de destino coincidem — não dá para escalar. "
+                "Objetos movidos e girados, sem escala.",
+                kind="info",
+            )
+        elif src_len > 1e-9:
             factor = dst_len / src_len
             for entity in selected:
                 scale_entity(entity, dst1, factor)
@@ -229,6 +253,12 @@ def array_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         angle_raw = yield Prompt("Specify angle to fill <360>:", kind="distance")
         angle_total_deg = 360.0 if angle_raw is ENTER else angle_raw
         angle_total = math.radians(angle_total_deg)
+        if abs(angle_total_deg) < 1e-9:
+            # 0° não define array nenhum: `abs(0 % 360) < 1e-9` classificava
+            # como círculo completo, o passo virava 0 e saíam N cópias
+            # empilhadas no mesmo ponto, invisíveis (auditoria de 2026-09-07).
+            yield Prompt("ARRAY: o ângulo a preencher não pode ser zero.", kind="info")
+            return
         full_circle = abs(angle_total_deg % 360.0) < 1e-9
         step = angle_total / count if full_circle else (angle_total / (count - 1) if count > 1 else 0.0)
         for i in range(1, count):
@@ -837,7 +867,16 @@ def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             affected.append(entity)
         elif isinstance(entity, PointEntity) and inside(entity.location):
             affected.append(entity)
-        elif isinstance(entity, (BlockReference, Text)) and inside(entity.insertion_point):
+        elif isinstance(entity, (BlockReference, Text, Table)) and inside(entity.insertion_point):
+            affected.append(entity)
+        elif isinstance(entity, Ellipse) and inside(entity.center):
+            affected.append(entity)
+        elif isinstance(entity, Hatch) and any(inside(pt) for pt in entity.boundary_points):
+            affected.append(entity)
+        elif isinstance(entity, Dimension) and (inside(entity.point1) or inside(entity.point2)):
+            # Ellipse, Hatch, Dimension e Table faltavam nesta lista e ficavam
+            # para trás sem aviso — o mesmo defeito que o comentário acima diz
+            # ter corrigido para Circle/Text/Block (auditoria de 2026-09-07).
             affected.append(entity)
 
     if not affected:
@@ -862,8 +901,22 @@ def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             entity.center = Point(entity.center.x + dx, entity.center.y + dy)
         elif isinstance(entity, PointEntity):
             entity.location = Point(entity.location.x + dx, entity.location.y + dy)
-        elif isinstance(entity, (BlockReference, Text)):
+        elif isinstance(entity, (BlockReference, Text, Table)):
             entity.insertion_point = Point(entity.insertion_point.x + dx, entity.insertion_point.y + dy)
+        elif isinstance(entity, Ellipse):
+            entity.center = Point(entity.center.x + dx, entity.center.y + dy)
+        elif isinstance(entity, Hatch):
+            # Só os vértices do contorno que estão dentro da janela, igual à
+            # polilinha — é o que dá a "esticada" de verdade.
+            entity.boundary_points = [
+                Point(pt.x + dx, pt.y + dy) if inside(pt) else pt for pt in entity.boundary_points
+            ]
+            entity.boundary_paths = [
+                [Point(pt.x + dx, pt.y + dy) if inside(pt) else pt for pt in caminho]
+                for caminho in entity.boundary_paths
+            ]
+        elif isinstance(entity, Dimension):
+            translate_entity(entity, dx, dy)
 
 
 # ------------------------------------------------------------------ #
@@ -1275,6 +1328,15 @@ def clip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     corner1 = yield Prompt("Specify first clip boundary corner:", kind="point")
     corner2 = yield Prompt("Specify opposite corner:", kind="point", connect_to_last=True)
 
+    if abs(corner2.x - corner1.x) < 1e-9 or abs(corner2.y - corner1.y) < 1e-9:
+        # Retângulo de área zero recorta TUDO: o bloco some da tela, e some
+        # junto o único jeito de clicar nele pra desfazer o recorte — o
+        # CLIPOFF é apanhado pelo mesmo hit test que não acha mais nada
+        # (auditoria de 2026-09-07). O CLIPOFF ganhou um plano B, mas o
+        # recorte vazio continua sem sentido nenhum.
+        yield Prompt("CLIP: os dois cantos não podem coincidir nem estar alinhados.", kind="info")
+        return
+
     if isinstance(target, BlockReference):
         local1 = _world_point_to_block_local(target, corner1)
         local2 = _world_point_to_block_local(target, corner2)
@@ -1285,14 +1347,56 @@ def clip_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     target.clip_boundary = [local1, Point(local2.x, local1.y), local2, Point(local1.x, local2.y)]
 
 
+def _rotulo_recortado(entity: BlockReference | ImageReference) -> str:
+    """Nome curto pra listar os objetos recortados no CLIPOFF."""
+    if isinstance(entity, BlockReference):
+        nome = entity.block_name or "bloco"
+    else:
+        nome = entity.path.name or "imagem"
+    x, y = entity.insertion_point.x, entity.insertion_point.y
+    return f"{nome} em ({x:.2f}, {y:.2f})"
+
+
 def clipoff_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     """CLIPOFF: remove o contorno de recorte aplicado por CLIP, voltando o
     bloco/xref/imagem a aparecer inteiro."""
     first = yield Prompt("Select clipped object:", kind="point", connect_to_last=False)
     target = _hit_test_entity(ctx, first)
-    if not isinstance(target, (BlockReference, ImageReference)):
-        yield Prompt("CLIPOFF: selecione um bloco, referência externa (xref) ou imagem.", kind="info")
-        return
+
+    if not isinstance(target, (BlockReference, ImageReference)) or target.clip_boundary is None:
+        # Plano B: um recorte pode não deixar NADA visível do objeto, e aí não
+        # há onde clicar — o hit test devolve outra coisa, ou coisa nenhuma, e
+        # o recorte virava irreversível fora do Ctrl+Z (auditoria de
+        # 2026-09-07). Nesse caso trabalhamos com a lista de recortados.
+        recortados = [
+            e for e in ctx.document.all_entities()
+            if isinstance(e, (BlockReference, ImageReference)) and e.clip_boundary is not None
+        ]
+        if not recortados:
+            yield Prompt("CLIPOFF: não há nenhum objeto recortado neste desenho.", kind="info")
+            return
+        if len(recortados) == 1:
+            target = recortados[0]
+            yield Prompt(
+                f"CLIPOFF: nada recortado sob o cursor — recorte removido de "
+                f"{_rotulo_recortado(target)}.",
+                kind="info",
+            )
+        else:
+            escolha = yield Prompt(
+                "CLIPOFF: nada recortado sob o cursor. Escolha pelo número — "
+                + "; ".join(
+                    f"{i + 1}={_rotulo_recortado(e)}" for i, e in enumerate(recortados)
+                )
+                + ":",
+                kind="distance",
+            )
+            indice = int(escolha) - 1
+            if not 0 <= indice < len(recortados):
+                yield Prompt("CLIPOFF: número fora da lista.", kind="info")
+                return
+            target = recortados[indice]
+
     target.clip_boundary = None
 
 

@@ -317,7 +317,20 @@ def dimbreak_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         yield Prompt("DIMBREAK: nenhuma interseção encontrada com a linha de cota.", kind="info")
         return
 
-    dim.break_points = list(dim.break_points) + break_points
+    # Sem descartar os repetidos, rodar DIMBREAK duas vezes sobre a mesma
+    # cota e os mesmos objetos acumulava o mesmo ponto de novo (auditoria de
+    # 2026-09-07).
+    existentes = list(dim.break_points)
+
+    def ja_existe(p: Point) -> bool:
+        return any(abs(p.x - q.x) < 1e-9 and abs(p.y - q.y) < 1e-9 for q in existentes)
+
+    novos = [p for p in break_points if not ja_existe(p)]
+    if not novos:
+        yield Prompt("DIMBREAK: essas quebras já existem nesta cota.", kind="info")
+        return
+    break_points = novos
+    dim.break_points = existentes + novos
     yield Prompt(f"DIMBREAK: {len(break_points)} quebra(s) adicionada(s).", kind="info")
 
 

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from newsicad.ui.menu_bar import bind_dock_toggle
 from newsicad.ui.icon_utils import (
     COMMAND_ICONS,
     FAMILY_ANNOTATE,
@@ -848,8 +849,7 @@ def _build_view_tab(window: "MainWindow") -> QWidget:
     )
 
     cmdline_btn = _small("Command Line", "cmdline", checkable=True, color=N, tooltip="Command Line (Ctrl+9)")
-    cmdline_btn.setChecked(window.command_dock.isVisible() or not window.isVisible())
-    cmdline_btn.toggled.connect(window.command_dock.setVisible)
+    bind_dock_toggle(cmdline_btn, window.command_dock)
 
     palettes_panel = _panel(
         "Palettes",

@@ -63,6 +63,52 @@ MENU_BAR_STYLE = """
 """
 
 
+def bind_dock_toggle(control, dock) -> None:
+    """Amarra um controle marcável (QAction do menu ou botão do ribbon) à
+    visibilidade de um dock, nos DOIS sentidos.
+
+    O dock é a fonte de verdade. Sem isso cada controle guardava o próprio
+    estado: fechar o painel no "X" deixava o item de menu marcado, e o
+    atalho seguinte só desmarcava — era preciso apertar Ctrl+1 duas vezes
+    para o painel voltar. E o botão do ribbon e o item de menu do Command
+    Line se descolavam um do outro (auditoria de 2026-09-07)."""
+    control.setChecked(not dock.isHidden())
+    #: Enquanto NOS mudamos o dock, o retorno dele e' ignorado. O Qt emite
+    #: visibilityChanged(False) DE DENTRO do proprio setVisible(True) --
+    #: duas vezes, no meio do redocking -- e esse falso "fechou" desmarcava
+    #: o controle que acabara de abrir o painel: o Ctrl+1 reabria o painel
+    #: mas deixava o visto do menu apagado (auditoria de 2026-09-07).
+    aplicando: list[bool] = [False]
+
+    def do_controle(marcado: bool) -> None:
+        if aplicando[0]:
+            return
+        if dock.isHidden() == marcado:
+            aplicando[0] = True
+            try:
+                dock.setVisible(marcado)
+            finally:
+                aplicando[0] = False
+
+    def do_dock(_visivel: bool) -> None:
+        if aplicando[0]:
+            return
+        # `isHidden` em vez do argumento do sinal: num dock em aba, trocar de
+        # aba tambem emite visibilityChanged(False), e o painel continua
+        # aberto -- so escondido atras do irmao.
+        visivel = not dock.isHidden()
+        if control.isChecked() != visivel:
+            bloqueado = control.blockSignals(True)
+            control.setChecked(visivel)
+            control.blockSignals(bloqueado)
+
+    control.toggled.connect(do_controle)
+    dock.visibilityChanged.connect(do_dock)
+
+
+_bind_dock_toggle = bind_dock_toggle
+
+
 def _add_command_action(menu, label: str, command_name: str, window: "MainWindow", shortcut: str | None = None) -> QAction:
     action = QAction(label, window)
     action.setIcon(command_icon(command_name))
@@ -249,9 +295,8 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     cmdline_action = QAction("Command Line", window)
     cmdline_action.setIcon(svg_icon("cmdline", FAMILY_NEUTRAL, 16))
     cmdline_action.setCheckable(True)
-    cmdline_action.setChecked(True)
     cmdline_action.setShortcut(QKeySequence("Ctrl+9"))
-    cmdline_action.toggled.connect(window.command_dock.setVisible)
+    _bind_dock_toggle(cmdline_action, window.command_dock)
     menu.addAction(cmdline_action)
 
     history_action = QAction("Command History...", window)
@@ -263,9 +308,8 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     properties_action = QAction("Properties", window)
     properties_action.setIcon(svg_icon("props", FAMILY_NEUTRAL, 16))
     properties_action.setCheckable(True)
-    properties_action.setChecked(True)
     properties_action.setShortcut(QKeySequence("Ctrl+1"))
-    properties_action.toggled.connect(window.properties_dock.setVisible)
+    _bind_dock_toggle(properties_action, window.properties_dock)
     menu.addAction(properties_action)
 
     layers_action = QAction("Layers...", window)
