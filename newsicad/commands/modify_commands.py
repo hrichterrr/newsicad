@@ -828,7 +828,7 @@ def stretch_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     # BlockReference/Text) pra trás, em silêncio (bug real de auditoria,
     # 2026-08-22).
     affected: list[Entity] = []
-    for entity in ctx.document.all_entities():
+    for entity in ctx.document.selectable_entities():
         if isinstance(entity, Line) and (inside(entity.start) or inside(entity.end)):
             affected.append(entity)
         elif isinstance(entity, (LWPolyline, Spline)) and any(inside(pt) for pt in entity.points):

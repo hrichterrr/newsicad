@@ -149,7 +149,11 @@ def select_similar_command(ctx: CommandContext) -> Generator[Prompt, object, Non
     if not seed:
         return
     types = {type(entity) for entity in seed}
-    matched = {entity.id for entity in ctx.document.all_entities() if type(entity) in types}
+    matched = {
+        entity.id
+        for entity in ctx.document.selectable_entities()
+        if type(entity) in types
+    }
     ctx.selection.set(matched)
     yield Prompt(f"SELECTSIMILAR: {len(matched)} objeto(s) selecionado(s).", kind="info")
 
@@ -242,7 +246,11 @@ def qselect_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     if cls is None:
         yield Prompt(f"QSELECT: tipo desconhecido {type_name!r}.", kind="info")
         return
-    matched = {entity.id for entity in ctx.document.all_entities() if isinstance(entity, cls)}
+    matched = {
+        entity.id
+        for entity in ctx.document.selectable_entities()
+        if isinstance(entity, cls)
+    }
     ctx.selection.set(matched)
     yield Prompt(f"QSELECT: {len(matched)} objeto(s) selecionado(s).", kind="info")
 

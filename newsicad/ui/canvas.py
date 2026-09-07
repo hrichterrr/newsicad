@@ -112,6 +112,11 @@ _BASE_COLOR_DATA_KEY = 0
 #: wrappers Python novos a cada consulta, então comparar por identidade de
 #: objeto (ou `id()`) não funciona — o dado fica do lado do Qt e sobrevive.
 _ENTITY_ID_DATA_KEY = 1
+#: Marca no item de um WIPEOUT: na tela ele é pintado com a cor do FUNDO do
+#: canvas (é assim que ele "apaga" o que está atrás), mas no papel branco
+#: isso virava um retângulo quase preto cobrindo o desenho — no PDF ele tem
+#: de ser pintado com a cor do papel (auditoria de 2026-09-07).
+_WIPEOUT_DATA_KEY = 2
 # Ordem de desenho: cada entidade do modelspace recebe zValue = (posição no
 # dict do Document) x este passo, então a cena empilha na mesma ordem em que
 # as entidades estão no documento (= ordem de criação, ou a ordem de desenho
@@ -141,6 +146,8 @@ _HIT_TOLERANCE_PX = 6.0
 # ver DimStyle em core/document.py), lido do .dxf ao abrir.
 DIM_TEXT_HEIGHT = 2.0
 HATCH_LINE_COLOR = "#5a7fa8"
+#: Cor do papel na exportação em PDF (o QPdfWriter começa com a folha branca).
+PAPER_COLOR = "#ffffff"
 _OSNAP_TOLERANCE_PX = 10.0
 _OSNAP_MARKER_SIZE_PX = 9.0
 _PICKBOX_SIZE_PX = 8.0
@@ -598,6 +605,10 @@ class _HatchItem(QGraphicsPathItem):
     `drawLine` por segmento. Some com a maior parte do custo por repintura sem
     mudar nada do que aparece na tela."""
 
+    #: Cor das linhas de preenchimento durante a exportação em PDF (None =
+    #: usa a cor de tela). Ver CanvasView.export_pdf.
+    print_color: str | None = None
+
     def __init__(self, boundary_path: QPainterPath) -> None:
         super().__init__(boundary_path)
         self._hatch_lines: list[tuple[QPointF, QPointF]] = []
@@ -628,14 +639,15 @@ class _HatchItem(QGraphicsPathItem):
         on_screen = max(rect.width(), rect.height()) * lod
         painter.save()
         painter.setClipPath(self.path())
+        cor_linha = self.print_color or HATCH_LINE_COLOR
         if on_screen < _HATCH_LOD_MIN_PIXELS:
             # Longe demais pra distinguir o padrão: chapa translúcida, uma
             # operação só (mesma leitura visual, custo constante).
-            color = QColor(HATCH_LINE_COLOR)
+            color = QColor(cor_linha)
             color.setAlpha(90)
             painter.fillPath(self.path(), QBrush(color))
         else:
-            pen = QPen(QColor(HATCH_LINE_COLOR))
+            pen = QPen(QColor(cor_linha))
             pen.setWidth(0)
             painter.setPen(pen)
             painter.drawPath(self._lines_path)
@@ -1330,6 +1342,7 @@ class CanvasView(QGraphicsView):
             item.setPen(_entity_pen(color))
             item.setBrush(QBrush(QColor(BACKGROUND_COLOR)))
             item.setData(_BASE_COLOR_DATA_KEY, color)
+            item.setData(_WIPEOUT_DATA_KEY, True)
             return item
 
         if isinstance(entity, Hatch) and entity.solid_fill:
@@ -2314,6 +2327,58 @@ class CanvasView(QGraphicsView):
             return
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
+    @staticmethod
+    def _print_color(color: str) -> str:
+        """Cor para o PAPEL BRANCO. O canvas é escuro, então o desenho usa
+        tons claros — a cor padrão da camada "0" é branco puro, e a cor de
+        entidade sem camada é `#e8e8e8`. Impressos como estão, sumiam na
+        folha: 4.977 entidades brancas só na planta João e Brenda (auditoria
+        de 2026-09-07). Mesma regra que os CAD usam ao plotar: o que é claro
+        demais vira preto, o resto vai como está."""
+        cor = QColor(color)
+        if not cor.isValid():
+            return color
+        luminancia = (0.299 * cor.red() + 0.587 * cor.green() + 0.114 * cor.blue()) / 255
+        return "#000000" if luminancia > 0.75 else color
+
+    def _apply_print_colors(self) -> list[tuple]:
+        """Troca as cores para impressão e devolve o que precisa ser
+        restaurado depois (item, caneta original, pincel original)."""
+        anterior: list[tuple] = []
+        for item in self._scene.items():
+            caneta = getattr(item, "pen", None)
+            pincel = getattr(item, "brush", None)
+            if caneta is None:
+                continue
+            base = item.data(_BASE_COLOR_DATA_KEY)
+            nova_caneta = None
+            novo_pincel = None
+            if base:
+                impressa = self._print_color(base)
+                if impressa != base:
+                    nova_caneta = _entity_pen(impressa)
+            if item.data(_WIPEOUT_DATA_KEY):
+                novo_pincel = QBrush(QColor(PAPER_COLOR))
+            elif pincel is not None and base and pincel().style() != Qt.BrushStyle.NoBrush:
+                impressa = self._print_color(base)
+                if impressa != base:
+                    novo_pincel = QBrush(QColor(impressa))
+            if nova_caneta is None and novo_pincel is None:
+                continue
+            anterior.append((item, caneta(), pincel() if pincel is not None else None))
+            if nova_caneta is not None:
+                item.setPen(nova_caneta)
+            if novo_pincel is not None and pincel is not None:
+                item.setBrush(novo_pincel)
+        return anterior
+
+    @staticmethod
+    def _restore_colors(anterior: list[tuple]) -> None:
+        for item, caneta, pincel in anterior:
+            item.setPen(caneta)
+            if pincel is not None:
+                item.setBrush(pincel)
+
     def export_pdf(self, path, page_size: str = "A4", orientation: str = "auto") -> bool:
         """PLOT/PUBLISH: renderiza todas as entidades do documento (não só o
         que está visível na tela) numa única página PDF via QPdfWriter.
@@ -2351,9 +2416,14 @@ class CanvasView(QGraphicsView):
         painter = QPainter(writer)
         was_grid_visible = self.grid_visible
         self.grid_visible = False
+        anterior = self._apply_print_colors()
+        hatch_anterior = _HatchItem.print_color
+        _HatchItem.print_color = self._print_color(HATCH_LINE_COLOR)
         try:
             self._scene.render(painter, source=rect)
         finally:
+            _HatchItem.print_color = hatch_anterior
+            self._restore_colors(anterior)
             self.grid_visible = was_grid_visible
             painter.end()
         return True

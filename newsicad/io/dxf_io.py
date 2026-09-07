@@ -658,9 +658,24 @@ def save_dxf(document: Document, path: str | Path) -> None:
     # reconhece de volta; `dxf_block_names` traduz o nome interno pro nome
     # gravado. Um "*U42" lido de um bloco dinâmico já é válido e fica igual.
     dxf_block_names: dict[str, str] = {}
+    # Os nomes que vão ser gravados COMO ESTÃO são reservados antes: o
+    # `new_anonymous_block` do ezdxf só olha o que já existe no documento
+    # novo, então um "*ML_ABC" renomeado podia receber "*U1" e, mais adiante
+    # na ordem do dict, um "*U1" legítimo do arquivo caía no "já existe" e ia
+    # parar DENTRO do mesmo bloco — duas definições viravam uma, com os dois
+    # INSERT apontando para ela (auditoria de 2026-09-07: latente, dependia
+    # da ordem do dict).
+    reservados = {
+        name
+        for name in document.block_definitions
+        if not (name.startswith("*") and not _ANONYMOUS_BLOCK_NAME_RE.match(name))
+    }
     for name in document.block_definitions:
         if name.startswith("*") and not _ANONYMOUS_BLOCK_NAME_RE.match(name):
-            dxf_block_names[name] = dxf_doc.blocks.new_anonymous_block(type_char="U").name
+            gerado = dxf_doc.blocks.new_anonymous_block(type_char="U").name
+            while gerado in reservados:
+                gerado = dxf_doc.blocks.new_anonymous_block(type_char="U").name
+            dxf_block_names[name] = gerado
             continue
         if name not in dxf_doc.blocks:
             dxf_doc.blocks.new(name=name)

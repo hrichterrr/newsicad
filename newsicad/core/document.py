@@ -162,6 +162,18 @@ class Document:
         layer = self.layers.get(entity.layer)
         return layer is not None and layer.locked
 
+    def is_selectable(self, entity: Entity) -> bool:
+        """Camada desligada não está na tela e camada travada é justamente o
+        que o usuário protegeu — nenhuma das duas pode entrar numa seleção.
+        O clique no canvas já respeitava isso (`CanvasView._hit_test`), mas os
+        comandos que varrem o desenho inteiro, não: QSELECT, SELECTSIMILAR,
+        STRETCH e o Ctrl+A pegavam as duas, e o Del seguinte apagava o que
+        estava protegido (auditoria de 2026-09-07)."""
+        return self.is_layer_visible(entity) and not self.is_layer_locked(entity)
+
+    def selectable_entities(self) -> list[Entity]:
+        return [e for e in self.entities.values() if self.is_selectable(e)]
+
     def add_entity(self, entity: Entity) -> Entity:
         if not entity.layer:
             entity.layer = self.current_layer

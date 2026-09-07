@@ -608,7 +608,9 @@ class MainWindow(QMainWindow):
         self._after_interpreter_step()
 
     def _select_all(self) -> None:
-        self.selection.set(set(self.document.entities.keys()))
+        # Só o que está na tela e destravado — camada desligada ou travada
+        # entrava no Ctrl+A e o Del seguinte apagava o que estava protegido.
+        self.selection.set({e.id for e in self.document.selectable_entities()})
         self.canvas.refresh_selection_highlight()
         self.canvas.viewport().update()
         self._refresh_properties_panel()
