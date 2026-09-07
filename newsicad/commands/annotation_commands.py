@@ -234,7 +234,7 @@ def leader_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     first = yield Prompt("Specify leader start point:", kind="point")
     points = [first]
     while True:
-        nxt = yield Prompt("Specify next point:", kind="point")
+        nxt = yield Prompt("Specify next point:", kind="point", accepts_enter=True)
         if nxt is ENTER:
             break
         points.append(nxt)

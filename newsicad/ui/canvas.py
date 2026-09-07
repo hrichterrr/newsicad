@@ -232,12 +232,23 @@ def _plain_entity_path(entity: Entity) -> QPainterPath | None:
     if isinstance(entity, Arc):
         c = cad_to_scene(entity.center)
         r = entity.radius
-        start_deg = -math.degrees(entity.start_angle)
+        # Ângulo do arco: SEM negar. O `arcTo` do Qt já calcula o ponto como
+        # (cx + r·cos A, cy − r·sin A) — o sinal de menos no seno é a própria
+        # compensação do Y-para-baixo do Qt — e `cad_to_scene` inverte só o
+        # centro. Negar o ângulo aqui era uma SEGUNDA inversão, e todo arco
+        # saía espelhado na horizontal que passa pelo centro: um arco de 0° a
+        # 90° era desenhado no quarto quadrante em vez do primeiro (defeito
+        # presente desde o commit inicial, achado na auditoria de 2026-09-07;
+        # ver tests/test_arc_render.py). Também era a causa da planta
+        # NEWSI-JOAO E BRENDA abrir em branco: um bloco com arcos de raio
+        # 3,6e7 tinha o traçado jogado a 7,2e7 do lugar e o zoom extents
+        # virava 28 milhões x 172 milhões.
+        start_deg = math.degrees(entity.start_angle)
         sweep_world_deg = math.degrees((entity.end_angle - entity.start_angle) % (2 * math.pi))
         rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
         path = QPainterPath()
         path.arcMoveTo(rect, start_deg)
-        path.arcTo(rect, start_deg, -sweep_world_deg)
+        path.arcTo(rect, start_deg, sweep_world_deg)
         return path
     if isinstance(entity, Ellipse):
         c = cad_to_scene(entity.center)
@@ -1209,12 +1220,13 @@ class CanvasView(QGraphicsView):
         if isinstance(entity, Arc):
             c = cad_to_scene(entity.center)
             r = entity.radius
-            start_deg = -math.degrees(entity.start_angle)
+            # Sem negar o ângulo — ver a explicação em `_plain_entity_path`.
+            start_deg = math.degrees(entity.start_angle)
             sweep_world_deg = math.degrees((entity.end_angle - entity.start_angle) % (2 * math.pi))
             rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
             path = QPainterPath()
             path.arcMoveTo(rect, start_deg)
-            path.arcTo(rect, start_deg, -sweep_world_deg)
+            path.arcTo(rect, start_deg, sweep_world_deg)
             item = QGraphicsPathItem(path)
             item.setPen(_entity_pen(color))
             item.setData(_BASE_COLOR_DATA_KEY, color)

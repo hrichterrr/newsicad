@@ -39,7 +39,7 @@ def line_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     # "Undo" (bug real de auditoria, 2026-08-22).
     segments: list[tuple[str, Point]] = []
     while True:
-        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"])
+        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"], accepts_enter=True)
         if nxt is ENTER:
             return
         if nxt == "UNDO":
@@ -94,7 +94,7 @@ def pline_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     first = yield Prompt("Specify start point:", kind="point")
     points = [first]
     while True:
-        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"])
+        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"], accepts_enter=True)
         if nxt is ENTER:
             break
         if nxt == "UNDO":
@@ -169,7 +169,8 @@ def spline_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     closed = False
     while True:
         nxt = yield Prompt(
-            "Specify next point or [Close/Undo]:", kind="point", options=["Close", "Undo"]
+            "Specify next point or [Close/Undo]:", kind="point", options=["Close", "Undo"],
+            accepts_enter=True,
         )
         if nxt is ENTER:
             break
@@ -333,7 +334,7 @@ def mline_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     first = yield Prompt("Specify start point:", kind="point")
     points = [first]
     while True:
-        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"])
+        nxt = yield Prompt("Specify next point or [Undo]:", kind="point", options=["Undo"], accepts_enter=True)
         if nxt is ENTER:
             break
         if nxt == "UNDO":
@@ -374,7 +375,8 @@ def revcloud_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     points = [first]
     while True:
         nxt = yield Prompt(
-            "Specify next point or [Undo] (Enter to close):", kind="point", options=["Undo"]
+            "Specify next point or [Undo] (Enter to close):", kind="point", options=["Undo"],
+            accepts_enter=True,
         )
         if nxt is ENTER:
             break
@@ -418,7 +420,8 @@ def wipeout_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     points = [first]
     while True:
         nxt = yield Prompt(
-            "Specify next point or [Undo] (Enter to close):", kind="point", options=["Undo"]
+            "Specify next point or [Undo] (Enter to close):", kind="point", options=["Undo"],
+            accepts_enter=True,
         )
         if nxt is ENTER:
             break

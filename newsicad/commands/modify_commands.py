@@ -44,6 +44,7 @@ from newsicad.core.geometry_ops import (
     rotate_point,
     scale_entity,
     segment_parameter,
+    unsupported_for_transform,
     translate_entity,
 )
 
@@ -52,6 +53,25 @@ def _select_objects(ctx: CommandContext, message: str = "Select objects:") -> Ge
     ctx.selection.clear()
     yield Prompt(message, kind="selection")
     return list(ctx.selection.entities(ctx.document))
+
+
+def _select_for_transform(
+    ctx: CommandContext, message: str = "Select objects:"
+) -> Generator[Prompt, object, list[Entity]]:
+    """Como `_select_objects`, mas recusa a seleção inteira ANTES de mexer em
+    qualquer coisa se houver um tipo que as transformações não sabem tratar —
+    metade movida e metade parada é pior do que não mover nada."""
+    selected = yield from _select_objects(ctx, message)
+    faltando = unsupported_for_transform(selected)
+    if faltando:
+        yield Prompt(
+            f"Seleção contém tipo que este comando ainda não transforma: {', '.join(faltando)}. "
+            "Nada foi alterado.",
+            kind="info",
+        )
+        ctx.selection.clear()
+        return []
+    return selected
 
 
 def erase_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
@@ -64,7 +84,7 @@ def erase_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
 
 def move_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     base = yield Prompt("Specify base point:", kind="point")
@@ -76,7 +96,7 @@ def move_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
 
 def copy_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     base = yield Prompt("Specify base point:", kind="point")
@@ -92,7 +112,7 @@ def copy_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
 
 def rotate_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     base = yield Prompt("Specify base point:", kind="point")
@@ -104,7 +124,7 @@ def rotate_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
 
 def scale_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     base = yield Prompt("Specify base point:", kind="point")
@@ -123,7 +143,7 @@ def scale_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
 
 def mirror_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     p1 = yield Prompt("Specify first point of mirror line:", kind="point")
@@ -156,7 +176,7 @@ def align_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     pontos de destino — mesmo cálculo do ALIGN de verdade do AutoCAD no modo
     2 pontos (o modo de 3 pontos/3D não é suportado nesta versão, já que o
     NewSIcad só tem um espaço de desenho 2D)."""
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     src1 = yield Prompt("Specify first source point:", kind="point")
@@ -194,7 +214,7 @@ def array_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     — igual a COPY/ROTATE feitos várias vezes. Simplificação documentada:
     sem edição associativa depois de criado (cada cópia é uma entidade
     independente, como se o usuário tivesse dado EXPLODE no array)."""
-    selected = yield from _select_objects(ctx)
+    selected = yield from _select_for_transform(ctx)
     if not selected:
         return
     kind = yield Prompt(

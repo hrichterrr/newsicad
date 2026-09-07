@@ -32,6 +32,11 @@ class Prompt:
     # existente na tela (ex.: "select the line to trim/extend/fillet"), onde esse
     # rubber-band não faz sentido e mais atrapalha do que ajuda.
     connect_to_last: bool = True
+    # Para kind="point"/"distance": Enter é uma resposta VÁLIDA aqui (encerra
+    # uma sequência de pontos, como o "Specify next point" da LINE/PLINE).
+    # Sem isto, Enter num prompt que exige valor encerra o comando — ver
+    # CommandInterpreter.submit_text.
+    accepts_enter: bool = False
 
 
 CommandFactory = Callable[[CommandContext], Generator[Prompt, object, None]]
@@ -126,6 +131,24 @@ class CommandInterpreter:
 
         raw = text.strip()
         if raw == "":
+            if (
+                prompt.kind in ("point", "distance")
+                and not prompt.accepts_enter
+                and "<" not in prompt.message
+            ):
+                # Enter num prompt que EXIGE um valor encerra o comando, como
+                # no AutoCAD ("Specify first point" + Enter sai do comando).
+                # Antes o sentinela ENTER seguia para o gerador e virava valor
+                # de campo: CIRCLE guardava um `object()` no raio, a entidade
+                # entrava no desenho e a partir dali repintar, desfazer e
+                # SALVAR estouravam — o usuário perdia tudo desde o último
+                # save, sem conseguir nem apagar o objeto (auditoria de
+                # 2026-09-07). Outros 13 comandos devolviam um erro interno de
+                # Python na linha de comando. Prompt COM padrão no texto
+                # (`<1>`, `<TL>`, `<2.50>`) continua aceitando Enter — é a
+                # convenção que todo comando com valor default já usa.
+                self.cancel()
+                return None
             return self._advance(ENTER)
 
         option_match = next(

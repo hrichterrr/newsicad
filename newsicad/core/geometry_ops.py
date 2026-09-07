@@ -13,6 +13,7 @@ from newsicad.core.entities import (
     BlockReference,
     Circle,
     Dimension,
+    Ellipse,
     Entity,
     Hatch,
     ImageReference,
@@ -142,11 +143,27 @@ def clone_entity(entity: Entity) -> Entity:
 # ---------------------------------------------------------------------- #
 # transformações de entidade (mutam em memória)
 # ---------------------------------------------------------------------- #
+#: Tipos que translate/rotate/scale/mirror sabem tratar. Serve para RECUSAR
+#: uma seleção ANTES de mexer em qualquer coisa: MOVE/COPY/ROTATE/SCALE/
+#: MIRROR percorrem a seleção num laço, e uma exceção no meio deixava parte
+#: dos objetos deslocada e parte não — com a divisão mudando a cada execução,
+#: porque a ordem vem de um `set` (auditoria de 2026-09-07, com Ellipse).
+TRANSFORMABLE_TYPES = (
+    Line, Circle, Arc, Ellipse, LWPolyline, Spline, BlockReference,
+    ImageReference, Text, Dimension, Hatch, PointEntity, XLine, Ray, Table,
+)
+
+
+def unsupported_for_transform(entities) -> list[str]:
+    """Nomes dos tipos da seleção que nenhuma transformação sabe mexer."""
+    return sorted({type(e).__name__ for e in entities if not isinstance(e, TRANSFORMABLE_TYPES)})
+
+
 def translate_entity(entity: Entity, dx: float, dy: float) -> None:
     if isinstance(entity, Line):
         entity.start = translate_point(entity.start, dx, dy)
         entity.end = translate_point(entity.end, dx, dy)
-    elif isinstance(entity, (Circle, Arc)):
+    elif isinstance(entity, (Circle, Arc, Ellipse)):
         entity.center = translate_point(entity.center, dx, dy)
     elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [translate_point(p, dx, dy) for p in entity.points]
@@ -184,6 +201,9 @@ def rotate_entity(entity: Entity, base: Point, angle_rad: float) -> None:
         entity.center = rotate_point(entity.center, base, angle_rad)
         entity.start_angle = (entity.start_angle + angle_rad) % (2 * math.pi)
         entity.end_angle = (entity.end_angle + angle_rad) % (2 * math.pi)
+    elif isinstance(entity, Ellipse):
+        entity.center = rotate_point(entity.center, base, angle_rad)
+        entity.rotation = (entity.rotation + angle_rad) % (2 * math.pi)
     elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [rotate_point(p, base, angle_rad) for p in entity.points]
     elif isinstance(entity, BlockReference):
@@ -230,6 +250,10 @@ def scale_entity(entity: Entity, base: Point, factor: float) -> None:
     elif isinstance(entity, Arc):
         entity.center = scale_point(entity.center, base, factor)
         entity.radius *= factor
+    elif isinstance(entity, Ellipse):
+        entity.center = scale_point(entity.center, base, factor)
+        entity.radius_major *= abs(factor)
+        entity.radius_minor *= abs(factor)
     elif isinstance(entity, (LWPolyline, Spline)):
         entity.points = [scale_point(p, base, factor) for p in entity.points]
     elif isinstance(entity, BlockReference):
@@ -298,6 +322,13 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.radius = radius
         mirrored.start_angle = start_angle
         mirrored.end_angle = end_angle
+    elif isinstance(mirrored, Ellipse):
+        # O centro reflete; a inclinação do eixo maior reflete em torno do
+        # eixo do espelho: rot' = 2·θ_eixo − rot (mesma conta que o Text e o
+        # BlockReference usam logo abaixo).
+        mirrored.center = mirror_point(entity.center, p1, p2)
+        axis_angle = math.atan2(p2.y - p1.y, p2.x - p1.x)
+        mirrored.rotation = (2 * axis_angle - entity.rotation) % (2 * math.pi)
     elif isinstance(mirrored, (LWPolyline, Spline)):
         mirrored.points = [mirror_point(p, p1, p2) for p in entity.points]
     elif isinstance(mirrored, BlockReference):
