@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -72,6 +72,20 @@ _COL_NAME, _COL_VISIBLE, _COL_LOCKED, _COL_COLOR = range(4)
 # ícones (lâmpada ligada/desligada, cadeado travado/destravado) — mesmo
 # padrão de renderização nítida em HiDPI de newsicad/ui/icon_utils.py
 # ---------------------------------------------------------------------- #
+#: Ícones do painel são sempre os mesmos poucos desenhos (lâmpada ligada/
+#: desligada, cadeado aberto/fechado) e uma amostra por cor — criá-los linha a
+#: linha custava 0,17 s por reconstrução da tabela numa planta com 72 camadas.
+_ICONE_CACHE: dict[tuple, "QIcon"] = {}
+
+
+def _icone(chave: tuple, fabrica) -> "QIcon":
+    icone = _ICONE_CACHE.get(chave)
+    if icone is None:
+        icone = make_icon(fabrica())
+        _ICONE_CACHE[chave] = icone
+    return icone
+
+
 def _draw_bulb(on: bool):
     color = QColor("#f0c33e") if on else QColor("#5a5a5a")
 
@@ -163,12 +177,36 @@ class LayerPanel(QDockWidget):
         layout.addLayout(button_row)
 
         self.setWidget(container)
+        #: Reconstrução adiada porque o painel estava escondido (ver refresh).
+        self._pendente = False
         self.refresh()
+
+    def paintEvent(self, event) -> None:  # noqa: D401 - contrato do Qt
+        super().paintEvent(event)
+        if self._pendente and not self.visibleRegion().isEmpty():
+            # Reconstrói fora da pintura (criar widgets aqui dentro é pedir
+            # problema); o singleShot(0) cai no próximo giro do event loop.
+            self._pendente = False
+            QTimer.singleShot(0, self.refresh)
 
     # ------------------------------------------------------------------ #
     # construção da tabela
     # ------------------------------------------------------------------ #
     def refresh(self) -> None:
+        # Escondido (o dock vem tabificado atrás do Properties): não adianta
+        # reconstruir 72 linhas x 3 widgets agora — marca e reconstrói quando
+        # aparecer. Trocar de aba gastava 264 ms só aqui (medição de
+        # 2026-09-06 na Casa Pau Brasil, com o painel invisível).
+        # `isVisible()` continua True para um dock tabificado que está ATRÁS
+        # de outro; quem sabe a verdade é a região visível (conferido em
+        # 2026-09-06). O `paintEvent` abaixo reconstrói quando ele aparece.
+        if self.main_window.isVisible() and self.visibleRegion().isEmpty():
+            self._pendente = True
+            refresh_combo = getattr(self.main_window, "refresh_layer_combo", None)
+            if refresh_combo is not None:
+                refresh_combo()
+            return
+        self._pendente = False
         document = self.main_window.document
         names = sorted(document.layers.keys())
         # O combo de camada atual do ribbon (painel Layers da aba Home) mostra
@@ -209,7 +247,7 @@ class LayerPanel(QDockWidget):
 
             color_btn = QToolButton()
             color_btn.setStyleSheet(_TOGGLE_STYLE)
-            color_btn.setIcon(make_icon(_draw_swatch(layer.color)))
+            color_btn.setIcon(_icone(("swatch", layer.color), lambda c=layer.color: _draw_swatch(c)))
             color_btn.setToolTip(f"Cor da camada ({layer.color}) — clique pra mudar")
             color_btn.clicked.connect(lambda checked=False, n=name: self._pick_color(n))
             self.table.setCellWidget(row, _COL_COLOR, self._centered(color_btn))
@@ -219,11 +257,11 @@ class LayerPanel(QDockWidget):
         button.setCheckable(True)
         button.setChecked(checked_state)
         button.setStyleSheet(_TOGGLE_STYLE)
-        button.setIcon(make_icon(draw_fn_factory(checked_state)))
+        button.setIcon(_icone((id(draw_fn_factory), checked_state), lambda: draw_fn_factory(checked_state)))
         button.setToolTip(tip_on if checked_state else tip_off)
 
         def on_toggled(checked: bool) -> None:
-            button.setIcon(make_icon(draw_fn_factory(checked)))
+            button.setIcon(_icone((id(draw_fn_factory), checked), lambda: draw_fn_factory(checked)))
             button.setToolTip(tip_on if checked else tip_off)
             handler(checked)
 

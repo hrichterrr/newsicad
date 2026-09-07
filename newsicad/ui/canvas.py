@@ -748,6 +748,8 @@ class CanvasView(QGraphicsView):
         self._snapshot_offset = QPoint(0, 0)
         self._snapshot_anchor = QPointF(0, 0)
         self._snapshot_scale = 1.0
+        #: Eventos de roda acumulados na rajada atual (ver wheelEvent).
+        self._wheel_burst = 0
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.BlankCursor)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -770,6 +772,10 @@ class CanvasView(QGraphicsView):
         #: ids dos textos com FIELD (valor vivo recalculado a cada passada).
         self._last_layer_signature: tuple = ()
         self._last_visibility_signature: tuple = ()
+        #: Cache da bounding box de compute_extents_rect e o contador que a
+        #: invalida (ver _invalidate_extents).
+        self._extents_cache: tuple | None = None
+        self._extents_key: int = 0
         #: Geometria fundida por definição de bloco e contexto (cor, camada)
         #: do INSERT — ver _create_block_reference_item. Descartada quando
         #: uma definição, uma cor ou uma visibilidade de camada muda.
@@ -871,6 +877,7 @@ class CanvasView(QGraphicsView):
         visibility_changed = visibility_signature != self._last_visibility_signature
         if visibility_changed:
             self._last_visibility_signature = visibility_signature
+            self._invalidate_extents()
             if items:
                 self.apply_layer_visibility()
         if defs_changed or layers_changed or visibility_changed:
@@ -886,6 +893,7 @@ class CanvasView(QGraphicsView):
             self._scene.removeItem(item)
         if removed:
             self._field_ids -= set(removed)
+            self._invalidate_extents()
 
         # 2) campos (FIELD): valor vivo recalculado antes da impressão digital;
         # só atribui se mudou (atribuir carimba versão nova e entra no registro).
@@ -978,6 +986,7 @@ class CanvasView(QGraphicsView):
 
         recreated: list[str] = []
         if plan:
+            self._invalidate_extents()
             # Recriar milhares de itens numa cena cheia é dominado pelo índice
             # espacial (BSP) sendo refeito a cada removeItem/addItem: com
             # muita coisa a trocar, desliga o índice durante a troca.
@@ -1051,7 +1060,11 @@ class CanvasView(QGraphicsView):
                 names.update(self._definition_layer_names(child.block_name, _visiting | {block_name}))
         return tuple(sorted(names))
 
-    def apply_layer_visibility(self) -> None:
+    def apply_layer_visibility(self) -> None:  # noqa: D401
+        self._invalidate_extents()
+        return self._apply_layer_visibility()
+
+    def _apply_layer_visibility(self) -> None:
         """Sincroniza a visibilidade dos itens com o estado das camadas, sem
         recriar nada — é o que o clique na lâmpada do painel de camadas
         chama (antes: reconstrução total da cena, 178 s numa planta real)."""
@@ -2237,6 +2250,14 @@ class CanvasView(QGraphicsView):
         dos itens custa 0,16 s (medição de 2026-09-04)."""
         if not self.document.entities:
             return None
+        # Cache: a união das caixas só muda quando a cena muda (itens criados/
+        # removidos) ou quando uma camada é ligada/desligada — as duas coisas
+        # invalidam aqui. Sem isso, cada zoom extents percorria as 42.978
+        # caixas em Python: 139 ms por chamada (medição de 2026-09-06), e o
+        # zoom extents é disparado ao abrir, ao trocar de escala e pelo botão.
+        chave = (margin_ratio, self._extents_key)
+        if self._extents_cache is not None and self._extents_cache[0] == chave:
+            return QRectF(self._extents_cache[1])
         rect: QRectF | None = None
         document = self.document
         if len(self._entity_items) == len(document.entities):
@@ -2259,7 +2280,14 @@ class CanvasView(QGraphicsView):
         if rect is None or (rect.width() <= 0 and rect.height() <= 0):
             return None
         margin = max(rect.width(), rect.height()) * margin_ratio or 1.0
-        return rect.adjusted(-margin, -margin, margin, margin)
+        final = rect.adjusted(-margin, -margin, margin, margin)
+        self._extents_cache = (chave, QRectF(final))
+        return final
+
+    def _invalidate_extents(self) -> None:
+        """Chamado quando a cena ou a visibilidade de camada muda."""
+        self._extents_key += 1
+        self._extents_cache = None
 
     def zoom_extents(self) -> None:
         rect = self.compute_extents_rect()
@@ -2616,6 +2644,7 @@ class CanvasView(QGraphicsView):
     def _apply_pending_zoom(self) -> None:
         """Aplica de uma vez o zoom acumulado desde o último repaint."""
         factor, self._pending_zoom_factor = self._pending_zoom_factor, 1.0
+        self._wheel_burst = 0
         if not self._panning:
             self._snapshot = None
             self._snapshot_scale = 1.0
@@ -2678,8 +2707,15 @@ class CanvasView(QGraphicsView):
         fator total — o resultado final é idêntico (a escala é multiplicativa)
         e a sensação é de resposta imediata em vez de arrastada."""
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-        if self._snapshot is None and not self._panning:
+        # O retrato da viewport (`grab`) custa 208 ms numa planta de 50 mil
+        # itens — o mesmo que repintar. Num clique ÚNICO de roda ele dobrava o
+        # trabalho (retrato + repintura final); numa rajada ele se paga, porque
+        # substitui uma repintura por evento. Então só a partir do SEGUNDO
+        # evento da rajada (medição de 2026-09-06).
+        self._wheel_burst += 1
+        if self._snapshot is None and not self._panning and self._wheel_burst >= 2:
             self._begin_snapshot()
+            self._snapshot_scale = self._pending_zoom_factor
             self._snapshot_anchor = QPointF(self._event_pos(event))
         self._pending_zoom_factor *= factor
         self._snapshot_scale *= factor

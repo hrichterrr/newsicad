@@ -155,3 +155,93 @@ def test_comando_de_desenho_nao_recria_o_resto(window):
     assert len(doc.entities) == 201
     assert criados["n"] == 1
     assert visitas["n"] <= 4  # so a linha nova (impressao digital + criacao)
+
+
+# ---------------------------------------------------------------------- #
+# Cache da bounding box do zoom extents (2026-09-06): percorrer as 42.978
+# caixas em Python custava 139 ms por chamada. O cache só vale enquanto a
+# cena e a visibilidade das camadas não mudam — estes testes garantem isso.
+# ---------------------------------------------------------------------- #
+def test_extents_reaproveita_o_cache_quando_nada_muda(window):
+    doc, canvas = window.document, window.canvas
+    for i in range(50):
+        doc.add_entity(Line(start=Point(i, 0), end=Point(i, 10)))
+    canvas.refresh_entities()
+    primeiro = canvas.compute_extents_rect()
+
+    visitas = {"n": 0}
+    original = canvas.document.is_layer_visible
+
+    def espiao(entity):
+        visitas["n"] += 1
+        return original(entity)
+
+    canvas.document.is_layer_visible = espiao  # type: ignore[method-assign]
+    try:
+        segundo = canvas.compute_extents_rect()
+    finally:
+        canvas.document.is_layer_visible = original
+    assert segundo == primeiro
+    assert visitas["n"] == 0  # veio do cache, sem percorrer os itens
+
+
+def test_extents_acompanha_entidade_nova_movida_e_apagada(window):
+    doc, canvas = window.document, window.canvas
+    linha = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    canvas.refresh_entities()
+    largura = canvas.compute_extents_rect(margin_ratio=0.0).width()
+
+    longe = doc.add_entity(Line(start=Point(0, 0), end=Point(500, 0)))
+    canvas.refresh_entities()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() > largura * 10
+
+    longe.end = Point(1000, 0)  # mutação: o item é recriado
+    canvas.refresh_entities()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() == pytest.approx(1000, abs=5)
+
+    doc.remove_entity(longe.id)
+    canvas.refresh_entities()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() == pytest.approx(largura, abs=5)
+    assert linha.id in canvas._entity_items
+
+
+def test_extents_ignora_camada_desligada_e_volta_ao_religar(window):
+    doc, canvas = window.document, window.canvas
+    doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
+    doc.add_layer("LONGE")
+    doc.add_entity(Line(layer="LONGE", start=Point(0, 0), end=Point(900, 0)))
+    canvas.refresh_entities()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() > 800
+
+    doc.layers["LONGE"].visible = False
+    canvas.apply_layer_visibility()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() < 100
+
+    doc.layers["LONGE"].visible = True
+    canvas.apply_layer_visibility()
+    assert canvas.compute_extents_rect(margin_ratio=0.0).width() > 800
+
+
+def test_painel_de_camadas_adia_a_reconstrucao_quando_esta_escondido(window):
+    """Trocar de aba gastava 264 ms reconstruindo 72 linhas de um painel que
+    estava atrás do Properties (medição de 2026-09-06)."""
+    doc = window.document
+    for i in range(5):
+        doc.add_layer(f"CAMADA{i}")
+    painel = window.layer_dock
+
+    chamadas = {"n": 0}
+    original = painel.table.setRowCount
+
+    def espiao(n):
+        chamadas["n"] += 1
+        return original(n)
+
+    painel.table.setRowCount = espiao  # type: ignore[method-assign]
+    try:
+        # janela invisível (como nos testes): reconstrói normalmente
+        painel.refresh()
+        assert chamadas["n"] == 1
+        assert not painel._pendente
+    finally:
+        del painel.table.setRowCount
