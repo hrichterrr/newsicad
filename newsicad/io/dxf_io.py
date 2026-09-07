@@ -50,7 +50,16 @@ from newsicad.io import dxf_fills
 # Mapeamento justify <-> attachment_point do MTEXT: mora em
 # newsicad/io/dxf_annotations.py (importado acima com os nomes antigos).
 
-DXF_VERSION = "R2000"
+# R2018 (AC1032) e não R2000, por dois motivos medidos na auditoria de
+# 2026-09-07: (a) o R2000 grava em ANSI, e o ezdxf escapa o que não couber na
+# cp1252 como o literal "\\U+XXXX" sem desescapar na leitura — o Ω de
+# impedância ("Z = 6Ω", 21 textos na planta João e Brenda) voltava como
+# "Z = 6\\U+2126", e nome de camada com CJK era destruído do mesmo jeito;
+# (b) o R2000 não tem o grupo 420 (true color), então toda cor exata da
+# entidade era trocada pela ACI mais próxima ao salvar — na Casa Pau Brasil
+# 85 entidades #2776BB viravam #007CA5, e no Template um cinza #373737 virava
+# o marrom #4C3926. A partir do R2007 o DXF é UTF-8, o que resolve (a); o R2018 é a mesma versão que os .dxf de projeto da New SI já declaram ($ACADVER AC1032).
+DXF_VERSION = "R2018"
 
 # AppID sob o qual o NewSIcad grava os campos exatos de Dimension como XDATA
 # (extended entity data). O DIMENSION do DXF é, ele mesmo, uma geometria
@@ -192,7 +201,14 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         # no objeto retornado é o que garante que ela também pegue a cor
         # lida do arquivo, não só camadas novas.
         new_layer = document.add_layer(layer.dxf.name)
-        new_layer.color = _aci_to_hex(aci)
+        # True color (grupo 420) tem prioridade sobre o ACI quando existe —
+        # senão a cor exata da camada era trocada pela da paleta de 255 ao
+        # reabrir, mesmo tendo sido gravada certa (auditoria de 2026-09-07).
+        rgb = getattr(layer, "rgb", None)
+        if rgb:
+            new_layer.color = "#{:02X}{:02X}{:02X}".format(*rgb)
+        else:
+            new_layer.color = _aci_to_hex(aci)
         new_layer.visible = not layer.is_off()
         new_layer.locked = layer.is_locked()
 
@@ -601,6 +617,9 @@ def save_dxf(document: Document, path: str | Path) -> None:
         # auditoria, 2026-08-22) — mina bastante o trabalho de "cor de
         # camada afeta o desenho de verdade" feito nesta mesma sessão.
         dxf_layer.dxf.color = _hex_to_aci(layer.color) or 7
+        rgb_layer = _hex_to_rgb(layer.color)
+        if rgb_layer is not None:
+            dxf_layer.rgb = rgb_layer
         if not layer.visible:
             dxf_layer.off()
         if layer.locked:
@@ -679,6 +698,11 @@ def _to_dxf_entity(
         # Sem esse bloco, uma cor própria de entidade (exceção ao ByLayer)
         # era sempre descartada ao salvar (bug real de auditoria,
         # 2026-08-22).
+        # `true_color` (grupo 420) preserva o RGB exato; o ACI vai junto
+        # como aproximação para quem só lê a paleta antiga.
+        rgb = _hex_to_rgb(entity.color)
+        if rgb is not None:
+            attribs["true_color"] = ezdxf.colors.rgb2int(rgb)
         aci = _hex_to_aci(entity.color)
         if aci is not None:
             attribs["color"] = aci
@@ -947,7 +971,14 @@ def _write_hatch(msp, entity: Hatch, attribs: dict) -> None:
         # esconde o que está atrás" — antes era gravado como HATCH sólida na
         # cor do fundo do canvas, que abria como um borrão cinza-escuro no
         # AutoCAD.
-        msp.add_wipeout([(p.x, p.y) for p in entity.boundary_points], dxfattribs=dict(attribs))
+        wipeout = msp.add_wipeout([(p.x, p.y) for p in entity.boundary_points], dxfattribs=dict(attribs))
+        # `add_wipeout` chama `set_masking_area`, que aplica DEFAULT_ATTRIBS
+        # DEPOIS do que passamos — e esses defaults trazem `layer="0"`. Sem
+        # reaplicar aqui, todo wipeout ia parar na camada "0" ao gravar e
+        # deixava de obedecer o liga/desliga da camada de origem: ~1.150
+        # entidades por gravação na planta NEWSI-CASA PAU BRASIL-R01
+        # (auditoria de 2026-09-07).
+        wipeout.update_dxf_attribs(dict(attribs))
         return
 
     hatch = msp.add_hatch(color=attribs.get("color", 256), dxfattribs=dict(attribs))

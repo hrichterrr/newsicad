@@ -34,14 +34,42 @@ _MAX_UNDO_DEPTH = 200
 _MAX_UNDO_BYTES = 300 * 1024 * 1024
 
 
+#: Campos do Document que NÃO são entidades e ainda assim fazem parte do
+#: estado do desenho. Ficavam de fora do undo: redefinir um bloco por engano
+#: era irreversível, e desfazer um PURGE devolvia as entidades sem devolver a
+#: definição de bloco nem a camada, deixando INSERT órfão e entidade em camada
+#: inexistente — um .dxf que o próprio `ezdxf.audit` reprova (auditoria de
+#: 2026-09-07).
+_STRUCTURE_FIELDS = (
+    "block_definitions",
+    "layers",
+    "units",
+    "text_styles",
+    "current_text_style",
+    "current_layer",
+    "table_style",
+    "mleader_style",
+    "dim_style",
+    "text_height",
+    "annotation_scale",
+    "isolated_layers",
+)
+
+
 class UndoStack:
     def __init__(self, document: Document) -> None:
         self.document = document
-        # (snapshot do estado, token desse estado)
-        self._undo_stack: list[tuple[bytes, int]] = []
-        self._redo_stack: list[tuple[bytes, int]] = []
+        # (snapshot das entidades, snapshot da estrutura, token desse estado)
+        self._undo_stack: list[tuple[bytes, bytes, int]] = []
+        self._redo_stack: list[tuple[bytes, bytes, int]] = []
         self._counter = 0
         self._current = 0
+        #: ((revision, block_defs_revision) -> bytes) da última estrutura
+        #: fotografada. Enquanto nada de estrutura muda — o caso de longe mais
+        #: comum — todos os passos compartilham o MESMO objeto de bytes, então
+        #: fotografar as 110 mil entidades das definições de bloco de uma
+        #: planta real não se repete a cada comando.
+        self._struct_cache: tuple[tuple[int, int], bytes] | None = None
 
     # ------------------------------------------------------------------ #
     # snapshots
@@ -49,7 +77,37 @@ class UndoStack:
     def _snapshot(self) -> bytes:
         return pickle.dumps(self.document.entities, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def _restore(self, snapshot: bytes) -> None:
+    def _structure_key(self) -> tuple[int, int]:
+        return (self.document.revision, self.document.block_defs_revision)
+
+    def _structure_snapshot(self) -> bytes:
+        """Foto do que não é entidade, reaproveitada enquanto nada mudar."""
+        key = self._structure_key()
+        if self._struct_cache is not None and self._struct_cache[0] == key:
+            return self._struct_cache[1]
+        data = {campo: getattr(self.document, campo) for campo in _STRUCTURE_FIELDS}
+        blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
+        self._struct_cache = (key, blob)
+        return blob
+
+    def _restore_structure(self, blob: bytes) -> None:
+        atual = self._structure_snapshot()
+        if blob is atual or blob == atual:
+            # Nada de estrutura mudou entre os dois estados — o caso de longe
+            # mais comum. Sair aqui mantém `revision` intacta, e é ela que o
+            # "arquivo modificado?" da aba compara para saber que um undo até
+            # o ponto salvo voltou a deixar o desenho limpo.
+            return
+        for campo, valor in pickle.loads(blob).items():
+            setattr(self.document, campo, valor)
+        # As revisões só avançam: quem faz cache do CONTEÚDO (as impressões
+        # digitais do canvas) compara esses números, e voltar o contador para
+        # trás faria o cache achar que nada mudou.
+        self.document.revision += 1
+        self.document.block_defs_revision += 1
+        self._struct_cache = None
+
+    def _restore(self, snapshot: bytes, structure: bytes | None = None) -> None:
         """Volta ao snapshot PRESERVANDO os objetos atuais que não mudaram.
 
         `pickle.loads` devolve objetos novos para todas as entidades; o
@@ -67,11 +125,16 @@ class UndoStack:
             if old is not None and old == entity:
                 restored[key] = old
         self.document.entities = restored
+        if structure is not None:
+            self._restore_structure(structure)
 
     def _trim(self) -> None:
         while len(self._undo_stack) > _MAX_UNDO_DEPTH:
             del self._undo_stack[0]
-        total = sum(len(s) for s, _ in self._undo_stack)
+        # A estrutura é compartilhada entre passos (mesmo objeto de bytes),
+        # então conta uma vez só.
+        total = sum(len(s) for s, _, _ in self._undo_stack)
+        total += sum({id(t): len(t) for _, t, _ in self._undo_stack}.values())
         while len(self._undo_stack) > 1 and total > _MAX_UNDO_BYTES:
             total -= len(self._undo_stack[0][0])
             del self._undo_stack[0]
@@ -81,7 +144,7 @@ class UndoStack:
     # ------------------------------------------------------------------ #
     def push(self) -> None:
         """Chamado ANTES de um comando que pode alterar o desenho."""
-        self._undo_stack.append((self._snapshot(), self._current))
+        self._undo_stack.append((self._snapshot(), self._structure_snapshot(), self._current))
         self._trim()
         self._redo_stack.clear()
         self._counter += 1
@@ -90,18 +153,18 @@ class UndoStack:
     def undo(self) -> bool:
         if not self._undo_stack:
             return False
-        snapshot, token = self._undo_stack.pop()
-        self._redo_stack.append((self._snapshot(), self._current))
-        self._restore(snapshot)
+        snapshot, structure, token = self._undo_stack.pop()
+        self._redo_stack.append((self._snapshot(), self._structure_snapshot(), self._current))
+        self._restore(snapshot, structure)
         self._current = token
         return True
 
     def redo(self) -> bool:
         if not self._redo_stack:
             return False
-        snapshot, token = self._redo_stack.pop()
-        self._undo_stack.append((self._snapshot(), self._current))
-        self._restore(snapshot)
+        snapshot, structure, token = self._redo_stack.pop()
+        self._undo_stack.append((self._snapshot(), self._structure_snapshot(), self._current))
+        self._restore(snapshot, structure)
         self._current = token
         return True
 
@@ -113,4 +176,9 @@ class UndoStack:
         return self._current
 
     def memory_bytes(self) -> int:
-        return sum(len(s) for s, _ in self._undo_stack) + sum(len(s) for s, _ in self._redo_stack)
+        unicos = {id(t): len(t) for _, t, _ in self._undo_stack + self._redo_stack}
+        return (
+            sum(len(s) for s, _, _ in self._undo_stack)
+            + sum(len(s) for s, _, _ in self._redo_stack)
+            + sum(unicos.values())
+        )

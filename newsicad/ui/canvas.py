@@ -921,7 +921,7 @@ class CanvasView(QGraphicsView):
         dirty = drain_dirty()
         added = [entity_id for entity_id in entities if entity_id not in items]
         added_set = set(added)
-        rescan_all = full or layers_changed or defs_changed
+        rescan_all = full or layers_changed or defs_changed or visibility_changed
         if rescan_all:
             candidates = list(entities.items())
         else:
@@ -942,15 +942,22 @@ class CanvasView(QGraphicsView):
         # Brasil, 2,4 s) só para montar esta impressão digital.
         defs_revision = document.block_defs_revision
 
-        def layer_colors_fp(block_name: str) -> str:
-            # Cores das camadas que a definição usa — e SÓ elas (um resumo de
-            # todas as camadas em todas as entidades recriava a planta inteira
-            # a cada clique no painel de camadas: 178 s, medição de 2026-09-03).
+        def layer_state_fp(block_name: str) -> str:
+            # Cor E visibilidade das camadas que a definição usa — e SÓ elas
+            # (um resumo de todas as camadas em todas as entidades recriava a
+            # planta inteira a cada clique no painel: 178 s, medição de
+            # 2026-09-03). A visibilidade entra aqui porque os filhos do bloco
+            # são filtrados por `_block_child_visible` na CRIAÇÃO do item:
+            # desligar uma camada não escondia o que estava dentro de bloco
+            # (auditoria de 2026-09-07), já que `apply_layer_visibility` só
+            # mexe nos itens de topo.
             names = self._def_layers_cache.get(block_name)
             if names is None:
                 names = self._definition_layer_names(block_name)
                 self._def_layers_cache[block_name] = names
-            return "|".join(f"{n}={layers[n].color}" for n in names if n in layers)
+            return "|".join(
+                f"{n}={layers[n].color}{int(layers[n].visible)}" for n in names if n in layers
+            )
 
         plan: list[tuple[str, Entity, tuple, bool]] = []
         for entity_id, entity in candidates:
@@ -959,7 +966,7 @@ class CanvasView(QGraphicsView):
             # 0,5 s por passada completa (medição de 2026-09-06).
             fingerprint = (id(entity), entity.version, self._effective_color(entity))
             if isinstance(entity, BlockReference):
-                fingerprint += (defs_revision, layer_colors_fp(entity.block_name))
+                fingerprint += (defs_revision, layer_state_fp(entity.block_name))
             item = items.get(entity_id)
             unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
             if unchanged and full:
