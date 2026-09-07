@@ -75,14 +75,31 @@ def insert_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 
     insertion_point = yield Prompt("Specify insertion point:", kind="point")
 
-    scale_raw = yield Prompt("Specify scale factor <1>:", kind="distance")
-    scale = 1.0 if scale_raw is ENTER else float(scale_raw)
-    if scale <= 0:
-        # ezdxf recusa xscale/yscale <= 0 na gravação e silenciosamente
-        # volta pro padrão 1.0 ao regravar — um bloco "escondido" com escala
-        # 0 reaparecia em tamanho normal ao reabrir o arquivo, sem nenhum
-        # aviso (bug real de auditoria, 2026-08-22).
-        yield Prompt("INSERT: o fator de escala deve ser positivo.", kind="info")
+    # Escala uniforme, ou [XY] para uma por eixo. Valor NEGATIVO é como o DXF
+    # representa um bloco espelhado (flip), e escala diferente por eixo é como
+    # chega um bloco dinâmico esticado do AutoCAD — o canvas e o gravador já
+    # sabiam lidar com os dois (ver BlockReference.scale_xy e
+    # `_create_block_reference_item`), só este comando é que recusava, então
+    # um símbolo espelhado do acervo da New SI não podia ser reinserido pelo
+    # próprio programa (achado no teste de duas plantas, 2026-09-06).
+    scale_raw = yield Prompt("Specify scale factor or [XY] <1>:", kind="distance", options=["XY"])
+    if scale_raw == "XY":
+        x_raw = yield Prompt("Specify X scale factor <1>:", kind="distance")
+        scale = 1.0 if x_raw is ENTER else float(x_raw)
+        y_raw = yield Prompt(f"Specify Y scale factor <{scale:g}>:", kind="distance")
+        scale_y = scale if y_raw is ENTER else float(y_raw)
+    else:
+        scale = 1.0 if scale_raw is ENTER else float(scale_raw)
+        scale_y = scale
+
+    if scale == 0 or scale_y == 0:
+        # Zero continua proibido: o ezdxf recusa xscale/yscale igual a zero na
+        # gravação e volta silenciosamente para 1.0 ao regravar — um bloco
+        # "escondido" com escala 0 reaparecia em tamanho normal ao reabrir o
+        # arquivo, sem nenhum aviso (bug real de auditoria, 2026-08-22).
+        # Negativo, ao contrário, atravessa a ida e volta intacto (conferido
+        # em 2026-09-06) e é justamente o espelhamento.
+        yield Prompt("INSERT: o fator de escala não pode ser zero (negativo espelha).", kind="info")
         return
 
     rotation_raw = yield Prompt("Specify rotation angle <0>:", kind="distance")
@@ -93,6 +110,8 @@ def insert_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             block_name=name,
             insertion_point=insertion_point,
             scale=scale,
+            # `None` = uniforme (ver BlockReference.scale_y).
+            scale_y=None if scale_y == scale else scale_y,
             rotation=math.radians(rotation_deg),
             layer=ctx.document.current_layer,
         )

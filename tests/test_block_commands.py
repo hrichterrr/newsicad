@@ -127,3 +127,86 @@ def test_insert_command_empty_name_cancels():
     interp.submit_text("")
     assert not interp.active
     assert doc.all_entities() == []
+
+
+# ---------------------------------------------------------------------- #
+# INSERT de bloco espelhado / esticado (achado no teste de duas plantas,
+# 2026-09-06): o canvas e o gravador já lidavam com escala negativa e por
+# eixo, mas o comando recusava — símbolo espelhado do acervo da New SI não
+# podia ser reinserido pelo próprio programa.
+# ---------------------------------------------------------------------- #
+def test_insert_aceita_escala_negativa_espelhando_o_bloco():
+    interp, doc = make_interpreter()
+    doc.define_block("SIMBOLO", [Line(start=Point(0, 0), end=Point(1, 0))])
+    interp.start("INSERT")
+    interp.submit_text("SIMBOLO")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("-1")  # espelhado
+    interp.submit_text("")  # rotação padrão
+    assert not interp.active
+    ref = next(e for e in doc.all_entities() if isinstance(e, BlockReference))
+    assert ref.scale_xy() == (-1.0, -1.0)
+
+
+def test_insert_opcao_xy_define_escala_por_eixo():
+    interp, doc = make_interpreter()
+    doc.define_block("SIMBOLO", [Line(start=Point(0, 0), end=Point(1, 0))])
+    interp.start("INSERT")
+    interp.submit_text("SIMBOLO")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("XY")
+    interp.submit_text("2")
+    interp.submit_text("-3")  # espelhado só no Y
+    interp.submit_text("")
+    assert not interp.active
+    ref = next(e for e in doc.all_entities() if isinstance(e, BlockReference))
+    assert ref.scale_xy() == (2.0, -3.0)
+    assert ref.scale_y == -3.0
+
+
+def test_insert_xy_com_eixos_iguais_fica_uniforme():
+    interp, doc = make_interpreter()
+    doc.define_block("SIMBOLO", [Line(start=Point(0, 0), end=Point(1, 0))])
+    interp.start("INSERT")
+    interp.submit_text("SIMBOLO")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("XY")
+    interp.submit_text("2")
+    interp.submit_text("")  # Enter repete o X
+    interp.submit_text("")
+    ref = next(e for e in doc.all_entities() if isinstance(e, BlockReference))
+    assert ref.scale == 2.0
+    assert ref.scale_y is None  # uniforme
+
+
+def test_insert_recusa_zero_em_qualquer_eixo():
+    interp, doc = make_interpreter()
+    doc.define_block("SIMBOLO", [Line(start=Point(0, 0), end=Point(1, 0))])
+    interp.start("INSERT")
+    interp.submit_text("SIMBOLO")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("XY")
+    interp.submit_text("1")
+    interp.submit_text("0")
+    assert not interp.active
+    assert not [e for e in doc.all_entities() if isinstance(e, BlockReference)]
+
+
+def test_bloco_espelhado_sobrevive_a_gravacao_e_releitura(tmp_path):
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    interp, doc = make_interpreter()
+    doc.define_block("SIMBOLO", [Line(start=Point(0, 0), end=Point(1, 0))])
+    interp.start("INSERT")
+    interp.submit_text("SIMBOLO")
+    interp.submit_point(Point(0, 0))
+    interp.submit_text("XY")
+    interp.submit_text("-2")
+    interp.submit_text("3")
+    interp.submit_text("")
+
+    destino = tmp_path / "espelhado.dxf"
+    save_dxf(doc, destino)
+    volta, _ = load_dxf(destino)
+    ref = next(e for e in volta.entities.values() if isinstance(e, BlockReference))
+    assert ref.scale_xy() == (-2.0, 3.0)
