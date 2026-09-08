@@ -1407,6 +1407,14 @@ class MainWindow(QMainWindow):
             # Cena vazia: a passada incremental cria tudo; a profunda só
             # acrescentaria o repr() de cada entidade (1 s numa planta grande).
             session.canvas.refresh_entities(full=False, progress=progress)
+            # A primeira foto da estrutura para o undo (definições de bloco,
+            # camadas, estilos) custa ~1 s numa planta de 244 blocos, e sem
+            # isto ela caía inteira no PRIMEIRO comando que altera o desenho
+            # — uma travada de 1 s no primeiro clique de quem acabou de
+            # abrir. Aqui ela cabe no diálogo de progresso que já está na
+            # tela, e as fotos seguintes reaproveitam a mesma (ver
+            # UndoStack._blocks_cache).
+            session.undo_stack.warm()
         finally:
             dialog.close()
             dialog.deleteLater()

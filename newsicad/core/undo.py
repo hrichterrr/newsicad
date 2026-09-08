@@ -26,6 +26,10 @@ import pickle
 
 from newsicad.core.document import Document
 
+#: Foto da estrutura: (definições de bloco, todo o resto). São dois blobs
+#: separados porque só o primeiro é caro — ver `UndoStack._blocks_cache`.
+_Structure = tuple[bytes, bytes]
+
 # Teto de profundidade: 200 passos já é bem mais do que o AutoCAD guarda por
 # padrão. Teto de memória: com ~7 MB por snapshot numa planta pesada, 300 MB
 # dão ~40 passos nela e os 200 completos em desenhos normais (bug real de
@@ -60,16 +64,22 @@ class UndoStack:
     def __init__(self, document: Document) -> None:
         self.document = document
         # (snapshot das entidades, snapshot da estrutura, token desse estado)
-        self._undo_stack: list[tuple[bytes, bytes, int]] = []
-        self._redo_stack: list[tuple[bytes, bytes, int]] = []
+        self._undo_stack: list[tuple[bytes, _Structure, int]] = []
+        self._redo_stack: list[tuple[bytes, _Structure, int]] = []
         self._counter = 0
         self._current = 0
-        #: ((revision, block_defs_revision) -> bytes) da última estrutura
-        #: fotografada. Enquanto nada de estrutura muda — o caso de longe mais
-        #: comum — todos os passos compartilham o MESMO objeto de bytes, então
-        #: fotografar as 110 mil entidades das definições de bloco de uma
-        #: planta real não se repete a cada comando.
-        self._struct_cache: tuple[tuple[int, int], bytes] | None = None
+        #: (block_defs_revision -> bytes) da última foto das DEFINIÇÕES DE
+        #: BLOCO. É a parte cara: 24 MB e ~1 s na planta NEWSI-CASA PAU
+        #: BRASIL-R01 (244 blocos, 110 mil entidades dentro deles). Enquanto
+        #: nenhum bloco for redefinido — o caso de longe mais comum — todos os
+        #: passos compartilham o MESMO objeto de bytes.
+        #:
+        #: Ela fica separada do resto da estrutura (camadas, estilos,
+        #: unidades) de propósito: o resto é pequeno e é fotografado a cada
+        #: passo. Numa chave só, com `revision` junto, apagar uma camada ou
+        #: rodar LAYISO — que mexem em `revision` — obrigava a refotografar os
+        #: 24 MB de blocos, que não tinham mudado nada.
+        self._blocks_cache: tuple[int, bytes] | None = None
 
     # ------------------------------------------------------------------ #
     # snapshots
@@ -77,20 +87,25 @@ class UndoStack:
     def _snapshot(self) -> bytes:
         return pickle.dumps(self.document.entities, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def _structure_key(self) -> tuple[int, int]:
-        return (self.document.revision, self.document.block_defs_revision)
+    def _structure_snapshot(self) -> _Structure:
+        """Foto do que não é entidade: (definições de bloco, resto)."""
+        key = self.document.block_defs_revision
+        if self._blocks_cache is None or self._blocks_cache[0] != key:
+            self._blocks_cache = (
+                key,
+                pickle.dumps(self.document.block_definitions, protocol=pickle.HIGHEST_PROTOCOL),
+            )
+        resto = {
+            campo: getattr(self.document, campo)
+            for campo in _STRUCTURE_FIELDS
+            if campo != "block_definitions"
+        }
+        return (
+            self._blocks_cache[1],
+            pickle.dumps(resto, protocol=pickle.HIGHEST_PROTOCOL),
+        )
 
-    def _structure_snapshot(self) -> bytes:
-        """Foto do que não é entidade, reaproveitada enquanto nada mudar."""
-        key = self._structure_key()
-        if self._struct_cache is not None and self._struct_cache[0] == key:
-            return self._struct_cache[1]
-        data = {campo: getattr(self.document, campo) for campo in _STRUCTURE_FIELDS}
-        blob = pickle.dumps(data, protocol=pickle.HIGHEST_PROTOCOL)
-        self._struct_cache = (key, blob)
-        return blob
-
-    def _restore_structure(self, blob: bytes) -> None:
+    def _restore_structure(self, blob: _Structure) -> None:
         atual = self._structure_snapshot()
         if blob is atual or blob == atual:
             # Nada de estrutura mudou entre os dois estados — o caso de longe
@@ -98,16 +113,18 @@ class UndoStack:
             # "arquivo modificado?" da aba compara para saber que um undo até
             # o ponto salvo voltou a deixar o desenho limpo.
             return
-        for campo, valor in pickle.loads(blob).items():
+        blocos, resto = blob
+        self.document.block_definitions = pickle.loads(blocos)
+        for campo, valor in pickle.loads(resto).items():
             setattr(self.document, campo, valor)
         # As revisões só avançam: quem faz cache do CONTEÚDO (as impressões
         # digitais do canvas) compara esses números, e voltar o contador para
         # trás faria o cache achar que nada mudou.
         self.document.revision += 1
         self.document.block_defs_revision += 1
-        self._struct_cache = None
+        self._blocks_cache = None
 
-    def _restore(self, snapshot: bytes, structure: bytes | None = None) -> None:
+    def _restore(self, snapshot: bytes, structure: _Structure | None = None) -> None:
         """Volta ao snapshot PRESERVANDO os objetos atuais que não mudaram.
 
         `pickle.loads` devolve objetos novos para todas as entidades; o
@@ -131,10 +148,11 @@ class UndoStack:
     def _trim(self) -> None:
         while len(self._undo_stack) > _MAX_UNDO_DEPTH:
             del self._undo_stack[0]
-        # A estrutura é compartilhada entre passos (mesmo objeto de bytes),
-        # então conta uma vez só.
+        # A foto dos blocos é compartilhada entre passos (mesmo objeto de
+        # bytes), então conta uma vez só; o resto da estrutura é por passo.
         total = sum(len(s) for s, _, _ in self._undo_stack)
-        total += sum({id(t): len(t) for _, t, _ in self._undo_stack}.values())
+        total += sum({id(t[0]): len(t[0]) for _, t, _ in self._undo_stack}.values())
+        total += sum(len(t[1]) for _, t, _ in self._undo_stack)
         while len(self._undo_stack) > 1 and total > _MAX_UNDO_BYTES:
             total -= len(self._undo_stack[0][0])
             del self._undo_stack[0]
@@ -168,6 +186,14 @@ class UndoStack:
         self._current = token
         return True
 
+    def warm(self) -> None:
+        """Tira a primeira foto das definições de bloco fora da hora do
+        aperto. Ela custa ~1 s numa planta com centenas de blocos, e sem isto
+        cai inteira no primeiro comando que altera o desenho — uma travada no
+        primeiro clique de quem acabou de abrir o arquivo. Chamada pela
+        abertura, enquanto o diálogo de progresso ainda está na tela."""
+        self._structure_snapshot()
+
     def state_id(self) -> int:
         """Token do estado atual do desenho. Dois tokens iguais = o mesmo
         estado (undo/redo levam e trazem de volta ao mesmo token); um `push`
@@ -176,9 +202,10 @@ class UndoStack:
         return self._current
 
     def memory_bytes(self) -> int:
-        unicos = {id(t): len(t) for _, t, _ in self._undo_stack + self._redo_stack}
+        passos = self._undo_stack + self._redo_stack
+        blocos_unicos = {id(t[0]): len(t[0]) for _, t, _ in passos}
         return (
-            sum(len(s) for s, _, _ in self._undo_stack)
-            + sum(len(s) for s, _, _ in self._redo_stack)
-            + sum(unicos.values())
+            sum(len(s) for s, _, _ in passos)
+            + sum(len(t[1]) for _, t, _ in passos)
+            + sum(blocos_unicos.values())
         )

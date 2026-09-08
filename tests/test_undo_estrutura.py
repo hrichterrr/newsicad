@@ -96,12 +96,53 @@ def test_undo_sem_mudanca_de_estrutura_nao_mexe_na_revisao(doc):
 
 
 def test_estrutura_e_compartilhada_entre_passos(doc):
-    """Fotografar as definições de bloco a cada comando seria caro; enquanto
-    nada de estrutura muda, todos os passos usam o MESMO objeto."""
+    """Fotografar as definições de bloco a cada comando seria caro (24 MB e
+    ~1 s numa planta real); enquanto nenhum bloco é redefinido, todos os
+    passos usam o MESMO objeto de bytes. O resto da estrutura — camadas,
+    estilos, unidades — é pequeno e vai a cada passo, justamente pra que
+    mexer numa camada não obrigue a refotografar os blocos."""
     doc.define_block("B", [Circle(center=Point(0, 0), radius=1) for _ in range(50)])
     undo = UndoStack(doc)
     for i in range(5):
         undo.push()
         doc.add_entity(Line(start=Point(i, 0), end=Point(i, 1)))
-    estruturas = {id(entrada[1]) for entrada in undo._undo_stack}
-    assert len(estruturas) == 1
+    blocos = {id(entrada[1][0]) for entrada in undo._undo_stack}
+    assert len(blocos) == 1
+
+
+def test_mexer_em_camada_nao_refotografa_os_blocos(doc):
+    """Numa chave só, `revision` (que qualquer mexida em camada avança)
+    invalidava junto a foto das definições de bloco — 24 MB refotografados
+    numa planta real por causa de um LAYISO."""
+    doc.define_block("B", [Circle(center=Point(0, 0), radius=1) for _ in range(50)])
+    undo = UndoStack(doc)
+    undo.push()
+    primeiro = undo._undo_stack[-1][1][0]
+
+    doc.layers["0"].visible = False
+    doc.touch()
+    undo.push()
+
+    assert undo._undo_stack[-1][1][0] is primeiro, "os blocos não mudaram"
+    assert undo._undo_stack[-1][1][1] != undo._undo_stack[0][1][1], (
+        "a camada apagada tem de estar na foto"
+    )
+    # O primeiro undo volta ao estado fotografado no push mais recente (a
+    # camada já apagada); o segundo volta ao de antes dela.
+    undo.undo()
+    undo.undo()
+    assert doc.layers["0"].visible is True
+
+
+def test_warm_tira_a_foto_antes_do_primeiro_comando(doc):
+    """A abertura chama isto com o diálogo de progresso na tela, para que o
+    primeiro comando não pague a foto das definições de bloco."""
+    doc.define_block("B", [Circle(center=Point(0, 0), radius=1) for _ in range(50)])
+    undo = UndoStack(doc)
+    assert undo._blocks_cache is None
+    undo.warm()
+    fotografado = undo._blocks_cache
+    assert fotografado is not None
+
+    undo.push()
+    assert undo._undo_stack[-1][1][0] is fotografado[1], "o push tinha de reaproveitar"
