@@ -607,6 +607,21 @@ class MainWindow(QMainWindow):
         self.interpreter.start(text)
         self._after_interpreter_step()
 
+    def push_undo(self) -> None:
+        """Empilha um passo de undo para uma alteração que NÃO passa por
+        `_start_command`: as do painel de Camadas e dos botões de camada do
+        ribbon.
+
+        Sem isto, ligar/desligar, travar, recolorir, renomear e criar camada
+        ficavam FORA do undo. O estrago não era só "não dá pra desfazer": o
+        Ctrl+Z seguinte, feito para desfazer a última edição de geometria,
+        levava junto todo o trabalho de camada feito depois dela — e seguir
+        trabalhando descartava o redo, então as cores não voltavam mais
+        (auditoria de 07/09/2026 com as amostras da Autodesk). O
+        `UndoStack` já fotografa `layers` desde a 2.15.9; o que faltava era
+        alguém chamar `push()`."""
+        self.undo_stack.push()
+
     def _select_all(self) -> None:
         # Só o que está na tela e destravado — camada desligada ou travada
         # entrava no Ctrl+A e o Del seguinte apagava o que estava protegido.

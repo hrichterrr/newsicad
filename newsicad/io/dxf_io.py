@@ -282,13 +282,24 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     # esse prefixo ("_PRANCHA_LEGENDA" = o selo da prancha, "_SIMBOLO_USB")
     # que o filtro antigo derrubava (auditoria 2026-09-01).
     #
+    # A regra virou uma LISTA DE EXCLUSÃO em vez de uma lista de permissão
+    # (`_BLOCOS_INTERNOS`, logo acima). Só "*U" era aceito, e em 07/09/2026 a
+    # amostra oficial "blocks_and_tables" da Autodesk mostrou o mesmo estrago
+    # com outra letra: 38 das 161 instâncias do desenho apontavam para "*B13"
+    # a "*B37" — a cópia anônima que o AutoCAD cria para um bloco COM
+    # ATRIBUTOS cujos valores são únicos por instância. Sumiam 3 vasos, 3
+    # pias, 19 interruptores, fogão, geladeira e 11 portas (840 traços), sem
+    # aviso nenhum; e ao gravar, os 38 INSERT saíam apontando para blocos
+    # inexistentes, um .dxf que o `ezdxf.audit` reprova. Com a lista de
+    # exclusão, o próximo prefixo anônimo que a Autodesk inventar já entra.
+    #
     # As entidades são percorridas em `entities_in_redraw_order()` (a ordem
     # de desenho do AutoCAD, tabela SORTENTS) — o canvas desenha na ordem do
     # dict, então é isso que faz um WIPEOUT cobrir só o que está atrás dele
     # e uma hachura sólida ficar por baixo das linhas do próprio ícone.
     for block in dxf_doc.blocks:
         name = block.name
-        if name.startswith("*") and not name.upper().startswith("*U"):
+        if name.upper().startswith(_BLOCOS_INTERNOS):
             continue
         if name in dxf_fills.EZDXF_ARROW_BLOCKS:
             continue
@@ -376,8 +387,42 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     if heights:
         document.text_height = heights.most_common(1)[0][0]
 
-    skipped = SkippedCount(sum(skipped_by_type.values()), dict(skipped_by_type), _file_notes(dxf_doc))
+    notes = _file_notes(dxf_doc)
+    orfas = _orphan_reference_note(document)
+    if orfas:
+        notes.append(orfas)
+    skipped = SkippedCount(sum(skipped_by_type.values()), dict(skipped_by_type), notes)
     return document, skipped
+
+
+#: Blocos que o AutoCAD usa para as PRÓPRIAS tripas do arquivo e que não são
+#: desenho do usuário: os dois espaços de trabalho, "*D..." (setas e geometria
+#: interna de cota) e "*X..." (hachura associativa). Todo o resto é carregado
+#: — inclusive os anônimos "*U" (bloco dinâmico), "*B" (bloco com atributo
+#: único por instância) e "*T" (conteúdo de tabela).
+_BLOCOS_INTERNOS = ("*MODEL_SPACE", "*PAPER_SPACE", "*D", "*X")
+
+
+def _orphan_reference_note(document: Document) -> str | None:
+    """Aviso quando sobra INSERT sem definição de bloco.
+
+    Rede de segurança para a família de defeitos "bloco carrega vazio": a
+    entidade existe, ocupa lugar na contagem, e não desenha nada nem dá para
+    clicar — o usuário só via um buraco na planta. Aconteceu duas vezes, com
+    "*U" (2026-08-28) e com "*B" (2026-09-07)."""
+    faltando: dict[str, int] = collections.Counter()
+    for entity in document.entities.values():
+        if isinstance(entity, BlockReference) and entity.block_name not in document.block_definitions:
+            faltando[entity.block_name] += 1
+    if not faltando:
+        return None
+    nomes = ", ".join(sorted(faltando)[:5])
+    reticencias = "…" if len(faltando) > 5 else ""
+    return (
+        f"Aviso: {sum(faltando.values())} inserção(ões) de bloco apontam para "
+        f"{len(faltando)} definição(ões) que não vieram no arquivo ({nomes}{reticencias}) "
+        "— elas não aparecem no desenho."
+    )
 
 
 def _file_notes(dxf_doc) -> list[str]:

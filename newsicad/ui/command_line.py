@@ -10,6 +10,10 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QTextEdit, QVBoxLa
 
 MONO_FONT_FAMILY = "Menlo"
 
+#: Teto de linhas que o historico mantem desenhado. O QTextDocument descarta
+#: as mais antigas sozinho, entao a tela nao cresce sem fim.
+MAX_LINHAS_VISIVEIS = 5000
+
 HISTORY_STYLE = f"""
     QTextEdit {{
         background-color: #141414;
@@ -104,6 +108,10 @@ class CommandLineWidget(QWidget):
 
         self.history_view = QTextEdit()
         self.history_view.setReadOnly(True)
+        self.history_view.document().setMaximumBlockCount(MAX_LINHAS_VISIVEIS)
+        #: Quantas linhas do historico ja foram desenhadas (contando as que o
+        #: teto acima ja descartou) - ver set_log.
+        self._linhas_desenhadas = 0
         self.history_view.setFixedHeight(110)
         self.history_view.setStyleSheet(HISTORY_STYLE)
         layout.addWidget(self.history_view)
@@ -153,7 +161,34 @@ class CommandLineWidget(QWidget):
         self.prompt_label.setText(text)
 
     def set_log(self, lines: list[str]) -> None:
-        self.history_view.setPlainText("\n".join(lines))
+        """Poe o historico na tela ACRESCENTANDO so o que e novo.
+
+        Antes isto era um `setPlainText` do historico inteiro, e roda a cada
+        passo de comando: o custo crescia com o tanto que ja tinha sido
+        digitado na sessao, ate 1,6 s por comando num desenho de 555
+        entidades (auditoria de 07/09/2026 com as amostras da Autodesk).
+        `CommandLog.total` conta as linhas que ja passaram, inclusive as
+        descartadas pelo teto, e e assim que sabemos onde paramos."""
+        total = getattr(lines, "total", len(lines))
+        novas = total - self._linhas_desenhadas
+        if novas == 0:
+            return
+        if not 0 < novas <= len(lines):
+            # Historico trocado ou encolhido (documento novo): remonta.
+            self.history_view.setPlainText("\n".join(lines[-MAX_LINHAS_VISIVEIS:]))
+        else:
+            cursor = QTextCursor(self.history_view.document())
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            vazio = self.history_view.document().isEmpty()
+            for linha in lines[-novas:]:
+                if not vazio:
+                    cursor.insertBlock()
+                vazio = False
+                # insertText, e nao append(): o append do QTextEdit adivinha
+                # se o texto e HTML, e um prompt como "Enter number of sides
+                # <4>:" nao pode virar marcacao.
+                cursor.insertText(linha)
+        self._linhas_desenhadas = total
         cursor = self.history_view.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self.history_view.setTextCursor(cursor)

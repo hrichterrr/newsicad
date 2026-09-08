@@ -41,6 +41,35 @@ class Prompt:
 
 CommandFactory = Callable[[CommandContext], Generator[Prompt, object, None]]
 
+#: Teto de linhas guardadas do histórico da linha de comando, e quanto se
+#: descarta de uma vez quando ele estoura. O histórico crescia sem limite e
+#: era REESCRITO INTEIRO na tela a cada passo de comando (ver
+#: CommandLine.set_log): com 250 comandos já dados, uma LINE custava 208 ms
+#: em vez de 21 ms, e com 2.500 comandos, 1,6 s — sem nenhuma relação com o
+#: tamanho do desenho. É a causa do "o programa vai ficando pesado, tenho que
+#: fechar e abrir" (auditoria de 07/09/2026 com as amostras da Autodesk).
+_MAX_LINHAS_LOG = 5000
+_DESCARTE_LOG = 1000
+
+
+class CommandLog(list):
+    """Histórico da linha de comando: uma lista com teto, que sabe quantas
+    linhas já passaram por ela.
+
+    `total` nunca diminui, mesmo quando as mais antigas são descartadas — é
+    por ele que a tela sabe quantas linhas ainda não desenhou e acrescenta só
+    essas, em vez de redesenhar o histórico inteiro."""
+
+    def __init__(self, iterable=()) -> None:
+        super().__init__(iterable)
+        self.total = len(self)
+
+    def append(self, item: str) -> None:
+        super().append(item)
+        self.total += 1
+        if len(self) > _MAX_LINHAS_LOG:
+            del self[:_DESCARTE_LOG]
+
 
 class CommandInterpreter:
     def __init__(
@@ -52,7 +81,7 @@ class CommandInterpreter:
         self.context = context
         self.registry = registry
         self.aliases = aliases
-        self.log: list[str] = []
+        self.log: list[str] = CommandLog()
         self.last_command_name: str | None = None
         self.last_point: Point | None = None
         self._generator: Generator[Prompt, object, None] | None = None

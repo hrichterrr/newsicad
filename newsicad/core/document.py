@@ -152,7 +152,13 @@ class Document:
     def set_current_layer(self, name: str) -> None:
         if name not in self.layers:
             raise ValueError(f"Camada '{name}' não existe")
+        if name == self.current_layer:
+            return
         self.current_layer = name
+        # Vai pro arquivo como $CLAYER: sem isto, trocar a camada atual e
+        # fechar a janela não perguntava nada e a escolha se perdia
+        # (auditoria de 07/09/2026 com as amostras da Autodesk).
+        self.touch()
 
     def is_layer_visible(self, entity: Entity) -> bool:
         layer = self.layers.get(entity.layer)

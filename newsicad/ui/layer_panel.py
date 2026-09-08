@@ -283,8 +283,9 @@ class LayerPanel(QDockWidget):
     def _set_visible(self, name: str, visible: bool) -> None:
         document = self.main_window.document
         layer = document.layers.get(name)
-        if layer is None:
+        if layer is None or layer.visible == visible:
             return
+        self.main_window.push_undo()
         layer.visible = visible
         document.touch()
         # Só liga/desliga os itens da camada — nada é recriado (ver
@@ -295,8 +296,9 @@ class LayerPanel(QDockWidget):
     def _set_locked(self, name: str, locked: bool) -> None:
         document = self.main_window.document
         layer = document.layers.get(name)
-        if layer is None:
+        if layer is None or layer.locked == locked:
             return
+        self.main_window.push_undo()
         layer.locked = locked
         document.touch()
         # Trancar uma camada não muda o desenho na tela, só o que dá pra
@@ -322,8 +324,9 @@ class LayerPanel(QDockWidget):
         abre o QColorDialog) pra poder ser testada sem simular um diálogo."""
         document = self.main_window.document
         layer = document.layers.get(name)
-        if layer is None:
+        if layer is None or layer.color == color_hex:
             return
+        self.main_window.push_undo()
         layer.color = color_hex
         document.touch()
         self.main_window.canvas.refresh_entities()
@@ -333,6 +336,9 @@ class LayerPanel(QDockWidget):
         name_item = self.table.item(row, _COL_NAME)
         if name_item is None:
             return
+        if name_item.text() == self.main_window.document.current_layer:
+            return
+        self.main_window.push_undo()
         self.main_window.document.set_current_layer(name_item.text())
         self.refresh()
 
@@ -373,9 +379,15 @@ class LayerPanel(QDockWidget):
         new_name = new_name.strip()
         if not new_name or new_name == old_name:
             return
+        # Empilha ANTES: renomear reescreve o campo `layer` de toda entidade
+        # que usa a camada (216 delas numa das plantas de amostra) e é
+        # irreversível sem isto. Se o nome for recusado, o passo é
+        # descartado, senão sobraria um Ctrl+Z que não faz nada.
+        self.main_window.push_undo()
         try:
             self.main_window.document.rename_layer(old_name, new_name)
         except ValueError as exc:
+            self.main_window.undo_stack.drop_last()
             QMessageBox.warning(self, "Renomear camada", str(exc))
             return
         self.refresh()
@@ -397,5 +409,6 @@ class LayerPanel(QDockWidget):
         if name in self.main_window.document.layers:
             QMessageBox.information(self, "Nova camada", f"A camada '{name}' já existe.")
             return
+        self.main_window.push_undo()
         self.main_window.document.add_layer(name)
         self.refresh()

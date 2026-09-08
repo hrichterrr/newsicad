@@ -186,6 +186,18 @@ class UndoStack:
         self._current = token
         return True
 
+    def drop_last(self) -> None:
+        """Descarta o passo empilhado por ultimo.
+
+        Para quem empilha ANTES de uma operacao que ainda pode ser recusada
+        no meio (renomear camada para um nome que ja existe, por exemplo):
+        sem isto a operacao recusada deixaria para tras um Ctrl+Z que nao faz
+        nada."""
+        if not self._undo_stack:
+            return
+        _snapshot, _structure, token = self._undo_stack.pop()
+        self._current = token
+
     def warm(self) -> None:
         """Tira a primeira foto das definições de bloco fora da hora do
         aperto. Ela custa ~1 s numa planta com centenas de blocos, e sem isto

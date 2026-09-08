@@ -455,6 +455,7 @@ class LayerCombo(QComboBox):
         name = self.itemText(index)
         document = self.window.document
         if name and name in document.layers and name != document.current_layer:
+            self.window.push_undo()
             document.set_current_layer(name)
             self.window.layer_dock.refresh()
 
@@ -511,9 +512,13 @@ def _property_combo(text: str, swatch: bool = False, line_width: int = 0) -> QCo
 def _set_current_layer_locked(window: "MainWindow", locked: bool) -> None:
     document = window.document
     layer = document.layers.get(document.current_layer)
-    if layer is None:
+    if layer is None or layer.locked == locked:
         return
+    window.push_undo()
     layer.locked = locked
+    # `locked` vai pro .dxf: sem o touch a aba não ganhava o "*" e fechar a
+    # janela não perguntava nada (auditoria de 07/09/2026).
+    document.touch()
     window.selection.clear()
     window.canvas.refresh_selection_highlight()
     window.canvas.viewport().update()
@@ -521,8 +526,13 @@ def _set_current_layer_locked(window: "MainWindow", locked: bool) -> None:
 
 
 def _turn_all_layers_on(window: "MainWindow") -> None:
-    for layer in window.document.layers.values():
+    document = window.document
+    if all(layer.visible for layer in document.layers.values()):
+        return
+    window.push_undo()
+    for layer in document.layers.values():
         layer.visible = True
+    document.touch()
     window.canvas.refresh_entities()
     window.canvas.viewport().update()
     window.layer_dock.refresh()
