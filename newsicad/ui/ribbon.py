@@ -700,7 +700,7 @@ def _build_home_tab(window: "MainWindow") -> QWidget:
             _col([
                 _icon_only("Cut", "cut", c("CUTCLIP"), N, tooltip="Cut (Ctrl+X)"),
                 _icon_only("Copy Clip", "copyclip", c("COPYCLIP"), N, tooltip="Copy Clip (Ctrl+C)"),
-                _icon_only("Copy with Base Point", "copybase", c("COPY"), N, tooltip="Copy with Base Point (Ctrl+Shift+C)"),
+                _icon_only("Duplicate in Drawing", "copybase", c("COPY"), N, tooltip="Duplica dentro do desenho, comando COPY (Ctrl+Shift+C) - o Ctrl+C copia pra area de transferencia"),
             ]),
         ],
     )

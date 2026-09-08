@@ -132,6 +132,16 @@ class Document:
         # unidades. Junto com `UndoStack.state_id()` e
         # `block_defs_revision`, identifica o estado do documento pra
         # `DocumentSession.is_dirty` sem copiar nada (ver `touch`).
+        # Cabeçalhos do .dxf que o NewSIcad não interpreta e ainda assim
+        # DEVOLVE como estavam: formato de unidade linear/angular, sistema de
+        # medida e os limites do desenho. Abrir e salvar um arquivo imperial
+        # trocava $LUNITS 4 (pés-polegadas) por 2 (decimal) e $MEASUREMENT 0
+        # (imperial) por 1 (métrico): a geometria continuava certa, mas o
+        # desenho deixava de mostrar 50'-0" e passava a mostrar 600, e a
+        # biblioteca padrão de hachura/linetype mudava junto (auditoria de
+        # 07/09/2026 com as amostras da Autodesk). Ver _CABECALHOS_PRESERVADOS
+        # em io/dxf_io.py.
+        self.dxf_header_extras: dict[str, object] = {}
         self.revision: int = 0
 
     def touch(self) -> None:

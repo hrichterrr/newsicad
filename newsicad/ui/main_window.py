@@ -667,7 +667,7 @@ class MainWindow(QMainWindow):
         clipboard = menu.addMenu(svg_icon("paste", FAMILY_NEUTRAL, 16), "Clipboard")
         clipboard.addAction(command_icon("CUTCLIP"), "Cut\tCtrl+X", cmd("CUTCLIP"))
         clipboard.addAction(command_icon("COPYCLIP"), "Copy\tCtrl+C", cmd("COPYCLIP"))
-        clipboard.addAction(svg_icon("copybase", FAMILY_NEUTRAL, 16), "Copy with Base Point\tCtrl+Shift+C", cmd("COPY"))
+        clipboard.addAction(svg_icon("copybase", FAMILY_NEUTRAL, 16), "Duplicate in Drawing\tCtrl+Shift+C", cmd("COPY"))
         clipboard.addAction(command_icon("PASTECLIP"), "Paste\tCtrl+V", cmd("PASTECLIP"))
         isolate = menu.addMenu(command_icon("LAYISO"), "Isolate")
         isolate.addAction(command_icon("LAYISO"), "Isolate Layer(s)", cmd("LAYISO"))

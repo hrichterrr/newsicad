@@ -734,6 +734,30 @@ class _ClippedGroup(QGraphicsItemGroup):
         return self._clip_path
 
 
+def _centralizado(painter: QPainter, origem: QRectF) -> QRectF:
+    """Retângulo de destino que põe o desenho no MEIO da folha.
+
+    Sem passar `target`, o `QGraphicsScene.render` do Qt escala certo mas
+    ancora no canto superior esquerdo: ele faz `translate(topo-esquerda do
+    alvo)`, `scale(min(xr, yr))` e `translate(-topo-esquerda da origem)`, sem
+    nada que compense a sobra. O desenho só caía no lugar quando a proporção
+    dele batia com a da folha; num A3 retrato ele ficava no terço de cima,
+    com 58% da página em branco embaixo (auditoria de 07/09/2026 com as
+    amostras da Autodesk)."""
+    folha = QRectF(painter.viewport())
+    if origem.width() <= 0 or origem.height() <= 0:
+        return folha
+    escala = min(folha.width() / origem.width(), folha.height() / origem.height())
+    largura = origem.width() * escala
+    altura = origem.height() * escala
+    return QRectF(
+        folha.left() + (folha.width() - largura) / 2,
+        folha.top() + (folha.height() - altura) / 2,
+        largura,
+        altura,
+    )
+
+
 class CanvasView(QGraphicsView):
     mouse_moved = Signal(object)  # emite Point (coordenadas CAD)
 
@@ -2420,7 +2444,7 @@ class CanvasView(QGraphicsView):
         hatch_anterior = _HatchItem.print_color
         _HatchItem.print_color = self._print_color(HATCH_LINE_COLOR)
         try:
-            self._scene.render(painter, source=rect)
+            self._scene.render(painter, target=_centralizado(painter, rect), source=rect)
         finally:
             _HatchItem.print_color = hatch_anterior
             self._restore_colors(anterior)

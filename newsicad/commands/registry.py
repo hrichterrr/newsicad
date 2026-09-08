@@ -165,7 +165,13 @@ ALIASES = {
     "POLYGON": "POLYGON", "POL": "POLYGON",
     "SPLINE": "SPLINE", "SP": "SPLINE",
     "TABLE": "TABLE", "TB": "TABLE",
+    # MLEADER/MLD/QLEADER caem no mesmo comando: é o único leader que o
+    # NewSIcad tem (linha poligonal + texto na ponta, ver leader_command), e
+    # é o nome que quem vem do AutoCAD digita — sem isto o programa
+    # respondia "Comando desconhecido" para o comando cujo diálogo de ESTILO
+    # (MLEADERSTYLE) ele oferece no ribbon (auditoria de 07/09/2026).
     "LEADER": "LEADER", "LE": "LEADER",
+    "MLEADER": "LEADER", "MLD": "LEADER", "QLEADER": "LEADER",
     "BOUNDARY": "BOUNDARY", "BO": "BOUNDARY",
     "POINT": "POINT", "PO": "POINT",
     "XLINE": "XLINE", "XL": "XLINE",

@@ -71,6 +71,26 @@ DXF_VERSION = "R2018"
 # padrão do DIMENSION (ver `_dimension_from_geometry`).
 NEWSICAD_APPID = "NEWSICAD"
 
+#: Cabeçalhos que o NewSIcad não interpreta mas devolve como estavam ao
+#: gravar. `$LUNITS`/`$AUNITS`/`$LUPREC`/`$AUPREC` são o FORMATO de leitura
+#: (arquitetônico pés-polegadas, decimal, casas depois da vírgula),
+#: `$MEASUREMENT` diz se o desenho é imperial ou métrico, e `$LIMMIN`/
+#: `$LIMMAX` são os limites da área de desenho. Nada disso muda a geometria,
+#: e por isso passava despercebido: o `ezdxf.new()` do save punha o default
+#: dele por cima, e um arquivo imperial voltava decimal e métrico, com os
+#: limites virando a folha A3 do ezdxf (auditoria de 07/09/2026 com as
+#: amostras da Autodesk). $INSUNITS fica de FORA de propósito — esse o
+#: NewSIcad interpreta de verdade, em Document.units.
+_CABECALHOS_PRESERVADOS = (
+    "$LUNITS",
+    "$AUNITS",
+    "$LUPREC",
+    "$AUPREC",
+    "$MEASUREMENT",
+    "$LIMMIN",
+    "$LIMMAX",
+)
+
 # $INSUNITS do cabeçalho DXF <-> Document.units (opções do diálogo Units:
 # mm/cm/m/in/ft) — sem esse mapeamento a unidade do desenho voltava sempre
 # pra "mm" ao reabrir, não importa o que tivesse sido salvo (bug real de
@@ -243,6 +263,10 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     if clayer and clayer in document.layers:
         document.current_layer = clayer
 
+    for chave in _CABECALHOS_PRESERVADOS:
+        if chave in dxf_doc.header:
+            document.dxf_header_extras[chave] = dxf_doc.header.get(chave)
+
     insunits = dxf_doc.header.get("$INSUNITS")
     if insunits in _INSUNITS_TO_UNITS:
         document.units = _INSUNITS_TO_UNITS[insunits]
@@ -297,12 +321,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     # de desenho do AutoCAD, tabela SORTENTS) — o canvas desenha na ordem do
     # dict, então é isso que faz um WIPEOUT cobrir só o que está atrás dele
     # e uma hachura sólida ficar por baixo das linhas do próprio ícone.
-    for block in dxf_doc.blocks:
-        name = block.name
-        if name.upper().startswith(_BLOCOS_INTERNOS):
-            continue
-        if name in dxf_fills.EZDXF_ARROW_BLOCKS:
-            continue
+    def _importar_definicao(block) -> None:
         block_entities: list[Entity] = []
         for dxf_entity in block.entities_in_redraw_order():
             imported = importer.import_entity(dxf_entity)
@@ -337,6 +356,14 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             for entity in block_entities:
                 translate_entity(entity, -bx, -by)
         document.define_block(block.name, block_entities)
+
+    for block in dxf_doc.blocks:
+        name = block.name
+        if name.upper().startswith(_BLOCOS_INTERNOS):
+            continue
+        if name in dxf_fills.EZDXF_ARROW_BLOCKS:
+            continue
+        _importar_definicao(block)
 
     for dxf_entity in dxf_doc.modelspace().entities_in_redraw_order():
         imported = importer.import_entity(dxf_entity)
@@ -387,6 +414,22 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     if heights:
         document.text_height = heights.most_common(1)[0][0]
 
+    # Segunda passada. A lista de exclusão acima é uma APOSTA sobre o que é
+    # tripa do AutoCAD, e ela erra: na Casa Pau Brasil existe INSERT de "*X6"
+    # no modelspace, e "*X" (hachura associativa) está na lista. O resultado
+    # era o mesmo estrago do "*B" — a inserção ficava sem definição, não
+    # desenhava nada, e ao gravar saía um .dxf que o `ezdxf` recusa a
+    # percorrer ("Required block definition for *X6 does not exist",
+    # 08/09/2026). Em vez de adivinhar melhor, a regra passa a ser: se
+    # ALGUÉM insere, o bloco entra. Em laço porque uma definição recém-lida
+    # pode inserir outra que também foi dispensada.
+    for _ in range(_MAX_PASSADAS_ORFAOS):
+        pendentes = [n for n in _orphan_block_names(document) if n in dxf_doc.blocks]
+        if not pendentes:
+            break
+        for nome in pendentes:
+            _importar_definicao(dxf_doc.blocks.get(nome))
+
     notes = _file_notes(dxf_doc)
     orfas = _orphan_reference_note(document)
     if orfas:
@@ -403,6 +446,24 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
 _BLOCOS_INTERNOS = ("*MODEL_SPACE", "*PAPER_SPACE", "*D", "*X")
 
 
+#: Quantas vezes a segunda passada de blocos órfãos se repete. Cada volta
+#: resolve um nível de aninhamento; mais que isso é ciclo ou arquivo doente.
+_MAX_PASSADAS_ORFAOS = 8
+
+
+def _orphan_block_names(document: Document) -> dict[str, int]:
+    """Nomes de bloco que alguém INSERE e que não têm definição, com quantas
+    inserções cada um tem. Olha o desenho e o miolo das definições de bloco
+    (um bloco pode inserir outro)."""
+    faltando: dict[str, int] = collections.Counter()
+    grupos = [document.entities.values()] + list(document.block_definitions.values())
+    for grupo in grupos:
+        for entity in grupo:
+            if isinstance(entity, BlockReference) and entity.block_name not in document.block_definitions:
+                faltando[entity.block_name] += 1
+    return faltando
+
+
 def _orphan_reference_note(document: Document) -> str | None:
     """Aviso quando sobra INSERT sem definição de bloco.
 
@@ -410,10 +471,7 @@ def _orphan_reference_note(document: Document) -> str | None:
     entidade existe, ocupa lugar na contagem, e não desenha nada nem dá para
     clicar — o usuário só via um buraco na planta. Aconteceu duas vezes, com
     "*U" (2026-08-28) e com "*B" (2026-09-07)."""
-    faltando: dict[str, int] = collections.Counter()
-    for entity in document.entities.values():
-        if isinstance(entity, BlockReference) and entity.block_name not in document.block_definitions:
-            faltando[entity.block_name] += 1
+    faltando = _orphan_block_names(document)
     if not faltando:
         return None
     nomes = ", ".join(sorted(faltando)[:5])
@@ -689,6 +747,15 @@ def save_dxf(document: Document, path: str | Path) -> None:
         else:
             dxf_doc.styles.add(name, font=font_file, dxfattribs={"height": style.height, "width": style.width or 1.0})
 
+    for chave, valor in document.dxf_header_extras.items():
+        if chave not in _CABECALHOS_PRESERVADOS:
+            continue
+        dxf_doc.header[chave] = valor
+        # Os limites moram em DOIS lugares: no cabeçalho e no próprio layout
+        # do modelspace. O ezdxf reescreve o cabeçalho a partir do layout ao
+        # gravar, então mexer só no header não adiantava nada.
+        if chave in ("$LIMMIN", "$LIMMAX"):
+            msp.dxf.set(chave[1:].lower(), valor)
     dxf_doc.header["$CLAYER"] = document.current_layer
     if document.units in _UNITS_TO_INSUNITS:
         dxf_doc.header["$INSUNITS"] = _UNITS_TO_INSUNITS[document.units]

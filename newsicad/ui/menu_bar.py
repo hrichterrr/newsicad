@@ -221,7 +221,12 @@ def _build_edit_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     _add_command_action(menu, "Paste", "PASTECLIP", window, shortcut="Ctrl+V")
 
     menu.addSeparator()
-    copy_base_action = QAction("Copy with Base Point", window)
+    # O rótulo era "Copy with Base Point", que é o nome do COPYBASE do
+    # AutoCAD — copiar pra área de transferência escolhendo o ponto base. Mas
+    # o que este item faz é DUPLICAR dentro do desenho (COPY), e o Ctrl+C
+    # daqui (COPYCLIP) já pede ponto base: o nome descrevia exatamente o
+    # outro item do menu (auditoria de 07/09/2026).
+    copy_base_action = QAction("Duplicate in Drawing", window)
     copy_base_action.setIcon(svg_icon("copybase", FAMILY_NEUTRAL, 16))
     copy_base_action.setShortcut(QKeySequence("Ctrl+Shift+C"))
     copy_base_action.setToolTip(

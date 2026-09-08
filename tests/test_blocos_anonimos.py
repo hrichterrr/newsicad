@@ -64,16 +64,48 @@ def test_gravar_nao_produz_insercao_sem_bloco(tmp_path):
     assert auditoria.fixes == [], "INSERT sem BLOCK é descartado pelo AutoCAD"
 
 
-def test_insercao_orfa_vira_aviso(tmp_path):
-    """Rede de segurança: se ainda assim sobrar INSERT sem definição, o
-    usuário tem de saber — antes só via um buraco na planta."""
+def test_bloco_da_lista_de_exclusao_entra_se_alguem_o_insere(tmp_path):
+    """A lista de exclusão é uma aposta sobre o que é tripa do AutoCAD, e ela
+    erra: na Casa Pau Brasil existe INSERT de "*X6" no modelspace. Se alguém
+    insere, o bloco entra — senão a inserção fica sem definição, não desenha
+    nada, e ao gravar sai um .dxf que o próprio ezdxf recusa a percorrer."""
     origem = ezdxf.new("R2018")
-    bloco = origem.blocks.new(name="*D9")  # descartado de propósito
-    bloco.add_line((0, 0), (1, 1))
-    origem.modelspace().add_blockref("*D9", (0, 0))
+    for nome in ("*X6", "*D9"):
+        bloco = origem.blocks.new(name=nome)
+        bloco.add_line((0, 0), (1, 1))
+    origem.modelspace().add_blockref("*X6", (0, 0))  # só este é inserido
+    caminho = tmp_path / "excluido_mas_usado.dxf"
+    origem.saveas(str(caminho))
+
+    doc, _ = load_dxf(caminho)
+    assert "*X6" in doc.block_definitions, "alguém insere, tem de entrar"
+    assert "*D9" not in doc.block_definitions, "ninguém insere, continua de fora"
+
+
+def test_bloco_aninhado_dispensado_tambem_e_resgatado(tmp_path):
+    """Uma definição recém-resgatada pode inserir outra que também foi
+    dispensada — a segunda passada roda em laço por isso."""
+    origem = ezdxf.new("R2018")
+    folha = origem.blocks.new(name="*X20")
+    folha.add_line((0, 0), (1, 1))
+    meio = origem.blocks.new(name="*X21")
+    meio.add_blockref("*X20", (0, 0))
+    origem.modelspace().add_blockref("*X21", (0, 0))
+    caminho = tmp_path / "aninhado.dxf"
+    origem.saveas(str(caminho))
+
+    doc, _ = load_dxf(caminho)
+    assert "*X21" in doc.block_definitions and "*X20" in doc.block_definitions
+
+
+def test_insercao_sem_bloco_nenhum_vira_aviso(tmp_path):
+    """Rede de segurança: se o bloco não existe NO ARQUIVO, não há o que
+    resgatar — mas o usuário tem de saber, em vez de só ver um buraco."""
+    origem = ezdxf.new("R2018")
+    origem.modelspace().add_blockref("FANTASMA", (0, 0))
     caminho = tmp_path / "orfa.dxf"
     origem.saveas(str(caminho))
 
     _doc, ignoradas = load_dxf(caminho)
     notas = list(getattr(ignoradas, "notes", []))
-    assert any("*D9" in nota and "não aparecem no desenho" in nota for nota in notas), notas
+    assert any("FANTASMA" in nota and "não aparecem no desenho" in nota for nota in notas), notas

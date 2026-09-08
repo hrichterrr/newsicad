@@ -1184,6 +1184,26 @@ def lengthen_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         if target is None:
             yield Prompt("Nenhum objeto encontrado sob o clique.", kind="info")
             continue
+        if value == 0.0:
+            # Sem passar por [DElta/Percent/Total] o valor é 0, e clicar num
+            # objeto aplicava delta 0: nada mudava e nada era dito — o
+            # comando só repetia o prompt (auditoria de 07/09/2026). O
+            # LENGTHEN de verdade RELATA o comprimento atual do que foi
+            # clicado, que é justamente o que serve pra decidir o valor.
+            atual = None
+            if isinstance(target, Line):
+                atual = target.length()
+            elif isinstance(target, Arc):
+                atual = abs(target.radius * ((target.end_angle - target.start_angle) % (2 * math.pi)))
+            if atual is None:
+                yield Prompt("LENGTHEN nesta versão só funciona em Line e Arc.", kind="info")
+            else:
+                yield Prompt(
+                    f"Comprimento atual: {atual:.4f}. Escolha DElta, Percent ou Total "
+                    "para dizer de quanto mudar.",
+                    kind="info",
+                )
+            continue
         try:
             if isinstance(target, Line):
                 _apply_lengthen_line(target, pick, mode, value)
