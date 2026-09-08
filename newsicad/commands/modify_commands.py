@@ -54,6 +54,23 @@ from newsicad.core.geometry_ops import (
 
 
 def _select_objects(ctx: CommandContext, message: str = "Select objects:") -> Generator[Prompt, object, list[Entity]]:
+    """Etapa de seleção de um comando, respeitando a pré-seleção.
+
+    Se o usuário já tinha escolhido os objetos antes de chamar o comando —
+    o fluxo normal do AutoCAD, e o único jeito de o menu de contexto fazer
+    sentido — é essa seleção que vale, sem perguntar de novo. Treze comandos
+    (ERASE, Ctrl+C, Ctrl+X, JOIN, EXPLODE, DIVIDE, MEASURE, PEDIT, LAYISO,
+    LAYMCH, MATCHPROP, DIMBREAK, HATCHEDIT) jogavam fora o que o usuário
+    tinha acabado de selecionar e voltavam a pedir "Select objects"
+    (auditoria de 07/09/2026 com as amostras da Autodesk).
+
+    A pré-seleção vale uma vez só por comando: num comando que pede duas
+    seleções (DIMBREAK pede a cota e depois o que a cruza), a segunda etapa
+    volta a perguntar."""
+    if ctx.preselection_available and ctx.selection.ids:
+        ctx.preselection_available = False
+        return list(ctx.selection.entities(ctx.document))
+    ctx.preselection_available = False
     ctx.selection.clear()
     yield Prompt(message, kind="selection")
     return list(ctx.selection.entities(ctx.document))
@@ -65,18 +82,8 @@ def _select_for_transform(
     """Como `_select_objects`, mas recusa a seleção inteira ANTES de mexer em
     qualquer coisa se houver um tipo que as transformações não sabem tratar —
     metade movida e metade parada é pior do que não mover nada."""
-    if ctx.selection.ids:
-        # Já existe seleção: é ela que o comando usa, sem pedir de novo. O
-        # menu de contexto só abre COM objetos selecionados e ainda assim
-        # Move/Copy/Scale/Rotate jogavam a seleção fora e voltavam a pedir
-        # "Select objects" (auditoria de 2026-09-07) — o mesmo valia para
-        # selecionar no canvas e depois digitar o comando, que é o fluxo
-        # normal do AutoCAD. "Erase" do mesmo menu já funcionava porque usa
-        # outro caminho (`MainWindow._delete_selected`), o que deixava a
-        # inconsistência à vista.
-        selected = list(ctx.selection.entities(ctx.document))
-    else:
-        selected = yield from _select_objects(ctx, message)
+    # A pré-seleção é respeitada dentro do próprio `_select_objects`.
+    selected = yield from _select_objects(ctx, message)
     faltando = unsupported_for_transform(selected)
     if faltando:
         yield Prompt(

@@ -19,3 +19,11 @@ class CommandContext:
     # Tipado como Any pra não criar dependência de newsicad.ui em
     # newsicad.commands (ui importa commands, não o contrário).
     view: Any = None
+    #: Havia objetos selecionados quando o comando começou, e nenhuma etapa
+    #: de seleção os consumiu ainda. É o "pré-seleção" do AutoCAD: escolher
+    #: os objetos no canvas e SÓ ENTÃO digitar o comando (ou usar o menu de
+    #: contexto, que só abre com objetos selecionados). Marcado por
+    #: `CommandInterpreter.start` e consumido pela primeira etapa de seleção
+    #: do comando — a segunda etapa, num comando que pede duas (DIMBREAK
+    #: pede a cota e depois o que a cruza), volta a perguntar normalmente.
+    preselection_available: bool = False

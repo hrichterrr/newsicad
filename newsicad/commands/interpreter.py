@@ -109,6 +109,8 @@ class CommandInterpreter:
             )
             return None
         self.log.append(f"Command: {command_text.strip().upper()}")
+        # Ver CommandContext.preselection_available.
+        self.context.preselection_available = bool(self.context.selection.ids)
         factory = self.registry[name]
         self._generator = factory(self.context)
         self.last_command_name = name
@@ -124,6 +126,7 @@ class CommandInterpreter:
         QFileDialog na MainWindow primeiro, e só depois alimentam este
         generator com o restante — ver newsicad/commands/block_commands.py)."""
         self._generator = generator
+        self.context.preselection_available = bool(self.context.selection.ids)
         self.last_command_name = None
         self.last_point = None
         return self._advance(None)
@@ -151,6 +154,17 @@ class CommandInterpreter:
         prompt = self._current_prompt
         if prompt is not None and prompt.kind == "distance" and self.last_point is not None:
             return self._advance(self.last_point.distance_to(point))
+        if prompt is not None and prompt.kind in ("text", "keyword"):
+            # Clique não é resposta pra prompt que pede PALAVRA. Mandar o
+            # Point cru fazia o FIELD morrer com erro de Python na tela
+            # ("'Point' object has no attribute 'upper'"), o MTEXT escrever
+            # literalmente "Point(x=105, y=105)" na prancha, o INSERT
+            # procurar um bloco com esse nome e a TABLE preencher célula com
+            # o mesmo lixo — tudo em silêncio (auditoria de 07/09/2026 com as
+            # amostras da Autodesk). É a irmã gêmea do "Enter em prompt de
+            # ponto", corrigida na 2.15.9: mesmo engano de dedo, direção
+            # contrária. O clique é ignorado e o prompt continua de pé.
+            return prompt
         return self._advance(point)
 
     def submit_text(self, text: str, cursor_point: Point | None = None) -> Prompt | None:
