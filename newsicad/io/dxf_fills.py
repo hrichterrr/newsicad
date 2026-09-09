@@ -180,11 +180,28 @@ def ellipse_from_dxf(e, layer: str) -> Entity | None:
 
 
 def lwpolyline_from_dxf(e, layer: str) -> LWPolyline:
+    """Vértices, bulges e espessura. Antes só x e y entravam: todo arco da
+    polilinha virava a reta entre os vértices, e o ícone do keypad (Wi-Fi
+    de três arcos + onda de cinco) aparecia como um "X" rabiscado (relato
+    de 09/09/2026). Num OCS espelhado (extrusão Z < 0) o sentido do arco
+    inverte junto com a geometria — o bulge troca de sinal."""
+    crus = list(e.get_points("xyb"))
+    bulges = [float(p[2]) for p in crus]
     if has_ocs(e):
         points = [Point(float(v.x), float(v.y)) for v in e.vertices_in_wcs()]
+        if extrusion_of(e).z < 0:
+            bulges = [-b for b in bulges]
     else:
-        points = [Point(float(p[0]), float(p[1])) for p in e.get_points("xy")]
-    return LWPolyline(layer=layer, points=points, closed=bool(e.closed))
+        points = [Point(float(p[0]), float(p[1])) for p in crus]
+    if not any(abs(b) > 1e-9 for b in bulges):
+        bulges = []
+    largura = float(e.dxf.const_width or 0.0)
+    if largura <= 0 and e.has_width:
+        # Largura por vértice (início/fim): o modelo guarda uma só — a
+        # média das que existem, que para símbolo é sempre a mesma.
+        larguras = [float(p[2]) for p in e.get_points("xys") if p[2] > 0]
+        largura = sum(larguras) / len(larguras) if larguras else 0.0
+    return LWPolyline(layer=layer, points=points, closed=bool(e.closed), bulges=bulges, width=largura)
 
 
 def insert_placement(e) -> tuple[Point, float, float, float]:

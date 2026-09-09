@@ -8,6 +8,7 @@ import math
 import uuid
 
 from newsicad.core.entities import _new_id
+from newsicad.core.bulge import polyline_pieces
 from newsicad.core.entities import (
     Arc,
     BlockReference,
@@ -331,6 +332,9 @@ def mirror_entity(entity: Entity, p1: Point, p2: Point) -> Entity:
         mirrored.rotation = (2 * axis_angle - entity.rotation) % (2 * math.pi)
     elif isinstance(mirrored, (LWPolyline, Spline)):
         mirrored.points = [mirror_point(p, p1, p2) for p in entity.points]
+        if isinstance(mirrored, LWPolyline) and entity.bulges:
+            # Espelhar inverte o sentido de giro: o arco troca de lado.
+            mirrored.bulges = [-b for b in entity.bulges]
     elif isinstance(mirrored, BlockReference):
         # Espelhamento EXATO da instância (não mais a simplificação antiga
         # que só movia o ponto de inserção): pra qualquer eixo de espelho em
@@ -589,9 +593,13 @@ def point_entity_distance(p: Point, entity: Entity) -> float | None:
         return point_arc_distance(p, entity)
     if isinstance(entity, LWPolyline):
         best: float | None = None
-        for seg_a, seg_b in entity.segments():
-            d = point_segment_distance(p, seg_a, seg_b)
-            if best is None or d < best:
+        for peca in polyline_pieces(entity):
+            d = (
+                point_segment_distance(p, peca.start, peca.end)
+                if isinstance(peca, Line)
+                else point_arc_distance(p, peca)
+            )
+            if d is not None and (best is None or d < best):
                 best = d
         return best
     if isinstance(entity, PointEntity):
@@ -712,7 +720,7 @@ def as_intersectable_pieces(entity: Entity) -> list[Line | Circle | Arc]:
     interseção). Compartilhada por TRIM/EXTEND (modify_commands.py) e pelo
     OSNAP "Intersection" (ui/canvas.py) para não duplicar essa lógica."""
     if isinstance(entity, LWPolyline):
-        return [Line(start=a, end=b) for a, b in entity.segments()]
+        return polyline_pieces(entity)
     if isinstance(entity, (Line, Circle, Arc)):
         return [entity]
     return []

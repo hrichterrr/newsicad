@@ -179,6 +179,14 @@ class Ellipse(Entity):
 class LWPolyline(Entity):
     points: list[Point] = field(default_factory=list)
     closed: bool = False
+    #: Bulge por vértice (o arco do segmento que COMEÇA naquele vértice;
+    #: `tan(θ/4)`, positivo anti-horário). Lista vazia = tudo reta — é o
+    #: que toda polilinha desenhada no NewSIcad tem, e o que os arquivos de
+    #: cache antigos entendem. Ver core/bulge.py.
+    bulges: list[float] = field(default_factory=list)
+    #: Espessura constante da linha, em unidades do desenho (o `const_width`
+    #: do DXF). 0 = linha fina. Os símbolos da New SI usam 0,14 a 0,43.
+    width: float = 0.0
 
     def segments(self) -> list[tuple[Point, Point]]:
         pts = self.points

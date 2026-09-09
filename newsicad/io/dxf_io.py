@@ -882,9 +882,16 @@ def _to_dxf_entity(
         return
 
     if isinstance(entity, LWPolyline):
-        points = [(p.x, p.y) for p in entity.points]
-        polyline = msp.add_lwpolyline(points, dxfattribs=attribs)
+        if entity.bulges:
+            bulges = list(entity.bulges) + [0.0] * (len(entity.points) - len(entity.bulges))
+            points = [(p.x, p.y, b) for p, b in zip(entity.points, bulges)]
+            polyline = msp.add_lwpolyline(points, format="xyb", dxfattribs=attribs)
+        else:
+            points = [(p.x, p.y) for p in entity.points]
+            polyline = msp.add_lwpolyline(points, dxfattribs=attribs)
         polyline.closed = entity.closed
+        if entity.width > 0:
+            polyline.dxf.const_width = float(entity.width)
         return
 
     if isinstance(entity, Spline):

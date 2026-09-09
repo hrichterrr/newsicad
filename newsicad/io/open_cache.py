@@ -26,7 +26,7 @@ from typing import Any
 # grande na primeira abertura de cada versao, medicao de 2026-09-05).
 # "3": Document ganhou `text_height` (2026-09-06); uma entrada gravada antes
 # disso volta sem o atributo e quebraria quem o lê.
-CACHE_VERSION = "4"
+CACHE_VERSION = "5"
 MAX_ENTRIES = 20
 
 

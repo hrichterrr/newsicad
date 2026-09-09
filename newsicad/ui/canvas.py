@@ -43,7 +43,9 @@ from PySide6.QtWidgets import (
 
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.core.document import Document
+from newsicad.core.bulge import arc_midpoint, bulge_at, polyline_pieces
 from newsicad.core.entities import drain_dirty
+from newsicad.core.geometry_ops import point_arc_distance
 from newsicad.core.entities import (
     BYBLOCK,
     Arc,
@@ -117,6 +119,9 @@ _ENTITY_ID_DATA_KEY = 1
 #: isso virava um retângulo quase preto cobrindo o desenho — no PDF ele tem
 #: de ser pintado com a cor do papel (auditoria de 2026-09-07).
 _WIPEOUT_DATA_KEY = 2
+#: Espessura (unidades do desenho) da polilinha que o item desenha, para a
+#: caneta certa voltar depois de desselecionar e na exportação em PDF.
+_WIDTH_DATA_KEY = 3
 # Ordem de desenho: cada entidade do modelspace recebe zValue = (posição no
 # dict do Document) x este passo, então a cena empilha na mesma ordem em que
 # as entidades estão no documento (= ordem de criação, ou a ordem de desenho
@@ -203,6 +208,70 @@ def _entity_pen(color: str = ENTITY_COLOR) -> QPen:
     return pen
 
 
+#: Canetas com espessura real, por (cor, largura) — as polilinhas dos
+#: símbolos da New SI têm 0,14 a 0,43 unidades de espessura, e uma caneta
+#: cosmética de 1 px as deixava finas demais para ler no zoom.
+_WIDE_PEN_CACHE: dict[tuple[str, float], QPen] = {}
+
+
+def _pen_for(color: str, width: float = 0.0) -> QPen:
+    """Caneta da cor: cosmética (1 px em qualquer zoom) quando a espessura é
+    zero, ou com a espessura em unidades do desenho quando há uma."""
+    if not width or width <= 0:
+        return _entity_pen(color)
+    chave = (color, round(float(width), 6))
+    pen = _WIDE_PEN_CACHE.get(chave)
+    if pen is None:
+        pen = QPen(QColor(color))
+        pen.setWidthF(float(width))
+        pen.setCosmetic(False)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        _WIDE_PEN_CACHE[chave] = pen
+    return pen
+
+
+def _polyline_path(entity: LWPolyline) -> QPainterPath:
+    """Traçado de uma polilinha em coordenadas de cena, com os arcos.
+
+    Cada segmento com bulge vira um `arcTo` de verdade — antes era uma reta
+    entre os vértices, e o Wi-Fi do keypad saía como um "X" rabiscado
+    (relato de 09/09/2026). O Qt mede ângulos em graus, no sentido horário
+    da tela; como a cena tem o Y invertido, o arco anti-horário do CAD
+    vira uma varredura positiva aqui — mesma conta do Arc solto."""
+    path = QPainterPath()
+    pts = entity.points
+    if not pts:
+        return path
+    path.moveTo(QPointF(pts[0].x, -pts[0].y))
+    if not entity.bulges:
+        for pt in pts[1:]:
+            path.lineTo(QPointF(pt.x, -pt.y))
+        if entity.closed:
+            path.closeSubpath()
+        return path
+    for indice, peca in enumerate(polyline_pieces(entity)):
+        if isinstance(peca, Line):
+            path.lineTo(QPointF(peca.end.x, -peca.end.y))
+            continue
+        c, r = peca.center, peca.radius
+        rect = QRectF(c.x - r, -c.y - r, 2 * r, 2 * r)
+        varredura = math.degrees((peca.end_angle - peca.start_angle) % (2 * math.pi))
+        if bulge_at(entity, indice) > 0:
+            path.arcTo(rect, math.degrees(peca.start_angle), varredura)
+        else:
+            # O Arc é sempre anti-horário de start a end; com bulge negativo
+            # o segmento é percorrido ao contrário — a caneta está no
+            # end_point do Arc e anda no sentido horário até o start_point.
+            # Começar do start_angle aqui fazia o Qt ligar uma reta até a
+            # outra ponta e varrer o complemento: a onda do keypad virava
+            # dois círculos quase inteiros (render de 09/09/2026).
+            path.arcTo(rect, math.degrees(peca.end_angle), -varredura)
+    if entity.closed:
+        path.closeSubpath()
+    return path
+
+
 def _plain_entity_path(entity: Entity) -> QPainterPath | None:
     """Traçado "só caneta" de uma entidade geométrica simples, com a MESMA
     geometria que `CanvasView._create_item` produz para ela — usado na fusão
@@ -218,16 +287,12 @@ def _plain_entity_path(entity: Entity) -> QPainterPath | None:
         path.lineTo(QPointF(end.x, -end.y))
         return path
     if isinstance(entity, LWPolyline):
-        path = QPainterPath()
-        pts = entity.points
-        if pts:
-            first = pts[0]
-            path.moveTo(QPointF(first.x, -first.y))
-            for p in pts[1:]:
-                path.lineTo(QPointF(p.x, -p.y))
-            if entity.closed:
-                path.closeSubpath()
-        return path
+        if entity.width > 0:
+            # Com espessura a caneta é outra: não pode ser fundida no traçado
+            # fino do bloco — cai no caminho de item próprio (ver
+            # _create_block_reference_item).
+            return None
+        return _polyline_path(entity)
     if isinstance(entity, Circle):
         if entity.inner_radius > 1e-9:
             return None
@@ -1220,7 +1285,7 @@ class CanvasView(QGraphicsView):
                 self._restore_base_pen(child)
         elif hasattr(item, "setPen"):
             color = item.data(_BASE_COLOR_DATA_KEY)
-            item.setPen(_entity_pen(color if color else ENTITY_COLOR))
+            item.setPen(_pen_for(color if color else ENTITY_COLOR, item.data(_WIDTH_DATA_KEY) or 0.0))
 
     def _create_item(self, entity: Entity, color: str | None = None) -> QGraphicsItem:
         """QGraphicsItem de uma entidade. `color` = cor efetiva já resolvida
@@ -1288,16 +1353,10 @@ class CanvasView(QGraphicsView):
             return item
 
         if isinstance(entity, LWPolyline):
-            path = QPainterPath()
-            pts = [cad_to_scene(p) for p in entity.points]
-            if pts:
-                path.moveTo(pts[0])
-                for pt in pts[1:]:
-                    path.lineTo(pt)
-                if entity.closed:
-                    path.closeSubpath()
-            item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen(color))
+            item = QGraphicsPathItem(_polyline_path(entity))
+            item.setPen(_pen_for(color, entity.width))
+            if entity.width > 0:
+                item.setData(_WIDTH_DATA_KEY, float(entity.width))
             item.setData(_BASE_COLOR_DATA_KEY, color)
             return item
 
@@ -1814,9 +1873,13 @@ class CanvasView(QGraphicsView):
             return abs(normalized - 1.0) * min(a, b)
         if isinstance(entity, LWPolyline):
             best: float | None = None
-            for seg_a, seg_b in entity.segments():
-                d = _point_segment_distance(p, seg_a, seg_b)
-                if best is None or d < best:
+            for peca in polyline_pieces(entity):
+                d = (
+                    _point_segment_distance(p, peca.start, peca.end)
+                    if isinstance(peca, Line)
+                    else point_arc_distance(p, peca)
+                )
+                if d is not None and (best is None or d < best):
                     best = d
             return best
         if isinstance(entity, Spline):
@@ -1938,6 +2001,8 @@ class CanvasView(QGraphicsView):
             r = max(entity.radius_major, entity.radius_minor)
             return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
         if isinstance(entity, LWPolyline) and entity.points:
+            if entity.bulges:
+                return _polyline_path(entity).boundingRect()
             pts = [cad_to_scene(p) for p in entity.points]
             xs = [pt.x() for pt in pts]
             ys = [pt.y() for pt in pts]
@@ -2380,7 +2445,7 @@ class CanvasView(QGraphicsView):
             if base:
                 impressa = self._print_color(base)
                 if impressa != base:
-                    nova_caneta = _entity_pen(impressa)
+                    nova_caneta = _pen_for(impressa, item.data(_WIDTH_DATA_KEY) or 0.0)
             if item.data(_WIPEOUT_DATA_KEY):
                 novo_pincel = QBrush(QColor(PAPER_COLOR))
             elif pincel is not None and base and pincel().style() != Qt.BrushStyle.NoBrush:
@@ -2564,10 +2629,17 @@ class CanvasView(QGraphicsView):
         elif isinstance(entity, (Circle, Ellipse)):
             pts.append((entity.center, "center"))
         elif isinstance(entity, LWPolyline):
-            for a, b in entity.segments():
-                pts.append((a, "endpoint"))
-                pts.append((b, "endpoint"))
-                pts.append((Point((a.x + b.x) / 2, (a.y + b.y) / 2), "midpoint"))
+            for peca in polyline_pieces(entity):
+                if isinstance(peca, Line):
+                    a, b = peca.start, peca.end
+                    pts.append((a, "endpoint"))
+                    pts.append((b, "endpoint"))
+                    pts.append((Point((a.x + b.x) / 2, (a.y + b.y) / 2), "midpoint"))
+                else:
+                    pts.append((peca.start_point(), "endpoint"))
+                    pts.append((peca.end_point(), "endpoint"))
+                    pts.append((arc_midpoint(peca), "midpoint"))
+                    pts.append((peca.center, "center"))
         elif isinstance(entity, Spline):
             # Gruda nos fit points (não em pontos da curva suave em si —
             # simplificação: são os únicos pontos "nomeáveis" do modelo).

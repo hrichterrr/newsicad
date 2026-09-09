@@ -29,6 +29,7 @@ from newsicad.core.entities import (
     Text,
     _new_id,
 )
+from newsicad.core.bulge import polyline_pieces
 from newsicad.core.geometry_ops import (
     as_intersectable_pieces,
     chamfer_lines,
@@ -825,10 +826,10 @@ def explode_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
     exploded_any = False
     for entity in selected:
         if isinstance(entity, LWPolyline):
-            for a, b in entity.segments():
-                ctx.document.add_entity(Line(
-                    start=Point(a.x, a.y), end=Point(b.x, b.y), layer=entity.layer, color=entity.color,
-                ))
+            # Cada peça vira entidade própria: reta vira Line, arco (bulge)
+            # vira Arc — antes o arco era achatado numa reta ao explodir.
+            for peca in polyline_pieces(entity):
+                ctx.document.add_entity(clone_entity(peca))
             ctx.document.remove_entity(entity.id)
             exploded_any = True
 
