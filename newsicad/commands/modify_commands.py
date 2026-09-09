@@ -829,7 +829,15 @@ def explode_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
             # Cada peça vira entidade própria: reta vira Line, arco (bulge)
             # vira Arc — antes o arco era achatado numa reta ao explodir.
             for peca in polyline_pieces(entity):
-                ctx.document.add_entity(clone_entity(peca))
+                if isinstance(peca, Line):
+                    nova = Line(start=peca.start, end=peca.end, layer=entity.layer, color=entity.color)
+                else:
+                    nova = Arc(
+                        center=peca.center, radius=peca.radius,
+                        start_angle=peca.start_angle, end_angle=peca.end_angle,
+                        layer=entity.layer, color=entity.color,
+                    )
+                ctx.document.add_entity(nova)
             ctx.document.remove_entity(entity.id)
             exploded_any = True
 

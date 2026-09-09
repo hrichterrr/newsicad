@@ -593,6 +593,12 @@ def point_entity_distance(p: Point, entity: Entity) -> float | None:
         return point_arc_distance(p, entity)
     if isinstance(entity, LWPolyline):
         best: float | None = None
+        if not entity.bulges:
+            for seg_a, seg_b in entity.segments():
+                d = point_segment_distance(p, seg_a, seg_b)
+                if best is None or d < best:
+                    best = d
+            return best
         for peca in polyline_pieces(entity):
             d = (
                 point_segment_distance(p, peca.start, peca.end)

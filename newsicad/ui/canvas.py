@@ -1873,6 +1873,12 @@ class CanvasView(QGraphicsView):
             return abs(normalized - 1.0) * min(a, b)
         if isinstance(entity, LWPolyline):
             best: float | None = None
+            if not entity.bulges:
+                for seg_a, seg_b in entity.segments():
+                    d = _point_segment_distance(p, seg_a, seg_b)
+                    if best is None or d < best:
+                        best = d
+                return best
             for peca in polyline_pieces(entity):
                 d = (
                     _point_segment_distance(p, peca.start, peca.end)
@@ -2628,6 +2634,11 @@ class CanvasView(QGraphicsView):
             pts.append((entity.center, "center"))
         elif isinstance(entity, (Circle, Ellipse)):
             pts.append((entity.center, "center"))
+        elif isinstance(entity, LWPolyline) and not entity.bulges:
+            for a, b in entity.segments():
+                pts.append((a, "endpoint"))
+                pts.append((b, "endpoint"))
+                pts.append((Point((a.x + b.x) / 2, (a.y + b.y) / 2), "midpoint"))
         elif isinstance(entity, LWPolyline):
             for peca in polyline_pieces(entity):
                 if isinstance(peca, Line):

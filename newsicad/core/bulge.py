@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import math
 
+import newsicad.core.entities as _entities
 from newsicad.core.entities import Arc, Line, LWPolyline, Point
 
 #: Abaixo disto o bulge é tratado como reta — evita raio astronômico.
@@ -70,15 +71,25 @@ def polyline_pieces(poly: LWPolyline) -> list[Line | Arc]:
     if poly.closed and len(pts) > 2:
         pares.append((len(pts) - 1, pts[-1], pts[0]))
     pecas: list[Line | Arc] = []
-    for i, a, b in pares:
-        bulge = bulge_at(poly, i)
-        if abs(bulge) < _BULGE_ZERO or a.distance_to(b) < 1e-12:
-            pecas.append(Line(start=a, end=b, layer=poly.layer, color=poly.color))
-        else:
-            arco = bulge_to_arc(a, b, bulge)
-            arco.layer = poly.layer
-            arco.color = poly.color
-            pecas.append(arco)
+    # Peça temporária não é entidade do desenho: construí-la passando pelo
+    # `Entity.__setattr__` a registrava como "alterada" (e o canvas depois
+    # percorria esse registro). O hover sobre a Casa Pau Brasil foi de
+    # 0,004 s para 1,3 s por 40 movimentos só com isso (medição de
+    # 09/09/2026). O registro fica suspenso enquanto as peças são montadas.
+    rastreando = _entities._TRACKING
+    _entities._TRACKING = False
+    try:
+        for i, a, b in pares:
+            bulge = bulge_at(poly, i)
+            if abs(bulge) < _BULGE_ZERO or a.distance_to(b) < 1e-12:
+                pecas.append(Line(start=a, end=b, layer=poly.layer, color=poly.color))
+            else:
+                arco = bulge_to_arc(a, b, bulge)
+                arco.layer = poly.layer
+                arco.color = poly.color
+                pecas.append(arco)
+    finally:
+        _entities._TRACKING = rastreando
     return pecas
 
 
