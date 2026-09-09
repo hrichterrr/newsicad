@@ -141,6 +141,22 @@ class UndoStack:
             old = current.get(key)
             if old is not None and old == entity:
                 restored[key] = old
+                continue
+            # AVISA O CANVAS. `pickle.loads` monta o objeto direto no
+            # __dict__, sem passar pelo __setattr__ — então a entidade
+            # restaurada NÃO entrava no registro de alterados
+            # (`entities.drain_dirty()`), e como o id dela já tinha item na
+            # cena, ela também não contava como "nova". A passada incremental
+            # não via nada para fazer: desfazer um MOVE devolvia a entidade
+            # ao lugar certo no documento e deixava o DESENHO na posição
+            # errada. Na tela parecia que o Ctrl+Z não fez nada, e o objeto
+            # ficava impossível de selecionar — o clique procura onde o
+            # documento diz que ele está, e ali não havia item nenhum
+            # (relatado pelo Hamilton em 09/09/2026 movendo uma caixa de som
+            # para fora da planta; vale para todo undo/redo de MOVE, ROTATE,
+            # SCALE, STRETCH e mudança de propriedade — o de apagar e o de
+            # criar sempre funcionaram, porque ali os ids somem ou aparecem).
+            entity.touch()
         self.document.entities = restored
         if structure is not None:
             self._restore_structure(structure)
