@@ -61,6 +61,7 @@ from newsicad.ui.command_line import CommandLineWidget
 from newsicad.ui.document_session import DocumentSession
 from newsicad.ui.icon_utils import FAMILY_NEUTRAL, command_icon, svg_icon, svg_toggle_icon
 from newsicad.ui.layer_panel import LayerPanel
+from newsicad.ui.layout_viewer_dialog import LayoutViewerDialog
 from newsicad.ui.menu_bar import MENU_BAR_STYLE, build_menu_bar
 from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
@@ -1405,6 +1406,12 @@ class MainWindow(QMainWindow):
         document.text_styles = dict(loaded.text_styles)
         document.current_text_style = loaded.current_text_style
         document.text_height = getattr(loaded, "text_height", None)
+        # Pranchas (paper space) lidas por load_dxf/dwg_to_document — ver
+        # "Ver pranchas..." no menu View (LayoutViewerDialog). Sem isto o
+        # conteúdo lido em `loaded.layouts` era jogado fora aqui, e um Save
+        # subsequente (que grava a partir de `document`, não de `loaded`)
+        # apagava a prancha do arquivo mesmo sem o usuário ter mexido nela.
+        document.layouts = {name: dict(entities) for name, entities in loaded.layouts.items()}
         session.current_path = path
         # Montar a cena precisa da thread da interface (itens Qt); em lotes,
         # com o diálogo de progresso, a janela segue viva (10 s numa planta
@@ -1441,18 +1448,30 @@ class MainWindow(QMainWindow):
             session.interpreter.log.append(note)
 
         if not document.all_entities():
-            # Sem isso, um arquivo que "abriu" mas ficou vazio (ex.: .dwg
-            # complexo onde só a recuperação tolerante a erros funcionou, e
-            # mesmo essa não conseguiu colocar nenhuma entidade no desenho —
-            # às vezes sobram só definições de bloco órfãs, sem nenhuma
-            # referência que as posicione) só mostraria uma tela em branco,
-            # sem indicar que algo deu errado — o usuário pensaria que o
-            # desenho original é mesmo vazio.
-            session.interpreter.log.append(
-                "Aviso: nenhuma entidade foi carregada deste arquivo — o desenho está vazio. "
-                "Se o arquivo original tinha conteúdo, a conversão/leitura pode ter falhado "
-                "em reconstruir a geometria (comum em .dwg complexos ou danificados)."
-            )
+            if document.layouts:
+                # Model vazio mas há conteúdo em paper space (achado real do
+                # grupo de feedback, 09/09/2026 — plantas FABIO E JULIANA e
+                # PATRICIA E FABIO: o projeto inteiro estava desenhado nas
+                # pranchas, não no Model). Não é o aviso de "arquivo vazio"
+                # de verdade — só orienta a olhar em View > Ver pranchas...
+                nomes = ", ".join(document.layouts.keys())
+                session.interpreter.log.append(
+                    "Aviso: o Model space deste arquivo está vazio, mas há conteúdo em "
+                    f"paper space — use View > Ver pranchas... para abrir: {nomes}."
+                )
+            else:
+                # Sem isso, um arquivo que "abriu" mas ficou vazio (ex.: .dwg
+                # complexo onde só a recuperação tolerante a erros funcionou, e
+                # mesmo essa não conseguiu colocar nenhuma entidade no desenho —
+                # às vezes sobram só definições de bloco órfãs, sem nenhuma
+                # referência que as posicione) só mostraria uma tela em branco,
+                # sem indicar que algo deu errado — o usuário pensaria que o
+                # desenho original é mesmo vazio.
+                session.interpreter.log.append(
+                    "Aviso: nenhuma entidade foi carregada deste arquivo — o desenho está vazio. "
+                    "Se o arquivo original tinha conteúdo, a conversão/leitura pode ter falhado "
+                    "em reconstruir a geometria (comum em .dwg complexos ou danificados)."
+                )
 
         session.mark_saved()
 
@@ -1609,6 +1628,30 @@ class MainWindow(QMainWindow):
         text.setPlainText("\n".join(self.interpreter.log))
         layout.addWidget(text)
         dialog.exec()
+
+    def _show_layouts_dialog(self) -> None:
+        """View > Ver pranchas... — abre uma prancha (paper space) do
+        arquivo atual no LayoutViewerDialog (ver newsicad/ui/
+        layout_viewer_dialog.py). Sem isto, um arquivo com conteúdo em
+        paper space (selo, legenda, tabelas — ou o projeto inteiro, achado
+        real do grupo de feedback, 09/09/2026) ficava sem NENHUMA forma de
+        ser visto/editado depois de carregado por `load_dxf`."""
+        layouts = self.document.layouts
+        if not layouts:
+            QMessageBox.information(
+                self, "Ver pranchas", "Este arquivo não tem conteúdo em paper space (pranchas)."
+            )
+            return
+        names = list(layouts.keys())
+        if len(names) == 1:
+            name = names[0]
+        else:
+            name, ok = QInputDialog.getItem(self, "Ver pranchas", "Prancha:", names, editable=False)
+            if not ok:
+                return
+        dialog = LayoutViewerDialog(self.document, name, parent=self)
+        dialog.exec()
+        self._refresh_tab_labels()
 
     # ------------------------------------------------------------------ #
     # ligação canvas <-> interpretador de comandos <-> linha de comando

@@ -83,6 +83,17 @@ class Document:
         self.current_layer: str = "0"
         self.entities: dict[str, Entity] = {}
         self.units: str = "mm"
+        # Pranchas (paper space): nome do layout -> {handle: Entity}, no
+        # mesmo formato de `entities` (que é sempre o Model space). Camadas,
+        # definições de bloco e estilos são do ARQUIVO inteiro (compartilhados
+        # entre Model e toda prancha, igual no AutoCAD de verdade) — só a
+        # geometria propriamente dita é por espaço. O NewSIcad ainda não
+        # renderiza o recorte de um VIEWPORT sobre o Model (ver dxf_io.py);
+        # o que cai aqui é o resto do conteúdo desenhado direto na prancha
+        # (selo, legenda, tabelas — e, em arquivos que fogem do padrão, o
+        # projeto inteiro: achado real do grupo de feedback do NewSicad,
+        # 09/09/2026, plantas FABIO E JULIANA e PATRICIA E FABIO).
+        self.layouts: dict[str, dict[str, Entity]] = {}
         # Definições de bloco: nome -> lista de entidades "template" com
         # coordenadas relativas ao ponto base do bloco (ver BlockReference
         # em newsicad/core/entities.py). Não são entidades do desenho —

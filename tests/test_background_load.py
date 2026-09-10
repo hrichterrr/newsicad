@@ -142,3 +142,55 @@ def test_abrir_arquivo_preserva_as_configuracoes_do_desenho(tmp_path):
     assert "Prancha" in sessao.document.text_styles
     assert sessao.document.current_text_style == "Prancha"
     assert sessao.document.text_height == 0.03
+
+
+def test_abrir_arquivo_copia_pranchas_de_paper_space_para_a_sessao():
+    """09/09/2026: `load_dxf`/`dwg_to_document` passaram a ler pranchas de
+    paper space em `loaded.layouts` — sem copiar isso pra dentro da sessão
+    aqui, ficava tudo perdido de novo assim que o Document temporário
+    `loaded` saísse de escopo (achado do grupo de feedback do NewSicad)."""
+    from pathlib import Path
+
+    from newsicad.core.document import Document
+    from newsicad.core.entities import Circle, Line, Point
+    from newsicad.ui.main_window import MainWindow
+
+    _app()
+    win = MainWindow()
+
+    carregado = Document()
+    carregado.add_entity(Line(start=Point(0, 0), end=Point(1, 1)))
+    carregado.layouts["01 - Planta"] = {"a": Circle(layer="0", center=Point(5, 5), radius=2)}
+
+    sessao = win._make_untitled_session()
+    win._populate_session_from_loaded(sessao, carregado, Path("planta.dxf"), 0)
+
+    assert "01 - Planta" in sessao.document.layouts
+    assert len(sessao.document.layouts["01 - Planta"]) == 1
+
+
+def test_abrir_arquivo_com_model_vazio_e_pranchas_avisa_sem_dizer_que_esta_vazio():
+    """Um arquivo onde o Model space vem quase vazio mas o conteúdo de
+    verdade está em paper space (achado real: plantas FABIO E JULIANA e
+    PATRICIA E FABIO, grupo de feedback 09/09/2026) não pode cair no aviso
+    genérico de "desenho está vazio" — isso mandaria o usuário pensar que
+    o arquivo é mesmo inútil, quando na verdade só falta abrir a prancha."""
+    from pathlib import Path
+
+    from newsicad.core.document import Document
+    from newsicad.core.entities import Circle, Point
+    from newsicad.ui.main_window import MainWindow
+
+    _app()
+    win = MainWindow()
+
+    carregado = Document()  # Model space vazio de propósito
+    carregado.layouts["01 - Planta"] = {"a": Circle(layer="0", center=Point(5, 5), radius=2)}
+
+    sessao = win._make_untitled_session()
+    win._populate_session_from_loaded(sessao, carregado, Path("planta.dxf"), 0)
+
+    log = " ".join(sessao.interpreter.log)
+    assert "Ver pranchas" in log
+    assert "01 - Planta" in log
+    assert "desenho está vazio" not in log

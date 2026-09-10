@@ -328,6 +328,11 @@ def _build_view_menu(menu_bar: QMenuBar, window: "MainWindow") -> None:
     menu.addAction(rename_layer_action)
 
     menu.addSeparator()
+    layouts_action = QAction("Ver pranchas (Paper Space)...", window)
+    layouts_action.triggered.connect(window._show_layouts_dialog)
+    menu.addAction(layouts_action)
+
+    menu.addSeparator()
     _add_command_action(menu, "Viewport Configuration...", "VIEWPORTS", window)
 
 

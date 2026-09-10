@@ -26,7 +26,13 @@ from typing import Any
 # grande na primeira abertura de cada versao, medicao de 2026-09-05).
 # "3": Document ganhou `text_height` (2026-09-06); uma entrada gravada antes
 # disso volta sem o atributo e quebraria quem o lê.
-CACHE_VERSION = "5"
+# "6": Document ganhou `layouts` (pranchas de paper space, 09/09/2026) — mesmo
+# risco: uma entrada antiga voltaria sem o atributo e quebraria
+# `_populate_session_from_loaded`/`_show_layouts_dialog`. Bônus: a mesma leva
+# corrigiu o bug dos blocos dinâmicos empilhados (ver dxf_io._is_invisible) —
+# sem este bump, quem já tinha aberto um arquivo problemático continuaria
+# vendo os ícones "explodidos" do cache até o arquivo mudar de novo.
+CACHE_VERSION = "6"
 MAX_ENTRIES = 20
 
 

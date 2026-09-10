@@ -45,7 +45,11 @@ def test_skipped_count_pickle_keeps_attributes():
     assert int(s) == 3 and s.by_type == {"SOLID": 3} and s.notes == ["n1"]
 
 
-def test_load_dxf_notes_layouts_and_xrefs(tmp_path):
+def test_load_dxf_notes_xrefs_and_loads_layout_without_viewport(tmp_path):
+    """09/09/2026: pranchas (paper space) passaram a ser CARREGADAS em
+    `document.layouts`, não só avisadas — uma prancha sem VIEWPORT (como
+    esta) não gera nota nenhuma, só o conteúdo dela em `doc.layouts`. O
+    aviso de XREF continua igual (isso sim não é carregado)."""
     dxf = ezdxf.new("R2000")
     dxf.modelspace().add_line((0, 0), (1, 0))
     layout = dxf.layouts.new("PRANCHA 01")
@@ -55,10 +59,30 @@ def test_load_dxf_notes_layouts_and_xrefs(tmp_path):
     path = tmp_path / "n.dxf"
     dxf.saveas(path)
 
-    _doc, skipped = load_dxf(path)
+    doc, skipped = load_dxf(path)
     notes = " ".join(skipped.notes)
-    assert "PRANCHA 01 (2)" in notes
     assert "BASE_ARQ" in notes and "XREF" in notes
+    assert "PRANCHA 01" in doc.layouts
+    assert len(doc.layouts["PRANCHA 01"]) == 2
+
+
+def test_load_dxf_notes_layout_with_viewport_not_drawn(tmp_path):
+    """Uma prancha COM viewport (o caso comum de verdade — recorte/escala
+    do Model space) ainda gera o aviso: o VIEWPORT em si não é desenhado,
+    só o resto do conteúdo da prancha (que continua sendo carregado)."""
+    dxf = ezdxf.new("R2000")
+    dxf.modelspace().add_line((0, 0), (1, 0))
+    layout = dxf.layouts.new("PRANCHA 01")
+    layout.add_text("selo")
+    layout.add_viewport(center=(0, 0), size=(10, 10), view_center_point=(0, 0), view_height=10)
+    path = tmp_path / "n.dxf"
+    dxf.saveas(path)
+
+    doc, skipped = load_dxf(path)
+    notes = " ".join(skipped.notes)
+    assert "PRANCHA 01" in notes and "viewport" in notes.lower()
+    assert "PRANCHA 01" in doc.layouts
+    assert len(doc.layouts["PRANCHA 01"]) == 1
 
 
 def test_load_dxf_without_layout_content_has_no_notes(tmp_path):

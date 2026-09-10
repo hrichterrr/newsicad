@@ -192,6 +192,60 @@ def test_round_trip_preserves_block_definition_and_reference():
     assert ref_b.rotation == pytest.approx(0.0)
 
 
+def test_load_dxf_skips_invisible_entities_dynamic_block_state():
+    """Um BLOCO DINÂMICO com parâmetro de Visibilidade (ex.: um símbolo com
+    opções de altura de montagem Baixo/Médio/Alto) fica gravado em DXF puro
+    como vários INSERTs aninhados na mesma definição, todos na origem — só o
+    INSERT do estado ativo quando o arquivo foi salvo tem invisible=0
+    (ausente); os outros ganham group code 60 = 1. Sem filtrar isso, TODAS
+    as variantes eram desenhadas empilhadas no mesmo ponto: o símbolo
+    "explodido"/gigante reportado pelo Michael no grupo de feedback do
+    NewSicad (planta PATRICIA E FABIO, 09/09/2026) — 202 dos 355 blocos do
+    arquivo real tinham essa forma. O group code 60 é genérico do
+    AcDbEntity (qualquer entidade pode estar invisível, não só INSERT de
+    bloco dinâmico), então o teste cobre os dois casos: dentro de uma
+    definição de bloco e solto no modelspace."""
+    import ezdxf
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "dynamic_block_visibility.dxf"
+        doc = ezdxf.new(setup=False)
+
+        for suffix in ("A", "B", "C"):
+            sub = doc.blocks.new(name=f"DYN_SYMBOL-{suffix}")
+            sub.add_circle((0, 0), radius=1, dxfattribs={"layer": "0"})
+
+        # Definição "container" do bloco dinâmico: 3 variantes empilhadas na
+        # origem, só "-B" fica visível (as outras têm invisible=1) — imita
+        # exatamente o que o dwg2dxf produz a partir de um .dwg real.
+        parent = doc.blocks.new(name="DYN_SYMBOL")
+        parent.add_blockref("DYN_SYMBOL-A", (0, 0), dxfattribs={"layer": "0", "invisible": 1})
+        parent.add_blockref("DYN_SYMBOL-B", (0, 0), dxfattribs={"layer": "0"})
+        parent.add_blockref("DYN_SYMBOL-C", (0, 0), dxfattribs={"layer": "0", "invisible": 1})
+
+        msp = doc.modelspace()
+        msp.add_blockref("DYN_SYMBOL", (5, 5), dxfattribs={"layer": "0"})
+        # Entidade solta invisível no modelspace (fora de qualquer bloco) —
+        # o mesmo group code 60 também deve ser respeitado aqui.
+        msp.add_line((0, 0), (1, 1), dxfattribs={"layer": "0", "invisible": 1})
+        msp.add_line((2, 2), (3, 3), dxfattribs={"layer": "0"})
+        doc.saveas(path)
+
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+
+    def_entities = loaded.block_definitions["DYN_SYMBOL"]
+    assert len(def_entities) == 1
+    only_ref = def_entities[0]
+    assert isinstance(only_ref, BlockReference)
+    assert only_ref.block_name == "DYN_SYMBOL-B"
+
+    lines = [e for e in loaded.all_entities() if isinstance(e, Line)]
+    assert len(lines) == 1
+    assert (lines[0].start.x, lines[0].start.y) == (2, 2)
+
+
 # ---------------------------------------------------------------------- #
 # round-trip: Text, Dimension (todos os `kind`), Hatch
 # ---------------------------------------------------------------------- #
@@ -374,3 +428,85 @@ def test_load_dxf_skipped_count_has_per_type_breakdown():
     assert f"{skipped} entidade(s)" == "2 entidade(s)"
     assert skipped.by_type == {"3DFACE": 2}
     assert len(loaded.all_entities()) == 1
+
+
+# ---------------------------------------------------------------------- #
+# paper space (layouts): achado do grupo de feedback do NewSicad,
+# 09/09/2026 — arquivos onde o Model space vem quase vazio e o desenho de
+# verdade está todo em pranchas de paper space (plantas FABIO E JULIANA e
+# PATRICIA E FABIO). `document.layouts[nome]` guarda a geometria de cada
+# prancha à parte do Model (`document.entities`), com round-trip completo.
+# ---------------------------------------------------------------------- #
+def test_load_dxf_reads_paper_space_layout_entities():
+    import ezdxf
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "paper_space.dxf"
+        doc = ezdxf.new(setup=False)
+        doc.modelspace().add_line((0, 0), (1, 1), dxfattribs={"layer": "0"})
+
+        layout = doc.layouts.new("01 - Planta")
+        layout.add_line((10, 10), (20, 10), dxfattribs={"layer": "0"})
+        layout.add_circle((15, 15), radius=2, dxfattribs={"layer": "0"})
+        # VIEWPORT: a "janela" pro Model space — ainda não é conteúdo que o
+        # NewSIcad desenha, então não deve aparecer nem ser contado como
+        # entidade ignorada.
+        layout.add_viewport(center=(0, 0), size=(10, 10), view_center_point=(0, 0), view_height=10)
+
+        doc.saveas(path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    assert len(loaded.all_entities()) == 1  # só a LINE do Model
+    assert "01 - Planta" in loaded.layouts
+    layout_entities = list(loaded.layouts["01 - Planta"].values())
+    assert len(layout_entities) == 2
+    assert {type(e).__name__ for e in layout_entities} == {"Line", "Circle"}
+
+
+def test_round_trip_preserves_paper_space_layout():
+    """Save de um Document com `layouts` preenchido escreve as pranchas de
+    volta no .dxf — sem isso, abrir um arquivo com conteúdo em paper space
+    e dar Save apagava esse conteúdo silenciosamente (nunca era escrito,
+    já que `save_dxf` sempre partia de um `ezdxf.new()` do zero)."""
+    original = Document()
+    original.add_entity(Line(layer="0", start=Point(0, 0), end=Point(1, 1)))
+    original.layouts["01 - Planta"] = {
+        "a": Circle(layer="0", center=Point(5, 5), radius=3),
+    }
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "paper_space_round_trip.dxf"
+        save_dxf(original, path)
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    assert len(loaded.all_entities()) == 1
+    assert "01 - Planta" in loaded.layouts
+    layout_entities = list(loaded.layouts["01 - Planta"].values())
+    assert len(layout_entities) == 1
+    circle = layout_entities[0]
+    assert isinstance(circle, Circle)
+    assert circle.center.x == pytest.approx(5)
+    assert circle.radius == pytest.approx(3)
+
+
+def test_load_dxf_ignores_model_named_layout_and_empty_layouts():
+    """"Model" nunca vira uma entrada em `document.layouts` (é o Model
+    space de verdade, já coberto por `document.entities`), e uma prancha
+    sem nenhuma entidade de conteúdo (só título/config, sem geometria) não
+    polui `document.layouts` com uma entrada vazia."""
+    import ezdxf
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "empty_layout.dxf"
+        doc = ezdxf.new(setup=False)
+        doc.modelspace().add_line((0, 0), (1, 1), dxfattribs={"layer": "0"})
+        doc.layouts.new("Layout vazio")  # sem nenhuma entidade
+        doc.saveas(path)
+
+        loaded, skipped = load_dxf(path)
+
+    assert skipped == 0
+    assert "Model" not in loaded.layouts
+    assert loaded.layouts == {}

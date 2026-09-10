@@ -126,21 +126,41 @@ que é uma versão reduzida, propositalmente, dentro do orçamento deste marco:
   em vez de quebrar.
 - **`VIEWPORTS`/`VM` (Viewport Configuration)**: a decisão original deste
   projeto era não implementar (um viewport de verdade vive numa layout de
-  papel/paper space, conceito que o NewSIcad não tem, e uma versão
-  simplificada pareceria um gadget de zoom duplicado sem paralelo real no
-  AutoCAD). Essa decisão foi **revertida** — hoje `VIEWPORTS`/`VM` (menu
-  View, `MainWindow._show_vports_dialog`) divide a aba atual em 1/2/4
-  viewports lado a lado (Single/Two: Vertical/Two: Horizontal/Four: Equal),
-  cada uma com zoom/pan/grid/snap próprios — a "Viewport Configuration"
-  clássica de espaço de modelo do AutoCAD (tiled viewports), não os
-  viewports flutuantes de paper space (que o NewSIcad continua sem ter).
-  Simplificação documentada: só a PRIMEIRA viewport (esquerda/topo) recebe
-  clique/comando — as demais são só de referência visual, sincronizadas por
-  timer (não em tempo real estrito).
-- **`PLOT`/`PUBLISH` não distinguem folhas**: como não há layouts/paper
-  space, os dois comandos fazem exatamente a mesma coisa (uma única página
-  PDF com o desenho inteiro) — no AutoCAD real, PUBLISH lida com múltiplas
-  folhas/layouts, o que não existe aqui.
+  papel/paper space, conceito que o NewSIcad não tinha até 09/09/2026 — ver
+  bullet "Pranchas (paper space)" abaixo —, e uma versão simplificada
+  pareceria um gadget de zoom duplicado sem paralelo real no AutoCAD). Essa
+  decisão foi **revertida** — hoje `VIEWPORTS`/`VM` (menu View,
+  `MainWindow._show_vports_dialog`) divide a aba atual em 1/2/4 viewports
+  lado a lado (Single/Two: Vertical/Two: Horizontal/Four: Equal), cada uma
+  com zoom/pan/grid/snap próprios — a "Viewport Configuration" clássica de
+  espaço de modelo do AutoCAD (tiled viewports), não os viewports
+  flutuantes de paper space (ver limitação logo abaixo — o NewSIcad ainda
+  não desenha o RECORTE de um viewport de paper space sobre o Model, só o
+  resto do conteúdo da prancha). Simplificação documentada: só a PRIMEIRA
+  viewport (esquerda/topo) recebe clique/comando — as demais são só de
+  referência visual, sincronizadas por timer (não em tempo real estrito).
+- **Pranchas (paper space)** — `View > Ver pranchas...`
+  (`newsicad/ui/layout_viewer_dialog.py`): achado do grupo de feedback do
+  NewSicad em 09/09/2026 — dois arquivos reais (FABIO E JULIANA e PATRICIA
+  E FABIO) tinham o Model space quase vazio, com o desenho de verdade todo
+  desenhado direto nas pranchas de paper space, e o NewSIcad simplesmente
+  não mostrava nada. `load_dxf`/`dwg_to_document` agora leem cada layout
+  (exceto "Model") em `Document.layouts[nome]`, com round-trip completo no
+  `.dxf` (Save grava de volta no layout de mesmo nome). Camadas, blocos e
+  estilos são do ARQUIVO INTEIRO — compartilhados com o Model, não
+  duplicados por prancha. Mesmo padrão do Block Editor: um mini-canvas à
+  parte (Document/CommandInterpreter/CanvasView/CommandLineWidget
+  independentes), sem undo/redo próprio (Cancel descarta, Save grava).
+  Limitação documentada: **VIEWPORT não é desenhado** — a "janela" que uma
+  prancha normalmente tem pra mostrar um recorte/escala do Model space é
+  ignorada (nem clipping nem escala), só o resto do conteúdo desenhado
+  direto na prancha (selo, legenda, tabelas — ou, nesses dois arquivos, o
+  projeto inteiro) aparece. `PLOT`/`PUBLISH` também não enxergam pranchas
+  ainda — ver bullet abaixo.
+- **`PLOT`/`PUBLISH` não distinguem folhas**: os dois comandos exportam só
+  o Model space numa única página PDF — no AutoCAD real, PUBLISH lida com
+  múltiplas folhas/layouts; aqui, mesmo com pranchas agora sendo lidas (ver
+  bullet acima), exportar uma prancha em PDF ainda não é suportado.
 - **Export PDF não tem escala real definida**: o desenho é sempre ajustado
   pra caber na folha escolhida ("Fit"), não numa escala técnica como 1:50 ou
   1:100 — o tamanho de folha (A4-A0) e a orientação são escolhidos antes de

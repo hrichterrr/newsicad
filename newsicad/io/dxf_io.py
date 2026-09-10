@@ -175,6 +175,23 @@ def _aci_to_hex(aci: int) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
+def _is_invisible(dxf_entity) -> bool:
+    """Group code 60 (Invisibility flag) do DXF: True = o AutoCAD nunca
+    desenha esta entidade. É assim que um BLOCO DINÂMICO com parâmetro de
+    Visibilidade fica gravado em DXF puro: TODAS as variantes (ex.: um
+    símbolo com opções Baixo/Médio/Alto/Piso/Teto) viram INSERTs aninhados
+    na mesma definição de bloco, na origem — só o INSERT do estado ativo no
+    momento em que o arquivo foi salvo fica com invisible=0 (ausente); os
+    outros ganham invisible=1. Sem filtrar isso, todas as variantes eram
+    desenhadas empilhadas no mesmo ponto — o símbolo "explodido"/gigante
+    reportado pelo Michael no grupo de feedback (planta PATRICIA E FABIO,
+    09/09/2026): 202 dos 355 blocos do arquivo tinham essa forma. O group
+    code é genérico do AcDbEntity (qualquer entidade pode ter invisible=1,
+    não só INSERT de bloco dinâmico), então o filtro vale tanto dentro de
+    uma definição de bloco quanto solto no modelspace."""
+    return bool(dxf_entity.dxf.get("invisible", 0))
+
+
 def load_dxf(path: str | Path) -> tuple[Document, int]:
     """Lê um .dxf e retorna (Document, quantidade de entidades ignoradas)."""
     try:
@@ -324,6 +341,8 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     def _importar_definicao(block) -> None:
         block_entities: list[Entity] = []
         for dxf_entity in block.entities_in_redraw_order():
+            if _is_invisible(dxf_entity):
+                continue
             imported = importer.import_entity(dxf_entity)
             if imported is not None:
                 block_entities.extend(imported)
@@ -366,6 +385,8 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         _importar_definicao(block)
 
     for dxf_entity in dxf_doc.modelspace().entities_in_redraw_order():
+        if _is_invisible(dxf_entity):
+            continue
         imported = importer.import_entity(dxf_entity)
         if imported is not None:
             for entity in imported:
@@ -396,6 +417,46 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             # newsicad/io/dxf_annotations.py:attrib_texts.
             for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
                 document.add_entity(text_entity)
+
+    # Pranchas (paper space): mesma leitura do Model acima, mas guardada à
+    # parte em `document.layouts[nome]` — camadas continuam sendo do
+    # arquivo inteiro (`document.add_layer`), só a geometria é por espaço.
+    # VIEWPORT (a "janela" que mostraria um recorte do Model dentro da
+    # prancha) ainda não é desenhado — ver `_file_notes` pelo aviso dessa
+    # limitação restante.
+    for layout in dxf_doc.layouts:
+        if layout.name == "Model":
+            continue
+        layout_entities: dict[str, Entity] = {}
+
+        def _store_in_layout(entity: Entity) -> None:
+            if not entity.layer:
+                entity.layer = document.current_layer
+            document.add_layer(entity.layer)
+            layout_entities[entity.id] = entity
+
+        for dxf_entity in layout.entities_in_redraw_order():
+            if dxf_entity.dxftype() == "VIEWPORT":
+                continue
+            if _is_invisible(dxf_entity):
+                continue
+            imported = importer.import_entity(dxf_entity)
+            if imported is not None:
+                for entity in imported:
+                    _store_in_layout(entity)
+                continue
+            entity = _from_dxf_entity(dxf_entity, units=document.units)
+            if entity is None:
+                if dxf_entity.dxftype() != "ATTDEF":
+                    skipped_by_type[dxf_entity.dxftype()] += 1
+                continue
+            _apply_dxf_color(entity, dxf_entity)
+            _store_in_layout(entity)
+            if dxf_entity.dxftype() == "INSERT":
+                for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
+                    _store_in_layout(text_entity)
+        if layout_entities:
+            document.layouts[layout.name] = layout_entities
 
     # Tamanho de texto/seta das cotas nativas proporcional ao arquivo (ver
     # read_dim_style) — antes era fixo em 2.0/0.6 unidades de desenho, o que
@@ -484,26 +545,33 @@ def _orphan_reference_note(document: Document) -> str | None:
 
 
 def _file_notes(dxf_doc) -> list[str]:
-    """Avisos sobre o que existe no arquivo mas o NewSIcad não mostra: os
-    LAYOUTS (pranchas em paper space — selo, legenda, tabelas das pranchas
-    da New SI moram lá; o NewSIcad só exibe o Model) e as XREFs (a base
-    arquitetônica costuma ser uma referência externa a outro .dwg, que não
-    vem junto quando só um arquivo é enviado — no AutoCAD também aparece
-    como "referência não encontrada"). Sem esses avisos o tester via uma
-    planta "sem legenda"/"sem base" e não tinha como saber o motivo (relato
-    de 2026-08-31, plantas Ana Beatriz e Casa Pau Brasil)."""
+    """Avisos sobre o que existe no arquivo mas o NewSIcad não mostra por
+    completo, e as XREFs. As pranchas em paper space (LAYOUTS — selo,
+    legenda, tabelas da New SI, e às vezes o projeto inteiro) passaram a
+    ser carregadas em `document.layouts` (09/09/2026, achado do grupo de
+    feedback do NewSicad — arquivos onde o Model space vinha praticamente
+    vazio e o desenho de verdade estava todo em paper space). O que ainda
+    falta é só o VIEWPORT: a "janela" que uma prancha normalmente tem pra
+    mostrar um recorte/escala do Model space — o NewSIcad não recorta nem
+    escala isso ainda, então uma prancha com viewport mostra só o resto do
+    conteúdo desenhado direto nela. XREF: a base arquitetônica costuma ser
+    uma referência externa a outro .dwg, que não vem junto quando só um
+    arquivo é enviado — no AutoCAD também aparece como "referência não
+    encontrada". Sem esses avisos o tester via uma planta "sem legenda"/
+    "sem base" e não tinha como saber o motivo (relato de 2026-08-31,
+    plantas Ana Beatriz e Casa Pau Brasil)."""
     notes: list[str] = []
-    layouts: list[str] = []
+    viewport_layouts: list[str] = []
     for layout in dxf_doc.layouts:
         if layout.name == "Model":
             continue
-        count = sum(1 for e in layout if e.dxftype() != "VIEWPORT")
-        if count:
-            layouts.append(f"{layout.name} ({count})")
-    if layouts:
+        if any(e.dxftype() == "VIEWPORT" for e in layout):
+            viewport_layouts.append(layout.name)
+    if viewport_layouts:
         notes.append(
-            f"Aviso: o arquivo tem {len(layouts)} layout(s)/prancha(s) em paper space "
-            f"que o NewSIcad ainda não exibe (só o Model): {', '.join(layouts)}."
+            f"Aviso: {len(viewport_layouts)} prancha(s) em paper space têm um viewport "
+            "(recorte/escala do Model space) que o NewSIcad ainda não desenha — só o "
+            f"resto do conteúdo da prancha aparece: {', '.join(viewport_layouts)}."
         )
     xrefs: list[str] = []
     for block in dxf_doc.blocks:
@@ -805,6 +873,21 @@ def save_dxf(document: Document, path: str | Path) -> None:
 
     for entity in document.all_entities():
         _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style)
+
+    # Pranchas (paper space): grava cada uma de volta no layout de mesmo
+    # nome (cria se não existir — ex.: um .dwg de arquiteto com pranchas
+    # "00 - Capa", "01"...). Sem isto, abrir um arquivo com conteúdo em
+    # paper space e dar Save apagava esse conteúdo silenciosamente (ele
+    # nunca ia pro `ezdxf.new()` do início desta função). O "Layout1" que
+    # todo `ezdxf.new()` cria sozinho fica sem uso e é removido, a não ser
+    # que o próprio arquivo já tivesse uma prancha chamada assim.
+    existing_layout_names = set(dxf_doc.layouts.names())
+    for name, entities in document.layouts.items():
+        layout = dxf_doc.layouts.get(name) if name in existing_layout_names else dxf_doc.layouts.new(name)
+        for entity in entities.values():
+            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style)
+    if document.layouts and "Layout1" not in document.layouts and "Layout1" in dxf_doc.layouts.names():
+        dxf_doc.layouts.delete("Layout1")
 
     try:
         dxf_doc.saveas(str(path))
