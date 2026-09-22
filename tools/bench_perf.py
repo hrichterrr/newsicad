@@ -34,6 +34,7 @@ app = QApplication.instance() or QApplication([])
 from newsicad.core.entities import Point  # noqa: E402
 from newsicad.io.dwg_bridge import dwg_to_document  # noqa: E402
 from newsicad.io.dxf_io import load_dxf  # noqa: E402
+from newsicad.ui.canvas import scene_to_cad  # noqa: E402
 from newsicad.ui.main_window import MainWindow  # noqa: E402
 
 ROWS: list[tuple[str, float, str]] = []
@@ -149,10 +150,24 @@ def main(path_str: str) -> None:
         rec(nome, (time.perf_counter() - t0) / n, "ms")
 
     per_event("mover o mouse (por evento)", move)
+
+    # O mesmo movimento COM um comando aberto e o elástico ligado — é o que o
+    # usuário sente ao desenhar (LINE, ARC, DIMENSION...). Mede separado do
+    # anterior porque o preview muda a área que precisa ser repintada a cada
+    # evento (ver CanvasView.mouseMoveEvent).
+    win._handle_text_submitted("LINE")
+    win._handle_canvas_point(scene_to_cad(canvas.mapToScene(400, 400)))
+    app.processEvents()
+    per_event("mover o mouse DENTRO de um comando (por evento)", move)
+    if win.interpreter.active:
+        win.interpreter.cancel()
+        if canvas.on_cancel is not None:
+            canvas.on_cancel()
+    app.processEvents()
+
     per_event("arrastar a tela (por evento)", pan)
     per_event("zoom com a roda (por passo, inclui 30 ms de espera)", zoom)
     center = canvas.mapToScene(800, 500)
-    from newsicad.ui.canvas import scene_to_cad
     timed("clique de seleção (hit-test no centro)", lambda: canvas._hit_test(scene_to_cad(center)), "ms")
     timed("clique em área vazia (hit-test)", lambda: canvas._hit_test(Point(1e9, 1e9)), "ms")
 

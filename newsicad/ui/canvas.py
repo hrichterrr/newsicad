@@ -1533,6 +1533,16 @@ class CanvasView(QGraphicsView):
         item.setBrush(QBrush(QColor(color)))
         item.setPen(_entity_pen(color))
         item.setData(_BASE_COLOR_DATA_KEY, color)
+        # O path de um texto é o CONTORNO DE CADA LETRA, preenchido e ainda
+        # contornado: é de longe o item mais caro de repintar do canvas. Numa
+        # prancha de legenda como o NEWSI-TEMPLATE da New SI (248 textos, 537
+        # entidades no total) os textos sozinhos respondiam por 60 dos 83 ms
+        # de cada repintura — o arquivo "travado" do feedback de 22/09/2026,
+        # sem ter tamanho nenhum. Com o cache em coordenadas de dispositivo o
+        # Qt guarda o texto já rasterizado e repintar vira uma cópia de
+        # pixels: 83 ms -> 23 ms. O cache se invalida sozinho quando o item
+        # muda (cor de seleção) ou quando o zoom muda a escala na tela.
+        item.setCacheMode(QGraphicsItem.CacheMode.DeviceCoordinateCache)
         return item
 
     def _create_table_item(self, entity: Table, color: str) -> QGraphicsItem:
@@ -2806,15 +2816,38 @@ class CanvasView(QGraphicsView):
         # marcadas pra repintura.
         prev = self._last_cursor_viewport_pos
         self._last_cursor_viewport_pos = pos
-        if prev is None or self._preview_path is not None or previous_preview is not None:
-            # Preview de comando (linha/retângulo/círculo em elástico até o
-            # cursor) pode cruzar a viewport inteira em diagonal — aí não dá
-            # pra recortar a área; repinta tudo. Fora de comando (o caso do
-            # dia a dia, navegando pelo desenho) cai no ramo barato abaixo.
+        if prev is None:
             self.viewport().update()
         else:
-            self.viewport().update(self._cursor_region(prev, pos))
+            # O preview de comando (a linha/retângulo/círculo em elástico até
+            # o cursor) também é uma área RECORTÁVEL: a caixa que ele ocupava
+            # antes mais a que ocupa agora. Até a 2.15.10 a presença de um
+            # preview jogava o método inteiro no `update()` da viewport
+            # cheia, ou seja, DENTRO de qualquer comando cada movimento do
+            # mouse repintava todos os itens da tela. É o que o grupo do
+            # NewSicad relatou em 22/09/2026 como "a marcação do ARC demora
+            # pra aparecer", "o DIMENSION está muito lento" e "todas as
+            # ferramentas muito lentas dentro do arquivo" — medido em 21,6 ms
+            # por movimento no NEWSI-TEMPLATE, um arquivo de só 537
+            # entidades, onde o custo não vem do tamanho do desenho.
+            region = self._cursor_region(prev, pos)
+            for path in (previous_preview, self._preview_path):
+                rect = self._preview_viewport_rect(path)
+                if rect is not None:
+                    region += rect
+            self.viewport().update(region)
         super().mouseMoveEvent(event)
+
+    def _preview_viewport_rect(self, path: QPainterPath | None) -> QRect | None:
+        """Retângulo em coordenadas de viewport ocupado por um preview, com
+        folga pra espessura do traço. None quando não há preview."""
+        if path is None or path.isEmpty():
+            return None
+        rect = self.mapFromScene(path.boundingRect()).boundingRect()
+        return rect.adjusted(
+            -_CURSOR_REGION_PADDING_PX, -_CURSOR_REGION_PADDING_PX,
+            _CURSOR_REGION_PADDING_PX, _CURSOR_REGION_PADDING_PX,
+        )
 
     def _cursor_region(self, prev: QPoint, pos: QPoint) -> QRegion:
         """Área a repintar quando SÓ o cursor se moveu: uma caixa em volta da

@@ -41,6 +41,40 @@ class Prompt:
 
 CommandFactory = Callable[[CommandContext], Generator[Prompt, object, None]]
 
+
+def option_keyword(option: str) -> str:
+    """Abreviação de uma opção de prompt, na convenção do AutoCAD: as LETRAS
+    MAIÚSCULAS do nome ("Undo" -> U, "Close" -> C, "eXit" -> X, "DElta" ->
+    DE, "Add vertex" -> A). Sem maiúscula nenhuma, cai na primeira letra."""
+    caps = "".join(ch for ch in option if ch.isupper())
+    return (caps or option[:1]).upper()
+
+
+def match_option(raw: str, options: list[str], allow_prefix: bool = True) -> str | None:
+    """Qual opção o usuário digitou, ou None.
+
+    Aceita, nesta ordem: o nome inteiro, a abreviação em maiúsculas (ver
+    `option_keyword`) e — só onde `allow_prefix` — um prefixo que combine
+    com uma única opção. Num prompt que pede TEXTO livre (o conteúdo de uma
+    célula de TABLE, por exemplo) o prefixo fica de fora: lá "e" é a letra
+    que o usuário quer escrever, não o começo de "eXit". Até a
+    2.15.10 só o nome INTEIRO valia: quem digitava "R" no [Radius] do FILLET
+    ou "U" no [Undo] da LINE — o que o AutoCAD ensina e o próprio prompt
+    sugere com a maiúscula — caía no parser de coordenada e levava um
+    "valor inválido", com a opção parecendo não existir. É o que estava por
+    trás de "Fillet não está funcionando" e de "não dá pra recuar a linha"
+    no feedback do grupo do NewSicad (22/09/2026)."""
+    if not options:
+        return None
+    alvo = raw.upper()
+    for opt in options:
+        if opt.upper() == alvo or option_keyword(opt) == alvo:
+            return opt
+    if not allow_prefix:
+        return None
+    prefixo = [opt for opt in options if opt.upper().startswith(alvo)]
+    return prefixo[0] if len(prefixo) == 1 else None
+
 #: Teto de linhas guardadas do histórico da linha de comando, e quanto se
 #: descarta de uma vez quando ele estoura. O histórico crescia sem limite e
 #: era REESCRITO INTEIRO na tela a cada passo de comando (ver
@@ -194,9 +228,7 @@ class CommandInterpreter:
                 return None
             return self._advance(ENTER)
 
-        option_match = next(
-            (opt for opt in prompt.options if opt.upper() == raw.upper()), None
-        )
+        option_match = match_option(raw, prompt.options, allow_prefix=prompt.kind != "text")
         if option_match is not None:
             return self._advance(option_match.upper())
 
