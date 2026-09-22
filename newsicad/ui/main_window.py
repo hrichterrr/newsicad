@@ -45,6 +45,7 @@ from newsicad.commands.block_commands import place_image_command, place_referenc
 from newsicad.commands.context import CommandContext
 from newsicad.commands.interpreter import CommandInterpreter
 from newsicad.commands.registry import READ_ONLY_COMMANDS
+from newsicad.commands.utility_commands import annotation_texts
 from newsicad.core.document import Document, MLeaderStyle, TableStyle, TextStyle
 from newsicad.core.entities import Dimension, Point, Table, Text
 from newsicad.core.selection import Selection
@@ -225,6 +226,7 @@ class MainWindow(QMainWindow):
         canvas.on_delete = self._delete_selected
         canvas.on_selection_changed = self._refresh_properties_panel
         canvas.on_context_menu = self._show_selection_context_menu
+        canvas.on_edit_in_place = self._edit_selected_in_place
         canvas.mouse_moved.connect(self._handle_mouse_moved)
 
     def _on_viewport_pane_selection_changed(self, session: DocumentSession) -> None:
@@ -630,6 +632,22 @@ class MainWindow(QMainWindow):
         self.canvas.refresh_selection_highlight()
         self.canvas.viewport().update()
         self._refresh_properties_panel()
+
+    def _edit_selected_in_place(self) -> None:
+        """Duplo clique no canvas: abre a edição do que está selecionado —
+        hoje o DDEDIT, pra texto solto e pra texto dentro de uma anotação
+        importada (multileader, leader, cota ou tabela do AutoCAD). Em
+        qualquer outro objeto, abre o painel de Propriedades, que é o que o
+        AutoCAD faz com um duplo clique sem editor próprio."""
+        entities = list(self.selection.entities(self.document))
+        editable = any(
+            isinstance(e, Text) or annotation_texts(self.interpreter.context, e) for e in entities
+        )
+        if editable:
+            self._start_command("DDEDIT")
+            return
+        if entities and not self.properties_dock.isVisible():
+            self.properties_dock.setVisible(True)
 
     def _show_selection_context_menu(self) -> None:
         """Menu de contexto no botão direito, sobre uma entidade já

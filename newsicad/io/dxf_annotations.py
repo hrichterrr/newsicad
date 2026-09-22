@@ -186,6 +186,39 @@ def text_from_dxf_mtext(e, layer: str | None = None) -> Text | None:
     )
 
 
+def _has_background_mask(parent) -> bool:
+    """O MULTILEADER tem "background fill" ligado no texto, na modalidade
+    "usar a cor do fundo do desenho"? É o que o AutoCAD desenha como uma
+    tarja da cor do papel atrás da anotação, pra ela ficar legível por cima
+    do desenho — invisível como retângulo, visível como um "buraco"."""
+    context = getattr(parent, "context", None)
+    mtext = getattr(context, "mtext", None)
+    if mtext is None:
+        return False
+    return bool(getattr(mtext, "has_bg_fill", 0)) and bool(getattr(mtext, "use_window_bg_color", 0))
+
+
+def _fix_annotation_hatch(entity, v, is_mask: bool) -> None:
+    """Uma HATCH vinda de `virtual_entities()` é sempre uma área CHEIA — a
+    ponta da seta do leader/cota ou a tarja de fundo do texto —, mas o
+    ezdxf a materializa sem `solid_fill` e sem `pattern_name`, e o
+    `hatch_from_dxf` então caía no ramo "hachura de outro programa" e
+    aproximava um padrão ANSI31. Resultado na tela: a seta virava um
+    rabisco de linhas paralelas e a tarja de fundo virava uma CAIXA
+    RISCADA por cima de cada anotação — o "ainda está explodindo o texto"
+    do feedback de 22/09/2026, com o NEWSI-TEMPLATE. Aqui a peça volta a ser
+    o que é: preenchimento sólido, e máscara (pintada na cor do fundo, como
+    um WIPEOUT) quando for a tarja."""
+    if not isinstance(entity, Hatch):
+        return
+    if v.dxf.hasattr("pattern_name") or v.dxf.get("solid_fill", 0):
+        return
+    entity.solid_fill = True
+    if is_mask:
+        entity.wipeout = True
+        entity.frame_visible = False
+
+
 def _solid_to_hatch(v, layer: str) -> Hatch | None:
     """SOLID/TRACE (seta de cota/leader) -> `Hatch` sólida. A ordem dos
     vértices do SOLID é 0-1-3-2 (o formato troca os dois últimos)."""
@@ -280,14 +313,23 @@ class AnnotationImporter:
     def _convert_parts(self, parent, virtual: Iterable, depth: int = 0) -> list[Entity]:
         layer = entity_layer(parent)
         out: list[Entity] = []
+        # A máscara de fundo do texto (quando existe) é a PRIMEIRA peça que
+        # o ezdxf materializa, antes de qualquer texto — ver _mask_hatch.
+        mask_pending = depth == 0 and _has_background_mask(parent)
         for v in virtual:
             dxftype = v.dxftype()
             if dxftype == "POINT":
                 continue  # defpoints da cota — não são desenho
             if dxftype == "TEXT":
                 entity = text_from_dxf_text(v)
+                mask_pending = False
             elif dxftype == "MTEXT":
                 entity = text_from_dxf_mtext(v)
+                mask_pending = False
+            elif dxftype == "HATCH":
+                entity = self.convert_entity(v)
+                take_mask, mask_pending = mask_pending, False
+                _fix_annotation_hatch(entity, v, is_mask=take_mask)
             elif dxftype in ("SOLID", "TRACE"):
                 entity = _solid_to_hatch(v, layer)
             elif dxftype == "INSERT" and self._should_expand(v):

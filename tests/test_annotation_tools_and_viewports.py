@@ -62,6 +62,8 @@ def test_mtext_applies_current_text_style_and_annotation_scale():
 
 
 def test_leader_applies_mleader_style_height_and_scale():
+    """O MLEADERSTYLE x escala de anotacao e a altura SUGERIDA quando o
+    desenho ainda nao tem altura de texto propria (ver leader_command)."""
     interp, doc = make_interpreter()
     doc.mleader_style = MLeaderStyle(text_height=4.0)
     doc.annotation_scale = 0.5
@@ -70,6 +72,7 @@ def test_leader_applies_mleader_style_height_and_scale():
     interp.submit_point(Point(0, 0))
     interp.submit_point(Point(5, 5))
     interp.submit_text("")  # Enter termina pontos
+    interp.submit_text("")  # Enter aceita a altura sugerida
     interp.submit_text("Nota")
     assert not interp.active
 

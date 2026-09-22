@@ -38,6 +38,7 @@ from newsicad.core.geometry_ops import (
     extend_point_to_arc,
     extend_point_to_boundary,
     extend_point_to_circle,
+    corner_lines,
     fillet_lines,
     mirror_entity,
     nearest_entity,
@@ -615,21 +616,31 @@ def offset_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
 # FILLET (Line-Line) — fluxo com sub-opção [Radius], igual ao AutoCAD
 # ------------------------------------------------------------------ #
 def fillet_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    radius = 0.0
+    """FILLET (F). Raio ZERO é válido e é o padrão, igual ao AutoCAD: fecha o
+    canto vivo, estendendo/aparando as duas linhas até o cruzamento. Até a
+    2.15.10 o comando EXIGIA um raio maior que zero e, como a opção só
+    respondia à palavra "RADIUS" escrita por extenso, o caminho normal —
+    chamar F, clicar nas duas linhas — terminava sempre numa mensagem de
+    recusa sem fazer nada: é o "Fillet: o comando não está funcionando" do
+    feedback do grupo em 22/09/2026. O raio também passa a ficar guardado no
+    desenho entre uma chamada e outra, como o FILLETRAD do AutoCAD."""
+    radius = ctx.document.fillet_radius
     first: object = None
     while True:
         first = yield Prompt(
-            f"Select first object or [Radius] (current radius = {radius:g}):",
+            f"Select first object or [Radius] <{radius:g}>:",
             kind="point", options=["Radius"], connect_to_last=False,
         )
         if first == "RADIUS":
-            radius = yield Prompt("Specify fillet radius:", kind="distance")
+            answer = yield Prompt(f"Specify fillet radius <{radius:g}>:", kind="distance")
+            if answer is not ENTER:
+                if answer < 0:
+                    yield Prompt("FILLET: o raio não pode ser negativo.", kind="info")
+                    continue
+                radius = float(answer)
+                ctx.document.fillet_radius = radius
             continue
         break
-
-    if radius <= 0:
-        yield Prompt("Especifique um raio de FILLET maior que zero pela opção [Radius] antes de selecionar as linhas.", kind="info")
-        return
 
     target1 = _hit_test_entity(ctx, first)
     if target1 is None or not isinstance(target1, Line):
@@ -643,6 +654,9 @@ def fillet_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         return
 
     try:
+        if radius <= 0:
+            corner_lines(target1, target2)
+            return
         arc = fillet_lines(target1, target2, radius)
     except ValueError as exc:
         yield Prompt(str(exc), kind="info")

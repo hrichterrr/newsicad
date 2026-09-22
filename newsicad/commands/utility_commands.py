@@ -22,6 +22,7 @@ from newsicad.core.entities import (
     Spline,
     Text,
     XLine,
+    is_annotation_block,
 )
 from newsicad.core.geometry_ops import polygon_area, polygon_perimeter
 
@@ -82,14 +83,60 @@ def _select_text(ctx: CommandContext, message: str) -> Generator[Prompt, object,
     return texts[0] if texts else None
 
 
+def annotation_texts(ctx: CommandContext, ref: BlockReference) -> list[Text]:
+    """Os textos de dentro de uma anotação importada (multileader, leader,
+    cota ou tabela do AutoCAD, que a leitura empacota num bloco anônimo —
+    ver `is_annotation_block`). São os objetos vivos da definição do bloco:
+    mexer no `content` deles muda o desenho."""
+    if not isinstance(ref, BlockReference) or not is_annotation_block(ref.block_name):
+        return []
+    parts = ctx.document.get_block_definition(ref.block_name)
+    return [p for p in parts if isinstance(p, Text) and p.content.strip()]
+
+
+def _edit_annotation_block(
+    ctx: CommandContext, ref: BlockReference, targets: list[Text]
+) -> Generator[Prompt, object, None]:
+    """Edita, uma linha por vez, os textos de uma anotação importada. Enter
+    mantém a linha como está; texto novo substitui."""
+    changed = False
+    for target in targets:
+        answer = yield Prompt(f"Enter new text <{target.content}>:", kind="text")
+        if answer is ENTER:
+            continue
+        content = str(answer).strip("\r")
+        if content == "" or content == target.content:
+            continue
+        target.content = content
+        changed = True
+    if changed:
+        # Rebumpa a revisão das definições pra tela redesenhar a anotação.
+        ctx.document.define_block(ref.block_name, ctx.document.get_block_definition(ref.block_name))
+
+
 def edit_text_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    """DDEDIT (ED): edita o conteúdo de um Text (MTEXT/LEADER) já colocado no
-    desenho. Simplificação documentada no README: só edita `Text` — cotas
-    (Dimension) não têm campo de texto sobreposto no modelo do NewSIcad (o
-    texto exibido é sempre calculado a partir da medição real), então
-    selecionar uma cota aqui não faz nada."""
-    target = yield from _select_text(ctx, "Select an annotation object or [Undo]:")
+    """DDEDIT (ED): edita o conteúdo de um texto já colocado no desenho —
+    tanto um `Text` solto (MTEXT/LEADER do NewSIcad) quanto o texto DENTRO de
+    uma anotação importada do AutoCAD (multileader, leader, cota ou tabela,
+    que a leitura empacota num bloco anônimo pra continuar sendo um objeto
+    só). Antes só o `Text` solto valia: numa prancha vinda do AutoCAD, toda
+    chamada com seta era um bloco e não tinha como corrigir uma palavra —
+    "não conseguimos alterar o texto dentro do NewSIcad", feedback do grupo
+    em 22/09/2026, com o NEWSI-TEMPLATE da New SI. O bloco de anotação é
+    exclusivo de cada anotação (o nome carrega o handle de origem), então
+    editar a definição altera só aquela chamada.
+
+    Continua de fora o texto medido de uma cota NATIVA do NewSIcad: ele é
+    sempre calculado da medição real, não um campo guardado."""
+    selected = yield from _select_objects(ctx, "Select an annotation object or [Undo]:")
+    texts = [e for e in selected if isinstance(e, Text)]
+    target = texts[0] if texts else None
     if target is None:
+        for entity in selected:
+            inner = annotation_texts(ctx, entity)
+            if inner:
+                yield from _edit_annotation_block(ctx, entity, inner)
+                return
         yield Prompt("ED: nenhum texto selecionado (cotas não têm texto editável nesta versão).", kind="info")
         return
 

@@ -201,21 +201,41 @@ def test_hatch_command_open_polyline_is_rejected():
 # ------------------------------------------------------------------ #
 # LEADER (prioridade 4 — reusa LWPolyline + Text)
 # ------------------------------------------------------------------ #
-def test_leader_command_creates_polyline_and_text():
+def test_leader_command_creates_polyline_arrow_and_text():
     interp, doc = make_interpreter()
     interp.start("LEADER")
     interp.submit_point(Point(0, 0))
     interp.submit_point(Point(5, 5))
     interp.submit_text("")  # termina a linha do leader
+    interp.submit_text("")  # Enter aceita a altura sugerida
     interp.submit_text("Nota importante")
     assert not interp.active
     polys = [e for e in doc.all_entities() if isinstance(e, LWPolyline)]
     texts = [e for e in doc.all_entities() if isinstance(e, Text)]
+    setas = [e for e in doc.all_entities() if isinstance(e, Hatch) and e.solid_fill]
     assert len(polys) == 1
     assert [p.as_tuple() for p in polys[0].points] == [(0, 0), (5, 5)]
+    assert len(setas) == 1  # ponta de seta cheia, como no AutoCAD
     assert len(texts) == 1
     assert texts[0].content == "Nota importante"
-    assert texts[0].insertion_point.as_tuple() == (5, 5)
+    # texto afastado da ponta da linha, não grudado em cima dela
+    assert texts[0].insertion_point.x > 5
+
+
+def test_leader_usa_a_altura_de_texto_do_desenho():
+    """Numa planta em metros o leader saía com letra de 2,5 unidades (o
+    MLEADERSTYLE fixo) sobre textos de 0,18 — feedback de 22/09/2026."""
+    interp, doc = make_interpreter()
+    doc.text_height = 0.18
+    interp.start("LEADER")
+    interp.submit_point(Point(0, 0))
+    interp.submit_point(Point(5, 5))
+    interp.submit_text("")
+    assert "0.18" in interp.current_prompt.message
+    interp.submit_text("")  # aceita a altura sugerida
+    interp.submit_text("QA-INF")
+    texts = [e for e in doc.all_entities() if isinstance(e, Text)]
+    assert texts[0].height == pytest.approx(0.18)
 
 
 def test_leader_alias_le_works_and_empty_text_still_keeps_line():
@@ -224,6 +244,7 @@ def test_leader_alias_le_works_and_empty_text_still_keeps_line():
     interp.submit_point(Point(0, 0))
     interp.submit_point(Point(1, 1))
     interp.submit_text("")
+    interp.submit_text("")  # altura sugerida
     interp.submit_text("")  # sem anotação
     assert not interp.active
     assert len([e for e in doc.all_entities() if isinstance(e, LWPolyline)]) == 1

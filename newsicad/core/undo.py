@@ -56,6 +56,7 @@ _STRUCTURE_FIELDS = (
     "dim_style",
     "text_height",
     "annotation_scale",
+    "fillet_radius",
     "isolated_layers",
 )
 

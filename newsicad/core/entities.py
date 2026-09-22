@@ -209,6 +209,19 @@ class Spline(Entity):
     closed: bool = False
 
 
+#: Prefixos dos blocos ANÔNIMOS em que a importação empacota uma anotação
+#: pronta de outro programa — multileader, leader, cota e tabela (ver
+#: newsicad/io/dxf_annotations.py). Não são blocos do usuário: cada um tem
+#: uma única instância e existe só pra anotação continuar sendo UM objeto
+#: selecionável. Quem precisa saber "isto veio de uma anotação do AutoCAD?"
+#: — o DDEDIT, o painel de Propriedades — pergunta por aqui.
+ANNOTATION_BLOCK_PREFIXES = ("*ML_", "*LD_", "*D_", "*T_")
+
+
+def is_annotation_block(name: str) -> bool:
+    return name.startswith(ANNOTATION_BLOCK_PREFIXES)
+
+
 @dataclass
 class BlockReference(Entity):
     """Instância de um bloco inserida no desenho (comando INSERT). A
@@ -415,6 +428,12 @@ class Hatch(Entity):
     .dxf: área que oculta o que está atrás dela — preenchimento sólido na cor
     de FUNDO do canvas, gravada como WIPEOUT de verdade no .dxf. Sempre vem
     com `solid_fill=True`."""
+    frame_visible: bool = True
+    """Desenha o contorno do wipeout? A máscara de fundo de um MULTILEADER
+    importado não tem contorno nenhum no AutoCAD — é só uma tarja da cor do
+    papel atrás do texto (ver `_fix_annotation_hatch` em
+    newsicad/io/dxf_annotations.py). Um WIPEOUT criado pelo usuário continua
+    com moldura, que é como ele o enxerga pra selecionar e mover."""
     boundary_paths: list[list[Point]] = field(default_factory=list)
     """Todos os contornos (externo primeiro, depois furos/ilhas) — vazio
     quando a hachura só tem o contorno de `boundary_points` (caso de tudo que

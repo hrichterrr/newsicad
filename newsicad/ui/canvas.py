@@ -945,6 +945,7 @@ class CanvasView(QGraphicsView):
         self.on_delete: Callable[[], None] | None = None
         self.on_selection_changed: Callable[[], None] | None = None
         self.on_context_menu: Callable[[], None] | None = None
+        self.on_edit_in_place: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------ #
     # sincronização com o Document
@@ -1422,7 +1423,9 @@ class CanvasView(QGraphicsView):
             # dos filhos no grupo), igual ao AutoCAD.
             path, _outer = _hatch_boundary_path(entity)
             item = QGraphicsPathItem(path)
-            item.setPen(_entity_pen(color))
+            # Máscara de fundo de anotação importada não tem moldura — ver
+            # Hatch.frame_visible.
+            item.setPen(_entity_pen(color) if entity.frame_visible else QPen(Qt.PenStyle.NoPen))
             item.setBrush(QBrush(QColor(BACKGROUND_COLOR)))
             item.setData(_BASE_COLOR_DATA_KEY, color)
             item.setData(_WIPEOUT_DATA_KEY, True)
@@ -2719,6 +2722,34 @@ class CanvasView(QGraphicsView):
     def _resolve_point(self, event) -> Point:
         scene_pos = self.mapToScene(self._event_pos(event))
         return self._apply_constraints(scene_to_cad(scene_pos))
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """Duplo clique num objeto de texto abre a edição, como no AutoCAD.
+        Fora de comando e só no botão esquerdo; o clique já deixou o objeto
+        selecionado, então a edição pega a pré-seleção. Sem isto, a única
+        forma de corrigir uma palavra era saber que existe o comando ED —
+        "não conseguimos alterar o texto dentro do NewSIcad" (feedback do
+        grupo, 22/09/2026)."""
+        if (
+            event.button() != Qt.MouseButton.LeftButton
+            or self.interpreter.active
+            or self.on_edit_in_place is None
+        ):
+            super().mouseDoubleClickEvent(event)
+            return
+        hit_id = self._hit_test(scene_to_cad(self.mapToScene(self._event_pos(event))))
+        if hit_id is None:
+            super().mouseDoubleClickEvent(event)
+            return
+        selection = self.interpreter.context.selection
+        if hit_id not in selection.ids:
+            selection.set({hit_id})
+            self.refresh_selection_highlight()
+            self.viewport().update()
+            if self.on_selection_changed is not None:
+                self.on_selection_changed()
+        self.on_edit_in_place()
+        event.accept()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.MiddleButton:

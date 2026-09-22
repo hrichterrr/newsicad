@@ -131,6 +131,11 @@ class Document:
         # do AutoCAD, que não se aplica sem paper space) — multiplica a
         # altura padrão de Text/Dimension/Table/Leader na hora de criar.
         self.annotation_scale: float = 1.0
+        # Raio do último FILLET (o FILLETRAD do AutoCAD): zero = canto
+        # vivo, que é o padrão do próprio AutoCAD. Fica no documento,
+        # não na função do comando, pra valer da segunda chamada em
+        # diante — ver fillet_command.
+        self.fillet_radius: float = 0.0
         # Altura de texto lembrada do último MTEXT (igual à TEXTSIZE do
         # AutoCAD) e, ao abrir um arquivo, a altura mais comum dos textos que
         # ele já tem — sem isso, digitar um texto numa planta em metros saía

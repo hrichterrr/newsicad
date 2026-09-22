@@ -226,35 +226,92 @@ def hatchedit_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
         hatch.spacing = spacing
 
 
+#: Ponta da seta do LEADER, em múltiplos da altura do texto — mesma
+#: proporção que o AutoCAD usa por padrão (seta ≈ 0,4 x altura do texto).
+_LEADER_ARROW_FACTOR = 0.4
+#: Afastamento do texto em relação ao fim da linha ("landing gap"), também
+#: proporcional à altura do texto.
+_LEADER_GAP_FACTOR = 0.35
+
+
+def _leader_arrow(tip: Point, towards: Point, size: float) -> Hatch:
+    """Triângulo cheio na ponta do leader, apontando de `towards` pra `tip`.
+    É a mesma peça que a importação do AutoCAD materializa como HATCH sólida
+    (ver io/dxf_annotations.py) — aqui desenhada direto."""
+    dx, dy = tip.x - towards.x, tip.y - towards.y
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    base = Point(tip.x - ux * size, tip.y - uy * size)
+    half = size * 0.18
+    return Hatch(
+        boundary_points=[
+            tip,
+            Point(base.x - uy * half, base.y + ux * half),
+            Point(base.x + uy * half, base.y - ux * half),
+        ],
+        solid_fill=True,
+    )
+
+
 def leader_command(ctx: CommandContext) -> Generator[Prompt, object, None]:
-    """LEADER simplificado: reusa LWPolyline (a linha poligonal terminando
-    perto do texto, aproximando a seta) + Text (a anotação na ponta) em vez
-    de criar um tipo de entidade dedicado — v1 suficiente pra um leader
-    básico sem precisar de mais um Entity novo só pra isso."""
-    first = yield Prompt("Specify leader start point:", kind="point")
+    """LEADER (LE): linha de chamada com seta + anotação de texto na ponta.
+
+    Simplificação mantida: a chamada é montada com LWPolyline + Hatch (a
+    seta) + Text, não com um tipo de entidade MULTILEADER dedicado.
+
+    O que mudou depois do feedback do grupo de 22/09/2026 ("Leader: o comando
+    não está funcionando"): (1) a altura do texto era sempre a do
+    MLEADERSTYLE, 2,5 unidades fixas — numa planta em metros, uma letra de
+    2,5 m em cima de um desenho cujos textos têm 0,18; agora pergunta a
+    altura já sugerindo a do próprio desenho, igual ao MTEXT desde a 2.15.7;
+    (2) não havia seta nenhuma, só uma polilinha solta; (3) o texto era
+    grudado no último ponto, em cima do fim da linha."""
+    first = yield Prompt("Specify leader arrowhead point:", kind="point")
     points = [first]
     while True:
-        nxt = yield Prompt("Specify next point:", kind="point", accepts_enter=True)
+        nxt = yield Prompt("Specify next point (Enter to finish):", kind="point", accepts_enter=True)
         if nxt is ENTER:
             break
         points.append(nxt)
     if len(points) < 2:
+        yield Prompt("LEADER: são necessários pelo menos dois pontos.", kind="info")
         return
-    ctx.document.add_entity(LWPolyline(points=points, closed=False, layer=ctx.document.current_layer))
+
+    default_height = ctx.document.text_height
+    if not default_height or default_height <= 0:
+        default_height = ctx.document.mleader_style.text_height * ctx.document.annotation_scale
+    height_raw = yield Prompt(f"Specify text height <{default_height:.4g}>:", kind="distance")
+    height = default_height if height_raw is ENTER else float(height_raw)
+    if height <= 0:
+        yield Prompt("LEADER: a altura do texto deve ser positiva.", kind="info")
+        return
 
     content = yield Prompt("Enter leader annotation text:", kind="text")
-    if content is ENTER:
-        return
-    text = str(content).strip("\r")
+    text = "" if content is ENTER else str(content).strip("\r")
+
+    layer = ctx.document.current_layer
+    ctx.document.add_entity(LWPolyline(points=points, closed=False, layer=layer))
+    arrow = _leader_arrow(points[0], points[1], height * _LEADER_ARROW_FACTOR)
+    arrow.layer = layer
+    ctx.document.add_entity(arrow)
     if text == "":
         return
+
+    ctx.document.text_height = height
+    # Texto do lado pra onde a linha está indo, afastado da ponta — e
+    # ancorado pela linha de base (o "BL"/"BR" do NewSIcad), que é onde o
+    # AutoCAD encosta a anotação de uma chamada.
+    tail, before = points[-1], points[-2]
+    gap = height * _LEADER_GAP_FACTOR
+    to_right = tail.x >= before.x
     ctx.document.add_entity(
         Text(
-            insertion_point=points[-1],
+            insertion_point=Point(tail.x + (gap if to_right else -gap), tail.y + gap * 0.5),
             content=text,
-            height=ctx.document.mleader_style.text_height * ctx.document.annotation_scale,
+            height=height,
             rotation=0.0,
-            layer=ctx.document.current_layer,
+            justify="BL" if to_right else "BR",
+            layer=layer,
             style=ctx.document.current_text_style,
         )
     )

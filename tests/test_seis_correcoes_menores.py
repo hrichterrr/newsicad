@@ -154,7 +154,7 @@ def test_mleader_cai_no_leader(nome):
     assert interp.resolve_command(nome) == "LEADER"
     interp.start(nome)
     assert interp.current_prompt is not None
-    assert "leader start point" in interp.current_prompt.message
+    assert "leader arrowhead point" in interp.current_prompt.message
 
 
 # ---------------------------------------------------------------- rótulo

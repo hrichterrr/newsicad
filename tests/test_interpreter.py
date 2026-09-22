@@ -362,16 +362,20 @@ def test_offset_circle_creates_larger_circle():
 # ---------------------------------------------------------------------- #
 # FILLET / CHAMFER
 # ---------------------------------------------------------------------- #
-def test_fillet_command_requires_radius_before_selecting():
+def test_fillet_com_raio_padrao_zero_fecha_o_canto():
+    """Raio zero e o padrao do AutoCAD e fecha o canto vivo, sem arco. Ate a
+    2.15.10 o comando recusava e nao fazia nada — ver fillet_command."""
     interp, doc = make_interpreter()
-    line1 = doc.add_entity(Line(start=Point(0, 0), end=Point(10, 0)))
-    line2 = doc.add_entity(Line(start=Point(10, 0), end=Point(10, 10)))
+    line1 = doc.add_entity(Line(start=Point(0, 0), end=Point(8, 0)))
+    line2 = doc.add_entity(Line(start=Point(10, 2), end=Point(10, 10)))
     interp.start("F")
-    interp.submit_point(Point(5, 0))  # sem ter setado raio ainda
+    interp.submit_point(Point(5, 0))
+    interp.submit_point(Point(10, 6))
     assert not interp.active
-    assert any("raio" in line.lower() for line in interp.log)
     arcs = [e for e in doc.all_entities() if isinstance(e, Arc)]
     assert len(arcs) == 0
+    assert line1.end.as_tuple() == (10, 0)
+    assert line2.start.as_tuple() == (10, 0)
 
 
 def test_fillet_command_full_flow_with_radius_option():

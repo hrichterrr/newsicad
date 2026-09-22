@@ -948,6 +948,21 @@ def _corner_setup(line1: Line, line2: Line):
     return p, (u1x, u1y, len1, near1_is_start), (u2x, u2y, len2, near2_is_start)
 
 
+def corner_lines(line1: Line, line2: Line) -> None:
+    """FILLET de raio ZERO — o padrão do AutoCAD: estende (ou apara) as duas
+    linhas até o ponto onde as retas suporte se cruzam, fechando o canto
+    vivo. Nada é criado; só as duas linhas mudam de ponta."""
+    p, (_u1x, _u1y, _l1, near1_is_start), (_u2x, _u2y, _l2, near2_is_start) = _corner_setup(line1, line2)
+    if near1_is_start:
+        line1.start = p
+    else:
+        line1.end = p
+    if near2_is_start:
+        line2.start = p
+    else:
+        line2.end = p
+
+
 def fillet_lines(line1: Line, line2: Line, radius: float) -> Arc:
     """Arredonda o canto entre line1 e line2 com um arco tangente de raio
     `radius`, mutando as duas linhas em memória (a ponta mais próxima do
