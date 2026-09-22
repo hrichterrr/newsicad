@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from newsicad.commands.interpreter import CommandInterpreter
-from newsicad.core.document import Document
+from newsicad.core.document import Document, dim_arrow_size, dim_text_height
 from newsicad.core.bulge import arc_midpoint, bulge_at, polyline_pieces
 from newsicad.core.entities import drain_dirty
 from newsicad.core.geometry_ops import point_arc_distance
@@ -1392,7 +1392,7 @@ class CanvasView(QGraphicsView):
 
         if isinstance(entity, Dimension):
             dim_style = self.document.dim_style
-            segments, text_anchor = dimension_geometry(entity, tick_size=dim_style.arrow_size)
+            segments, text_anchor = dimension_geometry(entity, tick_size=dim_arrow_size(entity, dim_style))
             path = QPainterPath()
             for a, b in segments:
                 path.moveTo(cad_to_scene(a))
@@ -1402,9 +1402,9 @@ class CanvasView(QGraphicsView):
             # do DimStyle do documento — não mais os 2.0 fixos de
             # DIM_TEXT_HEIGHT, que numa planta em metros davam um texto 20x
             # maior que a própria cota.
-            text_height = dim_style.text_height
+            text_height = dim_text_height(entity, dim_style)
             if text_height > 1e-6:
-                font = text_font(self.document.text_styles.get("Standard"))
+                font = text_font(self.document.text_styles.get(entity.text_style or "Standard"))
                 scale = text_height / max(_metrics(font).capHeight(), 1e-6)
                 text_path, text_width = _scaled_text_path(font, entity.measurement_text(), scale)
                 anchor_scene = cad_to_scene(text_anchor)
@@ -1932,7 +1932,7 @@ class CanvasView(QGraphicsView):
             cy = min(max(ly, -height), 0.0)
             return math.hypot(lx - cx, ly - cy)
         if isinstance(entity, Dimension):
-            segments, _ = dimension_geometry(entity, tick_size=self.document.dim_style.arrow_size)
+            segments, _ = dimension_geometry(entity, tick_size=dim_arrow_size(entity, self.document.dim_style))
             if not segments:
                 return None
             return min(_point_segment_distance(p, a, b) for a, b in segments)
@@ -2055,7 +2055,7 @@ class CanvasView(QGraphicsView):
             ys = [pt.y() for pt in world_pts]
             return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
         if isinstance(entity, Dimension):
-            segments, text_anchor = dimension_geometry(entity, tick_size=self.document.dim_style.arrow_size)
+            segments, text_anchor = dimension_geometry(entity, tick_size=dim_arrow_size(entity, self.document.dim_style))
             pts = [text_anchor] + [pt for seg in segments for pt in seg]
             if not pts:
                 return QRectF()

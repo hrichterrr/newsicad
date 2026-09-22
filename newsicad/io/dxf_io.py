@@ -14,7 +14,7 @@ import ezdxf.colors
 import ezdxf.recover
 
 import newsicad.core.entities as entities_module
-from newsicad.core.document import DimStyle, Document, TextStyle
+from newsicad.core.document import DimStyle, Document, TextStyle, dim_arrow_size, dim_text_height
 from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     JUSTIFY_TO_ATTACHMENT as _JUSTIFY_TO_ATTACHMENT,
@@ -723,6 +723,12 @@ def _from_dxf_dimension(e, layer: str) -> Entity | None:
         point1, point2, dim_line_point, center, leader_point = (
             Point(floats[i], floats[i + 1]) for i in range(0, 10, 2)
         )
+        # Tamanhos próprios da cota e estilo de texto: gravados depois do
+        # raio a partir da 2.16 (-1 = "sem tamanho próprio"). Arquivo mais
+        # antigo não tem essas tags — daí o `len(values)`.
+        own_text = values[12] if len(values) > 12 else -1.0
+        own_arrow = values[13] if len(values) > 13 else -1.0
+        own_style = values[14] if len(values) > 14 else ""
         return Dimension(
             layer=layer,
             kind=kind,
@@ -732,6 +738,9 @@ def _from_dxf_dimension(e, layer: str) -> Entity | None:
             center=center,
             radius=radius,
             leader_point=leader_point,
+            text_height=None if own_text is None or float(own_text) < 0 else float(own_text),
+            arrow_size=None if own_arrow is None or float(own_arrow) < 0 else float(own_arrow),
+            text_style=str(own_style or ""),
         )
 
     return _dimension_from_geometry(e, layer)
@@ -1076,7 +1085,12 @@ def _write_dimension(msp, entity: Dimension, attribs: dict, dim_style: DimStyle)
     vez do padrão do estilo "EZDXF" — numa planta em metros esse padrão
     (2.5 unidades) era maior que a própria cota."""
     dimattribs = dict(attribs)
-    style_override = {"dimtxt": float(dim_style.text_height), "dimasz": float(dim_style.arrow_size)}
+    # Cota com tamanho PRÓPRIO (ajustado no painel de Propriedades) grava o
+    # tamanho dela; sem override, o do desenho — ver dim_text_height.
+    style_override = {
+        "dimtxt": float(dim_text_height(entity, dim_style)),
+        "dimasz": float(dim_arrow_size(entity, dim_style)),
+    }
     override = None
 
     if entity.kind == "linear":
@@ -1142,6 +1156,10 @@ def _write_dimension(msp, entity: Dimension, attribs: dict, dim_style: DimStyle)
         tags.append((1040, float(pt.x)))
         tags.append((1040, float(pt.y)))
     tags.append((1040, float(entity.radius)))
+    # -1 = "sem tamanho próprio", pra reabrir voltando ao tamanho do desenho.
+    tags.append((1040, -1.0 if entity.text_height is None else float(entity.text_height)))
+    tags.append((1040, -1.0 if entity.arrow_size is None else float(entity.arrow_size)))
+    tags.append((1000, entity.text_style or ""))
     override.dimension.set_xdata(NEWSICAD_APPID, tags)
 
 

@@ -1,11 +1,14 @@
 """Correções vindas do feedback do grupo do NewSicad de 22/09/2026 (Michael
 Albert), testadas no arquivo de referência que ele mandou (NEWSI-TEMPLATE-
 LEG_R00): abreviação de opção no prompt, seta/máscara das anotações
-importadas, edição do texto dentro delas, FILLET e LEADER."""
+importadas, edição do texto dentro delas, FILLET, LEADER e o painel de
+Propriedades editável."""
 
 from __future__ import annotations
 
-import math
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
@@ -162,3 +165,81 @@ def test_ddedit_em_bloco_comum_continua_recusando():
     interp.submit_text("")
     assert not interp.active
     assert "nenhum texto" in interp.log[-1].lower()
+
+
+# ------------------------------------------------- painel de Propriedades
+@pytest.fixture
+def janela():
+    from PySide6.QtWidgets import QApplication
+
+    from newsicad.ui.main_window import MainWindow
+
+    QApplication.instance() or QApplication([])
+    # Sem close(): o resto da suíte de UI segue a mesma convenção (ver
+    # tests/test_layer_panel.py) — fechar a janela no teardown trava o Qt
+    # offscreen quando há evento adiado pendente.
+    return MainWindow()
+
+
+def _linhas_editaveis(panel) -> dict:
+    """{rótulo: widget} das linhas do painel que têm campo editável."""
+    from PySide6.QtWidgets import QComboBox, QLabel, QLineEdit
+
+    campos = {}
+    for i in range(panel.body_layout.count()):
+        widget = panel.body_layout.itemAt(i).widget()
+        if widget is None:
+            continue
+        labels = widget.findChildren(QLabel)
+        editaveis = widget.findChildren(QLineEdit) + widget.findChildren(QComboBox)
+        if labels and editaveis:
+            campos[labels[0].text()] = editaveis[0]
+    return campos
+
+
+def test_propriedades_edita_a_altura_do_texto_de_uma_cota(janela):
+    from newsicad.core.entities import Dimension
+
+    doc = janela.document
+    dim = doc.add_entity(
+        Dimension(kind="linear", point1=Point(0, 0), point2=Point(10, 0), dim_line_point=Point(0, 2))
+    )
+    janela.selection.set({dim.id})
+    janela._refresh_properties_panel()
+    campos = _linhas_editaveis(janela.properties_dock)
+    assert "Altura do texto" in campos  # antes o painel era só de leitura
+
+    campo = campos["Altura do texto"]
+    campo.setText("0.25")
+    campo.editingFinished.emit()
+    assert dim.text_height == pytest.approx(0.25)
+    # ...e o desenho inteiro não foi junto
+    assert doc.dim_style.text_height != pytest.approx(0.25)
+
+
+def test_propriedades_edita_o_conteudo_de_um_texto(janela):
+    doc = janela.document
+    texto = doc.add_entity(Text(insertion_point=Point(0, 0), content="ANTES", height=1.0))
+    janela.selection.set({texto.id})
+    janela._refresh_properties_panel()
+    campo = _linhas_editaveis(janela.properties_dock)["Conteúdo"]
+    campo.setText("DEPOIS")
+    campo.editingFinished.emit()
+    assert texto.content == "DEPOIS"
+
+
+def test_altura_propria_da_cota_sobrevive_ao_salvar_e_reabrir(tmp_path):
+    from newsicad.core.entities import Dimension
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    doc = Document()
+    doc.add_entity(
+        Dimension(kind="linear", point1=Point(0, 0), point2=Point(10, 0),
+                  dim_line_point=Point(0, 2), text_height=0.25, arrow_size=0.08)
+    )
+    caminho = tmp_path / "cota.dxf"
+    save_dxf(doc, caminho)
+    lido, _ = load_dxf(caminho)
+    cota = next(e for e in lido.entities.values() if isinstance(e, Dimension))
+    assert cota.text_height == pytest.approx(0.25)
+    assert cota.arrow_size == pytest.approx(0.08)

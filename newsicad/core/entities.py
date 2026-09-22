@@ -357,6 +357,17 @@ class Dimension(Entity):
     center: Point = field(default_factory=lambda: Point(0, 0))
     radius: float = 0.0
     leader_point: Point = field(default_factory=lambda: Point(0, 0))
+    text_height: float | None = None
+    """Altura do texto SÓ desta cota. `None` = usa a do documento
+    (`Document.dim_style`). É o que o painel de Propriedades edita: o
+    AutoCAD deixa mudar fonte e tamanho de uma cota isolada, e no NewSIcad
+    a única forma era mudar o DIMSTYLE do desenho inteiro — pedido do grupo
+    em 22/09/2026 ("precisamos alterar propriedades... por meio da opção
+    Propriedades")."""
+    arrow_size: float | None = None
+    """Tamanho da marca de seta só desta cota. `None` = a do documento."""
+    text_style: str = ""
+    """Estilo de texto (STYLE) da medida. Vazio = "Standard"."""
     break_points: list[Point] = field(default_factory=list)
     """Pontos (comando DIMBREAK) onde a linha de cota deve ter uma folga —
     só tem efeito em `kind` "linear"/"aligned" (ver

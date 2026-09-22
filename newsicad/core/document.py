@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from newsicad.core.entities import BlockReference, Entity
+from newsicad.core.entities import BlockReference, Dimension, Entity
 
 DEFAULT_LAYER_COLOR = "#FFFFFF"
 
@@ -52,6 +52,17 @@ class DimStyle:
 
     text_height: float = 2.0
     arrow_size: float = 0.6
+
+
+def dim_text_height(dim: Dimension, style: DimStyle) -> float:
+    """Altura do texto de uma cota: a da PRÓPRIA cota quando ela tem uma
+    (ajustada no painel de Propriedades), senão a do desenho."""
+    return style.text_height if dim.text_height is None else dim.text_height
+
+
+def dim_arrow_size(dim: Dimension, style: DimStyle) -> float:
+    """Tamanho da marca de seta, mesma regra de `dim_text_height`."""
+    return style.arrow_size if dim.arrow_size is None else dim.arrow_size
 
 
 @dataclass

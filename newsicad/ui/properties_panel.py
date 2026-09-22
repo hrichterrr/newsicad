@@ -1,19 +1,37 @@
 """Painel de Propriedades (Ctrl+1): mostra a seleção atual organizada em
 seções "Geral" (tipo/camada/cor) + "Geometria" (campos específicos do tipo,
 ex.: centro/raio de um Circle) — mesmo padrão visual do Properties do
-AutoCAD (faixas escuras de seção + linhas rótulo/valor), em vez do texto
-corrido que o painel usava antes. Somente leitura nesta versão (edição
-inline dos valores fica para um marco futuro — ver README)."""
+AutoCAD (faixas escuras de seção + linhas rótulo/valor).
+
+A partir da 2.16 uma parte dos campos é EDITÁVEL ali mesmo: camada de
+qualquer objeto, conteúdo/altura/rotação/justificação/estilo de um texto,
+altura do texto, tamanho da seta e estilo de fonte de uma cota, raio de um
+círculo e escala/rotação de um bloco. Cada edição entra no undo como um
+passo (ver `_apply`). Antes o painel era só de leitura e mudar o tamanho do
+texto de UMA cota exigia trocar o DIMSTYLE do desenho inteiro — pedido do
+grupo do NewSicad em 22/09/2026. O resto dos campos (coordenadas, medida)
+segue de leitura."""
 
 from __future__ import annotations
 
 import math
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDockWidget, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
+from newsicad.core.document import dim_arrow_size, dim_text_height
 from newsicad.core.entities import (
+    TEXT_JUSTIFY_OPTIONS,
     Arc,
     BlockReference,
     Circle,
@@ -44,6 +62,14 @@ PANEL_STYLE = """
     QLabel#rowLabel { color: #8a8a8a; font-size: 11px; }
     QLabel#rowValue { color: #dedede; font-size: 11px; font-family: "Menlo"; }
     QLabel#emptyState { color: #6a6a6a; font-size: 11px; padding: 12px; }
+    QLineEdit#rowField, QComboBox#rowField {
+        background-color: #2a2a2a; color: #dedede; font-size: 11px;
+        border: 1px solid #3a3a3a; border-radius: 2px; padding: 1px 4px;
+    }
+    QLineEdit#rowField:focus, QComboBox#rowField:focus { border-color: #5a8ac0; }
+    QComboBox#rowField QAbstractItemView {
+        background-color: #2a2a2a; color: #dedede; selection-background-color: #3a5a7a;
+    }
 """
 
 
@@ -81,9 +107,9 @@ def _geometry_fields(entity: Entity) -> list[tuple[str, str]]:
     if isinstance(entity, (LWPolyline, Spline)):
         return [("Vértices", str(len(entity.points))), ("Fechada", "Sim" if entity.closed else "Não")]
     if isinstance(entity, Text):
+        # Conteúdo/altura/justificação estão na seção EDITÁVEL (ver
+        # `_editable_section`) — aqui fica só o que é de leitura.
         return [
-            ("Conteúdo", entity.content if len(entity.content) <= 24 else entity.content[:24] + "…"),
-            ("Altura", _fmt(entity.height)), ("Justificar", entity.justify),
             ("Inserção X", _fmt(entity.insertion_point.x)), ("Inserção Y", _fmt(entity.insertion_point.y)),
         ]
     if isinstance(entity, PointEntity):
@@ -118,6 +144,8 @@ class PropertiesPanel(QDockWidget):
     def __init__(self, window: "MainWindow") -> None:
         super().__init__("Properties", window)
         self.main_window = window
+        #: Trava de reentrada da edição inline — ver `_apply`.
+        self._applying = False
         self.setStyleSheet(PANEL_STYLE)
 
         self.body = QWidget()
@@ -147,8 +175,6 @@ class PropertiesPanel(QDockWidget):
         layout.setContentsMargins(8, 3, 8, 3)
         layout.setSpacing(0)
         inner = QWidget()
-        from PySide6.QtWidgets import QHBoxLayout
-
         inner_layout = QHBoxLayout(inner)
         inner_layout.setContentsMargins(0, 0, 0, 0)
         label = QLabel(label_text)
@@ -161,6 +187,61 @@ class PropertiesPanel(QDockWidget):
         inner_layout.addWidget(value)
         layout.addWidget(inner)
         self.body_layout.insertWidget(self.body_layout.count() - 1, row)
+
+    def _field_row(self, label_text: str, widget: QWidget) -> None:
+        """Linha rótulo/valor com um widget EDITÁVEL à direita, no mesmo
+        desenho das linhas de leitura."""
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(8, 2, 8, 2)
+        label = QLabel(label_text)
+        label.setObjectName("rowLabel")
+        widget.setObjectName("rowField")
+        widget.setMaximumWidth(110)
+        layout.addWidget(label)
+        layout.addStretch(1)
+        layout.addWidget(widget)
+        self.body_layout.insertWidget(self.body_layout.count() - 1, row)
+
+    def _text_row(self, label_text: str, value: str, commit) -> None:
+        field = QLineEdit(value)
+        field.editingFinished.connect(
+            lambda: self._commit_if_changed(field.text(), value, commit)
+        )
+        self._field_row(label_text, field)
+
+    def _number_row(self, label_text: str, value: float, commit, positive: bool = False) -> None:
+        field = QLineEdit(f"{value:g}")
+
+        def done() -> None:
+            try:
+                novo = float(field.text().replace(",", "."))
+            except ValueError:
+                field.setText(f"{value:g}")  # valor inválido: volta o de antes
+                return
+            if positive and novo <= 0:
+                field.setText(f"{value:g}")
+                return
+            if abs(novo - value) > 1e-12:
+                self._apply(lambda: commit(novo))
+
+        field.editingFinished.connect(done)
+        self._field_row(label_text, field)
+
+    def _combo_row(self, label_text: str, options: list[str], current: str, commit) -> None:
+        combo = QComboBox()
+        combo.addItems(options)
+        if current not in options:
+            combo.addItem(current)
+        combo.setCurrentText(current)
+        combo.activated.connect(
+            lambda _i: self._commit_if_changed(combo.currentText(), current, commit)
+        )
+        self._field_row(label_text, combo)
+
+    def _commit_if_changed(self, novo: str, antigo: str, commit) -> None:
+        if novo != antigo:
+            self._apply(lambda: commit(novo))
 
     def _clear(self) -> None:
         while self.body_layout.count() > 1:
@@ -190,7 +271,10 @@ class PropertiesPanel(QDockWidget):
         entity = entities[0]
         self._section("Geral")
         self._row("Tipo", type(entity).__name__)
-        self._row("Camada", entity.layer)
+        self._combo_row(
+            "Camada", sorted(self._document().layers), entity.layer,
+            lambda nome: setattr(entity, "layer", nome),
+        )
         self._row("Cor", entity.color or "ByLayer")
 
         fields = _geometry_fields(entity)
@@ -198,3 +282,87 @@ class PropertiesPanel(QDockWidget):
             self._section("Geometria")
             for label_text, value_text in fields:
                 self._row(label_text, value_text)
+
+        self._editable_section(entity)
+
+    # ------------------------------------------------------------------ #
+    # edição
+    # ------------------------------------------------------------------ #
+    def _document(self):
+        return self.main_window.document
+
+    def _apply(self, mutate) -> None:
+        """Um passo de edição do painel: entra no undo, muda a entidade e
+        redesenha. Mesmo caminho que qualquer comando usa (ver
+        MainWindow._delete_selected).
+
+        A remontagem do painel é ADIADA pro próximo ciclo de eventos: estamos
+        dentro do sinal de um campo que a remontagem destrói, e destruir o
+        widget que está emitindo trava a janela. O `_applying` protege contra
+        reentrada — remontar dispara `editingFinished` em campo que perde o
+        foco, e isso voltaria pra cá no meio da própria edição."""
+        if self._applying:
+            return
+        self._applying = True
+        window = self.main_window
+        try:
+            window.undo_stack.push()
+            mutate()
+            window.canvas.refresh_entities()
+            window.layer_dock.refresh()
+        finally:
+            self._applying = False
+        QTimer.singleShot(0, window._refresh_properties_panel)
+
+    def _editable_section(self, entity: Entity) -> None:
+        """Campos que o painel deixa MUDAR, por tipo de entidade.
+
+        Até a 2.15.10 o painel era só de leitura, e a única forma de mexer no
+        tamanho do texto de UMA cota era trocar o DIMSTYLE do desenho todo —
+        "precisamos alterar propriedades, como tipo e tamanho da fonte, tipo
+        de linha de marcação... por meio da opção Propriedades" (feedback do
+        grupo, 22/09/2026)."""
+        estilos = sorted(self._document().text_styles)
+
+        if isinstance(entity, Text):
+            self._section("Texto")
+            self._text_row("Conteúdo", entity.content, lambda v: setattr(entity, "content", v))
+            self._number_row("Altura", entity.height, lambda v: setattr(entity, "height", v), positive=True)
+            self._number_row(
+                "Rotação (°)", math.degrees(entity.rotation),
+                lambda v: setattr(entity, "rotation", math.radians(v)),
+            )
+            self._combo_row("Justificar", list(TEXT_JUSTIFY_OPTIONS), entity.justify,
+                            lambda v: setattr(entity, "justify", v))
+            self._combo_row("Estilo", estilos, entity.style or "Standard",
+                            lambda v: setattr(entity, "style", v))
+            return
+
+        if isinstance(entity, Dimension):
+            self._section("Cota")
+            style = self._document().dim_style
+            self._number_row(
+                "Altura do texto", dim_text_height(entity, style),
+                lambda v: setattr(entity, "text_height", v), positive=True,
+            )
+            self._number_row(
+                "Tamanho da seta", dim_arrow_size(entity, style),
+                lambda v: setattr(entity, "arrow_size", v), positive=True,
+            )
+            self._combo_row("Estilo do texto", estilos, entity.text_style or "Standard",
+                            lambda v: setattr(entity, "text_style", v))
+            return
+
+        if isinstance(entity, Circle):
+            self._section("Editar")
+            self._number_row("Raio", entity.radius, lambda v: setattr(entity, "radius", v), positive=True)
+            return
+
+        if isinstance(entity, BlockReference):
+            self._section("Editar")
+            sx, _sy = entity.scale_xy()
+            self._number_row("Escala", sx, lambda v: setattr(entity, "scale", v), positive=True)
+            self._number_row(
+                "Rotação (°)", math.degrees(entity.rotation),
+                lambda v: setattr(entity, "rotation", math.radians(v)),
+            )
