@@ -317,6 +317,17 @@ class Text(Entity):
     #: texto travado — ver README, campo vivo é um recurso só do NewSIcad).
     field_type: str | None = None
     field_ref: str | None = None
+    #: ATRIBUTO de bloco: quando este Text veio de um ATTRIB pendurado num
+    #: INSERT do .dxf, `attrib_tag` é o nome do campo ("TÍTULO", "ESCALA",
+    #: "CIRCUITO"...) e `attrib_owner` é o id da `BlockReference` que o
+    #: trouxe. O texto continua sendo uma entidade INDEPENDENTE (mover o
+    #: bloco não arrasta a etiqueta — limitação documentada no README), mas
+    #: com isto o painel de Propriedades consegue mostrar e deixar editar os
+    #: atributos ao selecionar o bloco, que é onde o usuário procura por eles
+    #: ("os blocos estão sendo extraídos sem suas respectivas propriedades",
+    #: feedback do grupo do NewSicad em 22/09/2026).
+    attrib_tag: str = ""
+    attrib_owner: str = ""
     #: STYLE: nome de uma entrada em `Document.text_styles` — controla a
     #: fonte usada no render (`CanvasView`); "Standard" sempre existe.
     style: str = "Standard"

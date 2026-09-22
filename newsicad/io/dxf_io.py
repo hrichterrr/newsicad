@@ -416,6 +416,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             # do bug). Alinhamento/baseline via get_placement — ver
             # newsicad/io/dxf_annotations.py:attrib_texts.
             for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
+                text_entity.attrib_owner = entity.id
                 document.add_entity(text_entity)
 
     # Pranchas (paper space): mesma leitura do Model acima, mas guardada à
@@ -454,6 +455,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             _store_in_layout(entity)
             if dxf_entity.dxftype() == "INSERT":
                 for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
+                    text_entity.attrib_owner = entity.id
                     _store_in_layout(text_entity)
         if layout_entities:
             document.layouts[layout.name] = layout_entities

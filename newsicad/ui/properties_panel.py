@@ -366,3 +366,22 @@ class PropertiesPanel(QDockWidget):
                 "Rotação (°)", math.degrees(entity.rotation),
                 lambda v: setattr(entity, "rotation", math.radians(v)),
             )
+            self._attribute_rows(entity)
+
+    def _attribute_rows(self, ref: BlockReference) -> None:
+        """Atributos do bloco (ESCALA, PAVIMENTO, TÍTULO, CIRCUITO...) —
+        os campos preenchíveis que vêm de um ATTRIB do .dwg. Eles entram no
+        desenho como textos independentes (ver `Text.attrib_tag`), então
+        antes não havia nada indicando que pertenciam ao bloco: selecionar o
+        símbolo não mostrava nem deixava mudar nenhum deles ("os blocos do
+        template estão sendo extraídos sem suas respectivas propriedades",
+        feedback do grupo em 22/09/2026)."""
+        attrs = [
+            e for e in self._document().entities.values()
+            if isinstance(e, Text) and e.attrib_owner == ref.id and e.attrib_tag
+        ]
+        if not attrs:
+            return
+        self._section("Atributos")
+        for attr in attrs:
+            self._text_row(attr.attrib_tag, attr.content, lambda v, a=attr: setattr(a, "content", v))

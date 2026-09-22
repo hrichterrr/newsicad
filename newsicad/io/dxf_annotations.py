@@ -375,7 +375,9 @@ def attrib_texts(
     dentro de uma definição de bloco — achado attrib-aninhado: as 225
     etiquetas da R04 moravam em INSERTs aninhados e nunca eram lidas).
     Simplificação documentada: o vínculo texto<->bloco não é modelado
-    (mover o bloco depois não arrasta a etiqueta junto). `apply_color` (o
+    (mover o bloco depois não arrasta a etiqueta junto); o que existe é o
+    `attrib_tag`/`attrib_owner` do Text, só pra o painel de Propriedades
+    conseguir listar os atributos ao selecionar o bloco. `apply_color` (o
     `_apply_dxf_color` de dxf_io) aplica a cor própria do ATTRIB."""
     for attrib in getattr(insert, "attribs", ()):
         try:
@@ -388,6 +390,9 @@ def attrib_texts(
             continue
         if apply_color is not None:
             apply_color(text, attrib)
+        # Nome do campo guardado no Text (ver Text.attrib_tag): é por ele que
+        # o painel de Propriedades mostra os atributos do bloco selecionado.
+        text.attrib_tag = str(attrib.dxf.get("tag", "") or "")
         yield text
 
 

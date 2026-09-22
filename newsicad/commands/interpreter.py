@@ -118,6 +118,11 @@ class CommandInterpreter:
         self.log: list[str] = CommandLog()
         self.last_command_name: str | None = None
         self.last_point: Point | None = None
+        #: Pontos já informados no comando ATUAL, na ordem. `last_point` é só
+        #: o último; quem precisa dos anteriores — o preview do ARC, que
+        #: desenha o arco de verdade passando pelos dois primeiros pontos e
+        #: pelo cursor — lê daqui. Zerado a cada comando.
+        self.command_points: list[Point] = []
         self._generator: Generator[Prompt, object, None] | None = None
         self._current_prompt: Prompt | None = None
 
@@ -149,6 +154,7 @@ class CommandInterpreter:
         self._generator = factory(self.context)
         self.last_command_name = name
         self.last_point = None
+        self.command_points = []
         return self._advance(None)
 
     def start_generator(self, generator: Generator[Prompt, object, None]) -> Prompt | None:
@@ -163,6 +169,7 @@ class CommandInterpreter:
         self.context.preselection_available = bool(self.context.selection.ids)
         self.last_command_name = None
         self.last_point = None
+        self.command_points = []
         return self._advance(None)
 
     def repeat_last(self) -> Prompt | None:
@@ -271,6 +278,7 @@ class CommandInterpreter:
             else:
                 if isinstance(value, Point):
                     self.last_point = value
+                    self.command_points.append(value)
                 prompt = self._generator.send(value)
         except StopIteration:
             self._generator = None

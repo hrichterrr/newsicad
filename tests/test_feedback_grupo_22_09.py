@@ -243,3 +243,80 @@ def test_altura_propria_da_cota_sobrevive_ao_salvar_e_reabrir(tmp_path):
     cota = next(e for e in lido.entities.values() if isinstance(e, Dimension))
     assert cota.text_height == pytest.approx(0.25)
     assert cota.arrow_size == pytest.approx(0.08)
+
+
+def test_preview_do_arc_mostra_o_arco_e_nao_uma_reta():
+    """Com os dois primeiros pontos dados, o arco que passa por eles e pelo
+    cursor já está determinado — o preview mostra ele, não a corda. Antes o
+    arco só aparecia no terceiro clique ("a marcação do ARC demora muito
+    para aparecer", 22/09/2026)."""
+    from PySide6.QtWidgets import QApplication
+
+    from newsicad.ui.canvas import CanvasView, cad_to_scene
+
+    QApplication.instance() or QApplication([])
+    interp, doc = make_interpreter()
+    canvas = CanvasView(doc, interp)
+    interp.start("ARC")
+    for ponto in (Point(0, 0), Point(5, 5)):
+        interp.submit_point(ponto)
+    canvas._update_preview(Point(10, 0))
+
+    caminho = canvas._preview_path
+    assert caminho is not None and not caminho.isEmpty()
+    # Um arco de raio 5 centrado em (5,0) passa por (5,5); uma reta de (0,0)
+    # a (10,0) não passaria nem perto.
+    topo = cad_to_scene(Point(5, 5))
+    assert any(
+        abs(caminho.elementAt(i).x - topo.x()) < 0.2 and abs(caminho.elementAt(i).y - topo.y()) < 0.2
+        for i in range(caminho.elementCount())
+    )
+
+
+def test_propriedades_mostra_e_edita_os_atributos_do_bloco(janela):
+    """Selecionar o bloco tem que mostrar os campos preenchíveis que vieram
+    do ATTRIB do .dwg (TÍTULO, ESCALA, CIRCUITO...) — feedback de
+    22/09/2026, "blocos extraídos sem suas respectivas propriedades"."""
+    doc = janela.document
+    doc.define_block("TABELA DE ICONS", [Line(start=Point(0, 0), end=Point(1, 0))])
+    ref = doc.add_entity(BlockReference(block_name="TABELA DE ICONS", insertion_point=Point(0, 0)))
+    etiqueta = doc.add_entity(
+        Text(insertion_point=Point(0, 0), content="ÁUDIO", height=0.25,
+             attrib_tag="TÍTULO", attrib_owner=ref.id)
+    )
+    janela.selection.set({ref.id})
+    janela._refresh_properties_panel()
+    campos = _linhas_editaveis(janela.properties_dock)
+    assert "TÍTULO" in campos
+
+    campo = campos["TÍTULO"]
+    campo.setText("VÍDEO")
+    campo.editingFinished.emit()
+    assert etiqueta.content == "VÍDEO"
+
+
+def test_atributo_do_dwg_chega_com_a_tag_e_o_dono():
+    """Na importação, cada ATTRIB vira um Text carimbado com o nome do campo
+    e o id do bloco que o trouxe."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf
+
+    doc = ezdxf.new(setup=True)
+    bloco = doc.blocks.new("TAG-CIRCUITO")
+    bloco.add_attdef("CIRCUITO", (0, 0), height=1.8)
+    msp = doc.modelspace()
+    insert = msp.add_blockref("TAG-CIRCUITO", (0, 0))
+    insert.add_auto_attribs({"CIRCUITO": "C-12"})
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        caminho = f"{tmp}/attr.dxf"
+        doc.saveas(caminho)
+        lido, _ = load_dxf(caminho)
+
+    ref = next(e for e in lido.entities.values() if isinstance(e, BlockReference))
+    etiqueta = next(e for e in lido.entities.values() if isinstance(e, Text))
+    assert etiqueta.content == "C-12"
+    assert etiqueta.attrib_tag == "CIRCUITO"
+    assert etiqueta.attrib_owner == ref.id

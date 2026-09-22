@@ -68,6 +68,7 @@ from newsicad.core.entities import (
 )
 from newsicad.core.fields import resolve_field_text
 from newsicad.core.geometry_ops import (
+    arc_from_3_points,
     as_intersectable_pieces,
     catmull_rom_bezier,
     dimension_geometry,
@@ -3032,6 +3033,33 @@ class CanvasView(QGraphicsView):
             # linha, não um retângulo, mesmo a entidade final sendo uma
             # LWPolyline fechada correta. Bug real reportado pelo grupo.
             path.addRect(QRectF(cad_to_scene(last), cad_to_scene(cursor_point)).normalized())
+        elif (
+            interp.last_command_name == "ARC"
+            and prompt is not None
+            and prompt.kind == "point"
+            and len(interp.command_points) >= 2
+        ):
+            # ARC de 3 pontos: com os dois primeiros já dados, o arco que
+            # passa por eles e pelo cursor JÁ está determinado — dá pra
+            # mostrar o arco de verdade em vez da linha reta genérica. Sem
+            # isto, nada do arco aparecia até o terceiro clique, o que o
+            # grupo relatou como "a marcação do ARC demora muito para
+            # aparecer" (22/09/2026).
+            p1, p2 = interp.command_points[0], interp.command_points[1]
+            try:
+                center, radius, start_angle, end_angle = arc_from_3_points(p1, p2, cursor_point)
+            except ValueError:
+                # Três pontos alinhados: ainda não existe arco, mostra a corda.
+                path.moveTo(cad_to_scene(p1))
+                path.lineTo(cad_to_scene(cursor_point))
+            else:
+                c = cad_to_scene(center)
+                rect = QRectF(c.x() - radius, c.y() - radius, 2 * radius, 2 * radius)
+                # Mesma convenção de ângulo de `_plain_entity_path`.
+                start_deg = math.degrees(start_angle)
+                sweep_deg = math.degrees((end_angle - start_angle) % (2 * math.pi))
+                path.arcMoveTo(rect, start_deg)
+                path.arcTo(rect, start_deg, sweep_deg)
         elif prompt is not None and prompt.kind == "point" and prompt.connect_to_last:
             path.moveTo(cad_to_scene(last))
             path.lineTo(cad_to_scene(cursor_point))
