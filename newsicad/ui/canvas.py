@@ -1070,6 +1070,13 @@ class CanvasView(QGraphicsView):
             fingerprint = (id(entity), entity.version, self._effective_color(entity))
             if isinstance(entity, BlockReference):
                 fingerprint += (defs_revision, layer_state_fp(entity.block_name))
+                # Os valores de atributo são filhos da instância, não
+                # entidades do desenho: editar um deles não bumpa a versão
+                # DA INSTÂNCIA e o item ficaria com o texto velho na tela.
+                # A versão de cada um entra na impressão digital — é uma
+                # tupla curta (quase nenhum bloco tem mais de 5 campos).
+                if entity.attributes:
+                    fingerprint += tuple(a.version for a in entity.attributes)
             item = items.get(entity_id)
             unchanged = item is not None and self._entity_fingerprints.get(entity_id) == fingerprint
             if unchanged and full:
@@ -1704,6 +1711,17 @@ class CanvasView(QGraphicsView):
             merged_item.setData(_BASE_COLOR_DATA_KEY, merged_color)
             group.addToGroup(merged_item)
 
+        # Valores de atributo desta instância (TÍTULO, ESCALA, CIRCUITO...):
+        # são filhos do grupo como qualquer entidade da definição — já estão
+        # no referencial do bloco, então herdam posição/rotação/escala da
+        # inserção sem nenhum ajuste (ver BlockReference.attributes). Não
+        # entram no cache de geometria por definição: o valor é POR
+        # instância, e duas instâncias do mesmo bloco têm textos diferentes.
+        for attribute in entity.attributes:
+            if not self._block_child_visible(attribute, insert_layer):
+                continue
+            group.addToGroup(self._create_item(attribute, self._effective_color(attribute, child_ctx)))
+
         pos = cad_to_scene(entity.insertion_point)
         group.setPos(pos)
         # setRotation+setScale só cobrem escala uniforme; escala por eixo
@@ -1982,7 +2000,9 @@ class CanvasView(QGraphicsView):
         back_scale = (abs(sx) + abs(sy)) / 2
 
         best: float | None = None
-        for child in self.document.block_definitions.get(entity.block_name, []):
+        filhos = list(self.document.block_definitions.get(entity.block_name, []))
+        filhos.extend(entity.attributes)  # a etiqueta faz parte do bloco
+        for child in filhos:
             if isinstance(child, BlockReference):
                 d = self._distance_to_block_reference(local, child, _depth + 1)
             else:
@@ -2108,7 +2128,9 @@ class CanvasView(QGraphicsView):
         if _depth >= _MAX_BLOCK_NESTING:
             return QRectF()
         local_rect: QRectF | None = None
-        for child in self.document.block_definitions.get(entity.block_name, []):
+        filhos = list(self.document.block_definitions.get(entity.block_name, []))
+        filhos.extend(entity.attributes)  # a etiqueta conta na extensão
+        for child in filhos:
             child_rect = (
                 self._block_reference_bbox_scene(child, _depth + 1)
                 if isinstance(child, BlockReference)

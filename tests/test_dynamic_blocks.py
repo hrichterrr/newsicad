@@ -140,10 +140,17 @@ def test_attribs_become_text_and_attdef_is_not_counted(tmp_path):
 
     document, skipped = load_dxf(path)
     assert skipped == 0  # ATTDEF não conta mais como "não suportada"
-    texts = [e for e in document.all_entities() if isinstance(e, Text)]
-    assert any(t.content == "TOMADA-07" for t in texts)
-    tag = next(t for t in texts if t.content == "TOMADA-07")
-    assert tag.insertion_point.as_tuple() == (10, 11)
+    # A etiqueta é filha da INSTÂNCIA (BlockReference.attributes), não um
+    # texto solto no desenho — é o que a amarra ao bloco ao mover/girar.
+    assert not [e for e in document.all_entities() if isinstance(e, Text)]
+    ref = next(e for e in document.all_entities() if isinstance(e, BlockReference))
+    tag = ref.attributes[0]
+    assert tag.content == "TOMADA-07"
+    assert tag.attrib_tag == "TAG"
+    # guardada no referencial do bloco: (10,11) no mundo - (10,10) do insert
+    assert tag.insertion_point.as_tuple() == (0, 1)
+    # e o molde do campo voltou junto
+    assert [a.tag for a in document.block_attdefs["Etiquetado"]] == ["TAG"]
 
 
 # ---------------------------------------------------------------------- #

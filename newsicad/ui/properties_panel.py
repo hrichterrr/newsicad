@@ -77,6 +77,16 @@ def _fmt(value: float) -> str:
     return f"{value:.2f}"
 
 
+def _set_attribute(ref: BlockReference, attribute: Text, value: str) -> None:
+    """Muda o valor de um atributo e avisa a instância que ela mudou.
+
+    A etiqueta é filha do bloco, não uma entidade do desenho: sem o `touch`
+    a instância não entra no registro de alterados e a tela continuaria
+    mostrando o texto velho até algo mais forçar a repintura."""
+    attribute.content = value
+    ref.touch()
+
+
 def _geometry_fields(entity: Entity) -> list[tuple[str, str]]:
     if isinstance(entity, Line):
         return [
@@ -370,18 +380,15 @@ class PropertiesPanel(QDockWidget):
 
     def _attribute_rows(self, ref: BlockReference) -> None:
         """Atributos do bloco (ESCALA, PAVIMENTO, TÍTULO, CIRCUITO...) —
-        os campos preenchíveis que vêm de um ATTRIB do .dwg. Eles entram no
-        desenho como textos independentes (ver `Text.attrib_tag`), então
-        antes não havia nada indicando que pertenciam ao bloco: selecionar o
+        os campos preenchíveis que vêm de um ATTRIB do .dwg e que moram
+        dentro da própria instância (ver `BlockReference.attributes`). Antes
+        não havia nada indicando que pertenciam ao bloco: selecionar o
         símbolo não mostrava nem deixava mudar nenhum deles ("os blocos do
         template estão sendo extraídos sem suas respectivas propriedades",
         feedback do grupo em 22/09/2026)."""
-        attrs = [
-            e for e in self._document().entities.values()
-            if isinstance(e, Text) and e.attrib_owner == ref.id and e.attrib_tag
-        ]
+        attrs = [a for a in ref.attributes if a.attrib_tag]
         if not attrs:
             return
         self._section("Atributos")
         for attr in attrs:
-            self._text_row(attr.attrib_tag, attr.content, lambda v, a=attr: setattr(a, "content", v))
+            self._text_row(attr.attrib_tag, attr.content, lambda v, a=attr: _set_attribute(ref, a, v))

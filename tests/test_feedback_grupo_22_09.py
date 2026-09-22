@@ -6,6 +6,7 @@ Propriedades editável."""
 
 from __future__ import annotations
 
+import math
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -279,10 +280,9 @@ def test_propriedades_mostra_e_edita_os_atributos_do_bloco(janela):
     22/09/2026, "blocos extraídos sem suas respectivas propriedades"."""
     doc = janela.document
     doc.define_block("TABELA DE ICONS", [Line(start=Point(0, 0), end=Point(1, 0))])
-    ref = doc.add_entity(BlockReference(block_name="TABELA DE ICONS", insertion_point=Point(0, 0)))
-    etiqueta = doc.add_entity(
-        Text(insertion_point=Point(0, 0), content="ÁUDIO", height=0.25,
-             attrib_tag="TÍTULO", attrib_owner=ref.id)
+    etiqueta = Text(insertion_point=Point(0, 0), content="ÁUDIO", height=0.25, attrib_tag="TÍTULO")
+    ref = doc.add_entity(
+        BlockReference(block_name="TABELA DE ICONS", insertion_point=Point(0, 0), attributes=[etiqueta])
     )
     janela.selection.set({ref.id})
     janela._refresh_properties_panel()
@@ -316,10 +316,10 @@ def test_atributo_do_dwg_chega_com_a_tag_e_o_dono():
         lido, _ = load_dxf(caminho)
 
     ref = next(e for e in lido.entities.values() if isinstance(e, BlockReference))
-    etiqueta = next(e for e in lido.entities.values() if isinstance(e, Text))
+    assert not [e for e in lido.entities.values() if isinstance(e, Text)]  # não solta no desenho
+    etiqueta = ref.attributes[0]
     assert etiqueta.content == "C-12"
     assert etiqueta.attrib_tag == "CIRCUITO"
-    assert etiqueta.attrib_owner == ref.id
 
 
 # --------------------------------------------- atributo de volta no .dxf
@@ -349,7 +349,8 @@ def test_atributo_editado_volta_como_attrib_de_verdade(tmp_path):
     _dwg_com_atributo(str(origem))
     doc, _ = load_dxf(origem)
 
-    etiqueta = next(e for e in doc.entities.values() if isinstance(e, Text) and e.attrib_tag)
+    ref = next(e for e in doc.entities.values() if isinstance(e, BlockReference))
+    etiqueta = ref.attributes[0]
     assert etiqueta.content == "ÁUDIO"
     etiqueta.content = "VÍDEO"  # a edição que o painel/duplo clique faz
 
@@ -386,9 +387,9 @@ def test_molde_do_atributo_volta_para_dentro_do_bloco(tmp_path):
     assert [(a.dxf.tag, a.dxf.prompt) for a in attdefs] == [("TÍTULO", "Nome da seção")]
 
 
-def test_atributo_sem_o_bloco_volta_a_ser_texto_comum(tmp_path):
-    """Apagou o bloco (ou explodiu) e sobrou a etiqueta: ela é texto comum
-    mesmo, e é assim que tem que ser gravada."""
+def test_apagar_o_bloco_leva_a_etiqueta_junto(tmp_path):
+    """A etiqueta é filha da instância: apagar o bloco apaga o campo com
+    ele, em vez de deixar um texto órfão flutuando na planta."""
     import ezdxf
 
     from newsicad.io.dxf_io import load_dxf, save_dxf
@@ -402,6 +403,94 @@ def test_atributo_sem_o_bloco_volta_a_ser_texto_comum(tmp_path):
     saida = tmp_path / "saida.dxf"
     save_dxf(doc, saida)
     gravado = ezdxf.readfile(saida)
-    textos = [e for e in gravado.modelspace() if e.dxftype() in ("TEXT", "MTEXT")]
-    assert len(textos) == 1
-    assert "ÁUDIO" in textos[0].plain_text()
+    # Sem o bloco, a etiqueta vai junto — ela é parte dele, não um texto solto.
+    assert not [e for e in gravado.modelspace() if e.dxftype() in ("TEXT", "MTEXT")]
+    assert not [e for e in gravado.modelspace() if e.dxftype() == "INSERT"]
+
+
+# ------------------------------------- etiqueta amarrada de verdade no bloco
+def _doc_com_bloco_atributado() -> tuple[Document, BlockReference, Text]:
+    doc = Document()
+    doc.define_block("TAG", [Line(start=Point(0, 0), end=Point(2, 0))])
+    etiqueta = Text(insertion_point=Point(1, 1), content="C-12", height=0.5, attrib_tag="CIRCUITO")
+    ref = doc.add_entity(BlockReference(block_name="TAG", insertion_point=Point(10, 20), attributes=[etiqueta]))
+    return doc, ref, etiqueta
+
+
+def test_mover_o_bloco_leva_a_etiqueta():
+    """O pedido do Hamilton em 22/09/2026: amarrar a etiqueta no bloco. A
+    etiqueta vive em coordenadas DO BLOCO, então mover a instância já a
+    carrega — nenhum comando precisa saber que ela existe."""
+    from newsicad.core.geometry_ops import attribute_to_world, translate_entity
+
+    doc, ref, etiqueta = _doc_com_bloco_atributado()
+    antes = attribute_to_world(etiqueta, ref)
+    assert antes.insertion_point.as_tuple() == (11, 21)
+
+    translate_entity(ref, 5, -3)
+    depois = attribute_to_world(etiqueta, ref)
+    assert depois.insertion_point.as_tuple() == (16, 18)
+    # e a etiqueta não é uma entidade solta no desenho
+    assert not [e for e in doc.entities.values() if isinstance(e, Text)]
+
+
+def test_girar_e_escalar_o_bloco_levam_a_etiqueta():
+    from newsicad.core.geometry_ops import attribute_to_world, rotate_entity, scale_entity
+
+    doc, ref, etiqueta = _doc_com_bloco_atributado()
+    rotate_entity(ref, Point(10, 20), math.pi / 2)
+    mundo = attribute_to_world(etiqueta, ref)
+    # (1,1) local girado 90° em torno do ponto de inserção -> (-1, 1)
+    assert mundo.insertion_point.x == pytest.approx(9)
+    assert mundo.insertion_point.y == pytest.approx(21)
+    assert mundo.rotation == pytest.approx(math.pi / 2)
+
+    doc2, ref2, etiqueta2 = _doc_com_bloco_atributado()
+    scale_entity(ref2, Point(10, 20), 2.0)
+    mundo2 = attribute_to_world(etiqueta2, ref2)
+    assert mundo2.insertion_point.as_tuple() == (12, 22)
+    assert mundo2.height == pytest.approx(1.0)  # 0,5 x 2
+
+
+def test_copiar_o_bloco_duplica_a_etiqueta_com_id_proprio():
+    from newsicad.core.geometry_ops import clone_entity, translate_entity
+
+    _doc, ref, etiqueta = _doc_com_bloco_atributado()
+    copia = clone_entity(ref)
+    translate_entity(copia, 100, 0)
+    assert copia.attributes[0].content == "C-12"
+    assert copia.attributes[0].id != etiqueta.id
+    copia.attributes[0].content = "C-99"
+    assert etiqueta.content == "C-12"  # editar a cópia não mexe no original
+
+
+def test_etiqueta_sobrevive_a_mover_salvar_e_reabrir(tmp_path):
+    """O caso completo: abre, move o bloco, salva e reabre — a etiqueta tem
+    que estar na posição nova, ainda como ATTRIB."""
+    import ezdxf
+
+    from newsicad.core.geometry_ops import translate_entity
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo(str(origem))
+    doc, _ = load_dxf(origem)
+    ref = next(e for e in doc.entities.values() if isinstance(e, BlockReference))
+    translate_entity(ref, 50, 30)
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+
+    gravado = ezdxf.readfile(saida)
+    insert = next(e for e in gravado.modelspace() if e.dxftype() == "INSERT")
+    attrib = insert.attribs[0]
+    assert attrib.dxf.tag == "TÍTULO"
+    # ATTDEF estava em (1,1) e o bloco foi de (0,0) para (50,30)
+    assert attrib.dxf.insert.x == pytest.approx(51)
+    assert attrib.dxf.insert.y == pytest.approx(31)
+
+    de_novo, _ = load_dxf(saida)
+    ref2 = next(e for e in de_novo.entities.values() if isinstance(e, BlockReference))
+    assert ref2.insertion_point.as_tuple() == (50, 30)
+    assert ref2.attributes[0].insertion_point.x == pytest.approx(1)
+    assert ref2.attributes[0].insertion_point.y == pytest.approx(1)

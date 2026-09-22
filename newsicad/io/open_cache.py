@@ -32,10 +32,11 @@ from typing import Any
 # corrigiu o bug dos blocos dinâmicos empilhados (ver dxf_io._is_invisible) —
 # sem este bump, quem já tinha aberto um arquivo problemático continuaria
 # vendo os ícones "explodidos" do cache até o arquivo mudar de novo.
-# "7": Document ganhou `block_attdefs` (moldes de atributo por bloco,
-# 22/09/2026) e Text ganhou `attrib_tag`/`attrib_owner` — sem o bump, uma
-# entrada antiga volta sem os moldes e gravar o arquivo perderia os campos
-# preenchíveis do bloco, que é justamente o que essa leva veio consertar.
+# "7": Document ganhou `block_attdefs` (moldes de atributo por bloco) e
+# BlockReference ganhou `attributes` (22/09/2026) — sem o bump, uma entrada
+# antiga volta sem os moldes e sem as etiquetas dentro da instância, e
+# gravar o arquivo perderia os campos preenchíveis do bloco, que é
+# justamente o que essa leva veio consertar.
 CACHE_VERSION = "7"
 MAX_ENTRIES = 20
 

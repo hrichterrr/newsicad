@@ -84,11 +84,20 @@ def _select_text(ctx: CommandContext, message: str) -> Generator[Prompt, object,
 
 
 def annotation_texts(ctx: CommandContext, ref: BlockReference) -> list[Text]:
-    """Os textos de dentro de uma anotação importada (multileader, leader,
-    cota ou tabela do AutoCAD, que a leitura empacota num bloco anônimo —
-    ver `is_annotation_block`). São os objetos vivos da definição do bloco:
-    mexer no `content` deles muda o desenho."""
-    if not isinstance(ref, BlockReference) or not is_annotation_block(ref.block_name):
+    """Os textos editáveis de um bloco selecionado, em duas situações:
+
+    - **anotação importada** (multileader, leader, cota ou tabela do
+      AutoCAD, que a leitura empacota num bloco anônimo — ver
+      `is_annotation_block`): são os objetos vivos da definição do bloco;
+    - **atributo de bloco** (TÍTULO, ESCALA, CIRCUITO...): são os valores
+      que moram na própria instância (`BlockReference.attributes`).
+
+    Nos dois casos mexer no `content` muda o desenho."""
+    if not isinstance(ref, BlockReference):
+        return []
+    if ref.attributes:
+        return [a for a in ref.attributes if a.content.strip()]
+    if not is_annotation_block(ref.block_name):
         return []
     parts = ctx.document.get_block_definition(ref.block_name)
     return [p for p in parts if isinstance(p, Text) and p.content.strip()]
@@ -110,8 +119,13 @@ def _edit_annotation_block(
         target.content = content
         changed = True
     if changed:
-        # Rebumpa a revisão das definições pra tela redesenhar a anotação.
-        ctx.document.define_block(ref.block_name, ctx.document.get_block_definition(ref.block_name))
+        if ref.attributes:
+            # Etiqueta é filha da instância: basta avisar que ela mudou.
+            ref.touch()
+        else:
+            # Anotação importada: o texto vive na DEFINIÇÃO do bloco, então
+            # quem precisa ser rebumpado é a revisão das definições.
+            ctx.document.define_block(ref.block_name, ctx.document.get_block_definition(ref.block_name))
 
 
 def edit_text_command(ctx: CommandContext) -> Generator[Prompt, object, None]:

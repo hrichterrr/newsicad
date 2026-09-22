@@ -322,13 +322,22 @@ def test_attrib_of_nested_insert_is_promoted_inside_parent_block(tmp_path):
 
     document, _ = load_dxf(_save_ezdxf(doc, tmp_path))
 
-    texts = _texts(document.block_definitions["A"])
+    # A etiqueta do INSERT aninhado fica dentro da instância aninhada, no
+    # referencial DELA — o insert "B" está em (1,1) dentro do bloco "A".
+    aninhado = next(e for e in document.block_definitions["A"] if isinstance(e, BlockReference))
+    texts = aninhado.attributes
     assert [t.content for t in texts] == ["T-01"]
     assert texts[0].justify == "BL"
-    assert (texts[0].insertion_point.x, texts[0].insertion_point.y) == (1.0, 1.0)
+    assert (texts[0].insertion_point.x, texts[0].insertion_point.y) == (0.0, 0.0)
     assert math.isclose(texts[0].height, 0.25)
-    # o ATTRIB do INSERT de modelspace continua sendo promovido a Text solto
+    # e o ATTRIB de um INSERT de modelspace, idem — na instância dele
     top = doc.modelspace().add_blockref("B", (3, 3))
     top.add_auto_attribs({"X": "T-02"})
     document, _ = load_dxf(_save_ezdxf(doc, tmp_path, "msp.dxf"))
-    assert "T-02" in [t.content for t in _texts(document.all_entities())]
+    valores = [
+        a.content
+        for e in document.all_entities()
+        if isinstance(e, BlockReference)
+        for a in e.attributes
+    ]
+    assert "T-02" in valores

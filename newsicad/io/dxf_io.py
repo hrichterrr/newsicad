@@ -47,7 +47,7 @@ from newsicad.core.entities import (
     Text,
     XLine,
 )
-from newsicad.core.geometry_ops import translate_entity
+from newsicad.core.geometry_ops import attribute_to_block_local, attribute_to_world, translate_entity
 from newsicad.io import dxf_fills
 
 # Mapeamento justify <-> attachment_point do MTEXT: mora em
@@ -388,9 +388,10 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 # ATTRIB de INSERT ANINHADO (bloco dentro de bloco): as
                 # coordenadas já estão no espaço deste bloco pai — vira
                 # Text aqui mesmo (achado attrib-aninhado; ver attrib_texts).
-                for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
-                    text_entity.attrib_owner = entity.id
-                    block_entities.append(text_entity)
+                entity.attributes = [
+                    attribute_to_block_local(text_entity, entity)
+                    for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color)
+                ]
         # O modelo do NewSIcad assume ponto base do bloco na origem (os
         # filhos ficam em coordenadas relativas ao ponto de inserção); um
         # BLOCK com base_point ≠ 0 (2 deles num .dwg real de 2026-09-01)
@@ -449,9 +450,12 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             # (auditoria 2026-08-28, 139 ATTRIBs invisíveis no arquivo real
             # do bug). Alinhamento/baseline via get_placement — ver
             # newsicad/io/dxf_annotations.py:attrib_texts.
-            for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
-                text_entity.attrib_owner = entity.id
-                document.add_entity(text_entity)
+            # Os valores de atributo entram DENTRO da instância, no
+            # referencial do bloco — ver BlockReference.attributes.
+            entity.attributes = [
+                attribute_to_block_local(text_entity, entity)
+                for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color)
+            ]
 
     # Pranchas (paper space): mesma leitura do Model acima, mas guardada à
     # parte em `document.layouts[nome]` — camadas continuam sendo do
@@ -488,9 +492,10 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             _apply_dxf_color(entity, dxf_entity)
             _store_in_layout(entity)
             if dxf_entity.dxftype() == "INSERT":
-                for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
-                    text_entity.attrib_owner = entity.id
-                    _store_in_layout(text_entity)
+                entity.attributes = [
+                    attribute_to_block_local(text_entity, entity)
+                    for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color)
+                ]
         if layout_entities:
             document.layouts[layout.name] = layout_entities
 
@@ -914,15 +919,11 @@ def save_dxf(document: Document, path: str | Path) -> None:
     for name, entities in document.block_definitions.items():
         block_layout = dxf_doc.blocks.get(dxf_block_names[name])
         _write_attdefs(block_layout, document.block_attdefs.get(name, []))
-        # Um bloco pode conter outro bloco COM atributos (achado
-        # attrib-aninhado) — mesma separação de um espaço qualquer.
-        restantes, attribs_by_owner = split_attribute_texts(entities)
-        for entity in restantes:
-            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style, attribs_by_owner)
+        for entity in entities:
+            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style)
 
-    restantes, attribs_by_owner = split_attribute_texts(document.all_entities())
-    for entity in restantes:
-        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style, attribs_by_owner)
+    for entity in document.all_entities():
+        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style)
 
     # Pranchas (paper space): grava cada uma de volta no layout de mesmo
     # nome (cria se não existir — ex.: um .dwg de arquiteto com pranchas
@@ -934,9 +935,8 @@ def save_dxf(document: Document, path: str | Path) -> None:
     existing_layout_names = set(dxf_doc.layouts.names())
     for name, entities in document.layouts.items():
         layout = dxf_doc.layouts.get(name) if name in existing_layout_names else dxf_doc.layouts.new(name)
-        restantes, attribs_by_owner = split_attribute_texts(list(entities.values()))
-        for entity in restantes:
-            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style, attribs_by_owner)
+        for entity in entities.values():
+            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style)
     if document.layouts and "Layout1" not in document.layouts and "Layout1" in dxf_doc.layouts.names():
         dxf_doc.layouts.delete("Layout1")
 
@@ -968,34 +968,6 @@ def _apply_color_attribs(dxfattribs: dict, entity: Entity) -> None:
         dxfattribs["color"] = aci
 
 
-def split_attribute_texts(entities: list[Entity]) -> tuple[list[Entity], dict[str, list[Text]]]:
-    """Separa, de uma lista de entidades de UM espaço (modelspace, uma
-    prancha ou o corpo de uma definição de bloco), os textos que são valor
-    de ATRIBUTO de um bloco presente nessa mesma lista.
-
-    Devolve (o que se grava normalmente, {id da BlockReference: [Text]}).
-    Um texto de atributo cujo bloco não está aqui — porque foi apagado, ou
-    porque o bloco foi explodido — perde o vínculo e volta a ser texto
-    comum, que é o que ele de fato virou."""
-    ref_ids = {e.id for e in entities if isinstance(e, BlockReference)}
-    by_owner: dict[str, list[Text]] = {}
-    restantes: list[Entity] = []
-    for entity in entities:
-        if (
-            isinstance(entity, Text)
-            and entity.attrib_tag
-            and entity.attrib_owner in ref_ids
-            # ATTRIB é TEXT-like, de uma linha só. Conteúdo com quebra de
-            # linha (o usuário editou e escreveu duas linhas) não cabe: vai
-            # como MTEXT comum, que preserva o texto, em vez de ser truncado.
-            and "\n" not in entity.content
-        ):
-            by_owner.setdefault(entity.attrib_owner, []).append(entity)
-        else:
-            restantes.append(entity)
-    return restantes, by_owner
-
-
 def _write_attdefs(block_layout, attdefs: list[AttributeDef]) -> None:
     """Devolve os moldes de atributo (ATTDEF) pra dentro da definição do
     bloco — ver AttributeDef em core/entities.py."""
@@ -1017,15 +989,24 @@ def _write_attdefs(block_layout, attdefs: list[AttributeDef]) -> None:
             escrito.set_placement(ponto, align=alinhamento)
 
 
-def _write_attribs(insert, textos: list[Text]) -> None:
-    """Pendura os valores de atributo no INSERT como ATTRIB de verdade, em
-    vez de gravá-los como TEXT solto ao lado do bloco.
+def _write_attribs(insert, ref: BlockReference) -> None:
+    """Pendura os valores de atributo da instância no INSERT como ATTRIB de
+    verdade, em vez de gravá-los como TEXT solto ao lado do bloco.
 
     Até a 2.16.0 todo atributo saía como texto comum: o campo funcionava
     dentro do NewSIcad, mas ao reabrir no AutoCAD deixava de ser um campo
     preenchível — o "Editar atributos" do bloco vinha vazio e a etiqueta
-    virava um texto qualquer por cima do símbolo."""
-    for texto in textos:
+    virava um texto qualquer por cima do símbolo. As coordenadas voltam do
+    referencial do bloco pro mundo, que é como o ATTRIB é sempre gravado.
+
+    Conteúdo com quebra de linha não cabe num ATTRIB (que é TEXT-like, de
+    uma linha só): esse sai como MTEXT comum no mesmo lugar, preservando o
+    texto em vez de truncá-lo."""
+    for local in ref.attributes:
+        texto = attribute_to_world(local, ref)
+        if "\n" in local.content:
+            _to_dxf_entity(insert.get_layout(), texto)
+            continue
         ponto = (texto.insertion_point.x, texto.insertion_point.y)
         dxfattribs = {
             "layer": texto.layer,
@@ -1035,7 +1016,7 @@ def _write_attribs(insert, textos: list[Text]) -> None:
             "width": max(texto.width_factor, 0.01),
         }
         _apply_color_attribs(dxfattribs, texto)
-        escrito = insert.add_attrib(tag=texto.attrib_tag, text=texto.content, insert=ponto, dxfattribs=dxfattribs)
+        escrito = insert.add_attrib(tag=local.attrib_tag, text=texto.content, insert=ponto, dxfattribs=dxfattribs)
         alinhamento = _JUSTIFY_TO_ALIGN.get(texto.justify)
         if alinhamento is not None and alinhamento is not TextEntityAlignment.LEFT:
             escrito.set_placement(ponto, align=alinhamento)
@@ -1046,12 +1027,10 @@ def _to_dxf_entity(
     entity: Entity,
     block_names: dict[str, str] | None = None,
     dim_style: DimStyle | None = None,
-    attribs_by_owner: dict[str, list[Text]] | None = None,
 ) -> None:
     """`block_names`: nome interno -> nome gravado (ver save_dxf; None =
     mesmo nome). `dim_style`: tamanho de texto/seta das cotas (None =
-    padrão DimStyle()). `attribs_by_owner`: valores de atributo a pendurar
-    em cada BlockReference, de `split_attribute_texts`."""
+    padrão DimStyle())."""
     attribs = {"layer": entity.layer}
     _apply_color_attribs(attribs, entity)
 
@@ -1132,9 +1111,8 @@ def _to_dxf_entity(
         insert = msp.add_blockref(
             dxf_name, (entity.insertion_point.x, entity.insertion_point.y), dxfattribs=insert_attribs
         )
-        valores = (attribs_by_owner or {}).get(entity.id)
-        if valores:
-            _write_attribs(insert, valores)
+        if entity.attributes:
+            _write_attribs(insert, entity)
         return
 
     if isinstance(entity, ImageReference):

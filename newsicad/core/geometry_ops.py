@@ -135,9 +135,56 @@ def catmull_rom_bezier(points: list[Point], closed: bool) -> list[tuple[Point, P
 # ---------------------------------------------------------------------- #
 # clonagem
 # ---------------------------------------------------------------------- #
+def attribute_to_block_local(text: Text, ref: BlockReference) -> Text:
+    """Um valor de atributo lido do `.dxf` (coordenadas do MUNDO, como todo
+    ATTRIB) convertido para o referencial LOCAL do bloco — o mesmo em que os
+    filhos de `Document.block_definitions` vivem.
+
+    É o que permite guardar a etiqueta dentro da instância
+    (`BlockReference.attributes`): a partir daí ela é desenhada, clicada,
+    medida e transformada pela própria transformação de inserção, sem que
+    mover/girar/escalar precise mexer nela uma a uma."""
+    sx, sy = ref.scale_xy()
+    offset = Point(
+        text.insertion_point.x - ref.insertion_point.x,
+        text.insertion_point.y - ref.insertion_point.y,
+    )
+    unrotated = rotate_point(offset, Point(0, 0), -ref.rotation)
+    local = copy.deepcopy(text)
+    local.id = _new_id()
+    local.insertion_point = Point(unrotated.x / sx, unrotated.y / sy)
+    local.rotation = text.rotation - ref.rotation
+    # Altura é um escalar: com escala por eixo (bloco dinâmico esticado) usa
+    # a média dos módulos, a mesma aproximação documentada do hit-test.
+    local.height = text.height / max((abs(sx) + abs(sy)) / 2, 1e-12)
+    return local
+
+
+def attribute_to_world(text: Text, ref: BlockReference) -> Text:
+    """O caminho inverso de `attribute_to_block_local`: a etiqueta guardada
+    na instância de volta em coordenadas do mundo, que é como o ATTRIB do
+    `.dxf` sempre é gravado."""
+    sx, sy = ref.scale_xy()
+    escalado = Point(text.insertion_point.x * sx, text.insertion_point.y * sy)
+    girado = rotate_point(escalado, Point(0, 0), ref.rotation)
+    world = copy.deepcopy(text)
+    world.id = _new_id()
+    world.insertion_point = Point(
+        girado.x + ref.insertion_point.x, girado.y + ref.insertion_point.y
+    )
+    world.rotation = text.rotation + ref.rotation
+    world.height = text.height * max((abs(sx) + abs(sy)) / 2, 1e-12)
+    return world
+
+
 def clone_entity(entity: Entity) -> Entity:
     clone = copy.deepcopy(entity)
     clone.id = _new_id()
+    # Os valores de atributo de um bloco são entidades de verdade dentro da
+    # instância (ver BlockReference.attributes) — a cópia precisa de ids
+    # próprios, senão duas instâncias compartilham a identidade da etiqueta.
+    for attribute in getattr(clone, "attributes", ()):
+        attribute.id = _new_id()
     return clone
 
 

@@ -264,6 +264,18 @@ class BlockReference(Entity):
 
     block_name: str = ""
     insertion_point: Point = field(default_factory=lambda: Point(0, 0))
+    #: Valores de atributo (ATTRIB) DESTA instância — os campos preenchíveis
+    #: que a definição declara em `Document.block_attdefs` (TÍTULO, ESCALA,
+    #: CIRCUITO...). Ficam aqui, e não soltos no desenho, em coordenadas
+    #: RELATIVAS ao ponto base do bloco, exatamente como os filhos de uma
+    #: definição: assim a etiqueta é desenhada, clicada, medida, movida,
+    #: girada, escalada, copiada e apagada JUNTO com a instância, sem que
+    #: nenhum comando precise saber que ela existe. Até a 2.16.1 o valor era
+    #: uma entidade independente amarrada por id, e mover o bloco deixava a
+    #: etiqueta para trás (feedback do grupo do NewSicad, 22/09/2026). No
+    #: `.dxf` as coordenadas de um ATTRIB são absolutas — a conversão nos
+    #: dois sentidos mora em newsicad/io/dxf_annotations.py.
+    attributes: list["Text"] = field(default_factory=list)
     scale: float = 1.0
     #: Escala no eixo Y quando DIFERENTE da escala X (`scale`). `None` =
     #: uniforme (o caso de longe mais comum, e o único que os comandos do
@@ -345,17 +357,12 @@ class Text(Entity):
     #: texto travado — ver README, campo vivo é um recurso só do NewSIcad).
     field_type: str | None = None
     field_ref: str | None = None
-    #: ATRIBUTO de bloco: quando este Text veio de um ATTRIB pendurado num
-    #: INSERT do .dxf, `attrib_tag` é o nome do campo ("TÍTULO", "ESCALA",
-    #: "CIRCUITO"...) e `attrib_owner` é o id da `BlockReference` que o
-    #: trouxe. O texto continua sendo uma entidade INDEPENDENTE (mover o
-    #: bloco não arrasta a etiqueta — limitação documentada no README), mas
-    #: com isto o painel de Propriedades consegue mostrar e deixar editar os
-    #: atributos ao selecionar o bloco, que é onde o usuário procura por eles
-    #: ("os blocos estão sendo extraídos sem suas respectivas propriedades",
-    #: feedback do grupo do NewSicad em 22/09/2026).
+    #: ATRIBUTO de bloco: nome do campo ("TÍTULO", "ESCALA", "CIRCUITO"...)
+    #: quando este Text é o VALOR de um atributo. Preenchido, o Text mora em
+    #: `BlockReference.attributes` e não no desenho; vazio, é um texto comum.
+    #: Um atributo que perdeu o bloco (bloco apagado) guarda a tag e vira
+    #: texto comum, que é o que ele de fato virou.
     attrib_tag: str = ""
-    attrib_owner: str = ""
     #: STYLE: nome de uma entrada em `Document.text_styles` — controla a
     #: fonte usada no render (`CanvasView`); "Standard" sempre existe.
     style: str = "Standard"

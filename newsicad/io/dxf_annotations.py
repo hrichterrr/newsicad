@@ -402,10 +402,9 @@ def attrib_texts(
     (absolutas no modelspace; no espaço do bloco pai quando o INSERT está
     dentro de uma definição de bloco — achado attrib-aninhado: as 225
     etiquetas da R04 moravam em INSERTs aninhados e nunca eram lidas).
-    Simplificação documentada: o vínculo texto<->bloco não é modelado
-    (mover o bloco depois não arrasta a etiqueta junto); o que existe é o
-    `attrib_tag`/`attrib_owner` do Text, só pra o painel de Propriedades
-    conseguir listar os atributos ao selecionar o bloco. `apply_color` (o
+    O chamador (dxf_io) converte cada um pro referencial do bloco e guarda
+    em `BlockReference.attributes`, de onde a etiqueta passa a ser desenhada
+    e transformada junto com a instância. `apply_color` (o
     `_apply_dxf_color` de dxf_io) aplica a cor própria do ATTRIB."""
     for attrib in getattr(insert, "attribs", ()):
         try:

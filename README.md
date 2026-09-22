@@ -440,6 +440,23 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
+810/810 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.2 — a etiqueta do atributo passa a fazer parte do bloco** (22/09/2026):
+
+Até a 2.16.1 o valor de um atributo era uma entidade INDEPENDENTE amarrada ao bloco por um id (`Text.attrib_owner`): dava pra ver e editar, e a gravação já devolvia um `ATTRIB` de verdade, mas **mover o símbolo deixava a etiqueta para trás** — e um clique de seleção pegava um ou outro, nunca os dois.
+
+Agora o valor mora em **`BlockReference.attributes`**, em coordenadas RELATIVAS ao ponto base, exatamente como os filhos de uma definição de bloco. A consequência é que nenhum comando precisa saber que ele existe:
+
+- **mover, girar, escalar, espelhar e esticar** o bloco levam a etiqueta junto de graça — a transformação de inserção já é aplicada a ela, sem uma linha a mais em `geometry_ops`;
+- **desenhar** também: a etiqueta é mais um filho do `QGraphicsItemGroup` da instância, herdando posição/rotação/escala (fora do cache de geometria por definição, porque o valor é por instância);
+- **clicar e medir a extensão** passam a considerá-la (`_distance_to_block_reference` e `_block_reference_bbox_scene` varrem os filhos da definição **+** os atributos);
+- **copiar** duplica a etiqueta com id próprio (`clone_entity`), e **apagar** o bloco apaga o campo junto, em vez de deixar um texto órfão na planta.
+
+`attribute_to_block_local` / `attribute_to_world` (em `core/geometry_ops.py`) fazem a conversão nos dois sentidos, porque no `.dxf` as coordenadas de um `ATTRIB` são sempre absolutas. A altura vira escalar dividido/multiplicado pela média dos módulos das escalas — a mesma aproximação já documentada no hit-test para bloco com escala por eixo. Nos 20 INSERTs atributados do `NEWSI-TEMPLATE-LEG_R00` a escala é uniforme e a rotação é zero, então a conversão é exata.
+
+Editar o valor (painel de Propriedades ou DDEDIT/duplo clique) chama `touch()` na instância: a etiqueta não é entidade do desenho, então sem isso ela não entraria no registro de alterados e a tela ficaria com o texto velho. A versão de cada atributo entra também na impressão digital do item (`refresh_entities`), como rede de segurança da passada profunda.
+
+Conferido no arquivo do Michael: mover um dos blocos do selo leva as três etiquetas ("PLANTA PAVIMENTO TÉRREO", "ESCALA 1:50" e o número do desenho) junto, e a ida e volta pelo `.dxf` devolve o `ATTRIB` na posição nova.
+
 806/806 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.1 — o atributo de bloco volta ao `.dxf` como atributo** (22/09/2026):
 
 A 2.16.0 deixou os ATTRIBs (TÍTULO, ESCALA, PAVIMENTO, CIRCUITO — os campos preenchíveis da legenda e do selo) visíveis e editáveis dentro do NewSIcad, mas a gravação continuava mandando todos como MTEXT solto: ao reabrir no AutoCAD, o campo deixava de ser preenchível, o "Editar atributos" do bloco vinha vazio e a etiqueta virava um texto qualquer por cima do símbolo. Um arquivo que passasse pelo NewSIcad perdia os campos do template para sempre.
