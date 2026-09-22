@@ -33,7 +33,7 @@ from typing import Callable, Iterable, Iterator
 from ezdxf.enums import TextEntityAlignment
 
 from newsicad.core.document import Document
-from newsicad.core.entities import BlockReference, Entity, Hatch, Point, Text
+from newsicad.core.entities import AttributeDef, BlockReference, Entity, Hatch, Point, Text
 
 # Altura abaixo da qual um TEXT/ATTRIB/MTEXT é descartado na leitura: não é
 # visível em nenhuma escala e só polui seleção/zoom extents (o canvas
@@ -360,6 +360,34 @@ class AnnotationImporter:
         if name.startswith(_EXPAND_INSERT_PREFIXES):
             return True
         return name not in self.document.block_definitions
+
+
+def attdef_from_dxf(e) -> "AttributeDef | None":
+    """ATTDEF -> `AttributeDef` (o molde do campo dentro da definição do
+    bloco). Mesma leitura de posição/alinhamento do TEXT/ATTRIB: o ponto 10
+    é esquerda-baseline e `get_placement()` devolve a âncora certa pra cada
+    alinhamento. Devolve None sem tag (um ATTDEF sem tag não é campo
+    nenhum)."""
+    tag = str(e.dxf.get("tag", "") or "")
+    if not tag:
+        return None
+    try:
+        align, p1, _p2 = e.get_placement()
+    except Exception:
+        align, p1 = TextEntityAlignment.LEFT, e.dxf.get("insert", (0, 0, 0))
+    return AttributeDef(
+        tag=tag,
+        prompt=str(e.dxf.get("prompt", "") or ""),
+        default=str(e.dxf.get("text", "") or ""),
+        insertion_point=_point(p1),
+        height=float(e.dxf.get("height", 2.5) or 2.5),
+        rotation=math.radians(float(e.dxf.get("rotation", 0.0) or 0.0)),
+        justify=_ALIGN_TO_JUSTIFY.get(align, "BL"),
+        layer=str(e.dxf.get("layer", "0") or "0"),
+        style=_style_name(e),
+        width_factor=float(e.dxf.get("width", 1.0) or 1.0),
+        invisible=bool(int(e.dxf.get("flags", 0) or 0) & 1),
+    )
 
 
 def attrib_texts(

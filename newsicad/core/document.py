@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from newsicad.core.entities import BlockReference, Dimension, Entity
+from newsicad.core.entities import AttributeDef, BlockReference, Dimension, Entity
 
 DEFAULT_LAYER_COLOR = "#FFFFFF"
 
@@ -110,6 +110,11 @@ class Document:
         # em newsicad/core/entities.py). Não são entidades do desenho —
         # só as instâncias (BlockReference) aparecem em `self.entities`.
         self.block_definitions: dict[str, list[Entity]] = {}
+        # Moldes de atributo (ATTDEF) por nome de bloco — ver AttributeDef em
+        # core/entities.py. Ficam FORA de `block_definitions` porque não são
+        # desenhados: quem aparece é o ATTRIB de cada instância, que a leitura
+        # promove a Text. Guardados só pra devolvê-los ao bloco na gravação.
+        self.block_attdefs: dict[str, list[AttributeDef]] = {}
         # Revisão GLOBAL das definições de bloco: bumpada sempre que qualquer
         # definição muda (define_block — BEDIT/BLOCK/XREF reload — ou PURGE).
         # Consumidores que fazem cache de algo derivado do CONTEÚDO das
@@ -236,6 +241,7 @@ class Document:
     def clear(self) -> None:
         self.entities.clear()
         self.block_definitions.clear()
+        self.block_attdefs.clear()
 
     def define_block(self, name: str, entities: list[Entity]) -> None:
         self.block_definitions[name] = entities

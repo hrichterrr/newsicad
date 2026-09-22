@@ -209,6 +209,34 @@ class Spline(Entity):
     closed: bool = False
 
 
+@dataclass
+class AttributeDef:
+    """Molde de um atributo (ATTDEF) declarado DENTRO de uma definição de
+    bloco: o campo preenchível que cada instância do bloco responde com um
+    ATTRIB próprio (TÍTULO, ESCALA, PAVIMENTO, CIRCUITO...).
+
+    Não é uma `Entity`: o molde em si não é desenhado no desenho — quem
+    aparece é o ATTRIB de cada instância, que a leitura promove a `Text`
+    (ver `Text.attrib_tag`). Fica em `Document.block_attdefs[nome]`, com
+    coordenadas relativas ao ponto base do bloco, como qualquer filho de uma
+    definição. Existe pra a ida e volta pelo .dxf ser completa: sem o ATTDEF
+    de volta no bloco, os ATTRIBs gravados ficam órfãos e o AutoCAD perde os
+    campos no primeiro ATTSYNC — e inserir uma cópia nova do bloco deixa de
+    perguntar os valores."""
+
+    tag: str = ""
+    prompt: str = ""
+    default: str = ""
+    insertion_point: Point = field(default_factory=lambda: Point(0, 0))
+    height: float = 2.5
+    rotation: float = 0.0  # radianos
+    justify: str = "BL"
+    layer: str = "0"
+    style: str = "Standard"
+    width_factor: float = 1.0
+    invisible: bool = False
+
+
 #: Prefixos dos blocos ANÔNIMOS em que a importação empacota uma anotação
 #: pronta de outro programa — multileader, leader, cota e tabela (ver
 #: newsicad/io/dxf_annotations.py). Não são blocos do usuário: cada um tem

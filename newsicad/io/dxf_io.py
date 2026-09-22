@@ -12,6 +12,7 @@ from pathlib import Path
 import ezdxf
 import ezdxf.colors
 import ezdxf.recover
+from ezdxf.enums import TextEntityAlignment
 
 import newsicad.core.entities as entities_module
 from newsicad.core.document import DimStyle, Document, TextStyle, dim_arrow_size, dim_text_height
@@ -19,6 +20,7 @@ from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     JUSTIFY_TO_ATTACHMENT as _JUSTIFY_TO_ATTACHMENT,
     AnnotationImporter,
+    attdef_from_dxf,
     attrib_texts,
     read_dim_style,
     text_from_dxf_mtext,
@@ -27,6 +29,7 @@ from newsicad.io.dxf_annotations import (
 from newsicad.core.entities import (
     BYBLOCK,
     Arc,
+    AttributeDef,
     BlockReference,
     Circle,
     Dimension,
@@ -49,6 +52,22 @@ from newsicad.io import dxf_fills
 
 # Mapeamento justify <-> attachment_point do MTEXT: mora em
 # newsicad/io/dxf_annotations.py (importado acima com os nomes antigos).
+
+# `Text.justify` -> alinhamento do TEXT/ATTRIB/ATTDEF (group codes 72/73 +
+# ponto 11), o inverso exato do `_ALIGN_TO_JUSTIFY` da leitura em
+# dxf_annotations.py. Usado só na gravação de atributo, que é TEXT-like —
+# o resto dos textos sai como MTEXT, que usa attachment_point.
+_JUSTIFY_TO_ALIGN = {
+    "BL": TextEntityAlignment.LEFT,
+    "BC": TextEntityAlignment.CENTER,
+    "BR": TextEntityAlignment.RIGHT,
+    "ML": TextEntityAlignment.MIDDLE_LEFT,
+    "MC": TextEntityAlignment.MIDDLE_CENTER,
+    "MR": TextEntityAlignment.MIDDLE_RIGHT,
+    "TL": TextEntityAlignment.TOP_LEFT,
+    "TC": TextEntityAlignment.TOP_CENTER,
+    "TR": TextEntityAlignment.TOP_RIGHT,
+}
 
 # R2018 (AC1032) e não R2000, por dois motivos medidos na auditoria de
 # 2026-09-07: (a) o R2000 grava em ANSI, e o ezdxf escapa o que não couber na
@@ -340,6 +359,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     # e uma hachura sólida ficar por baixo das linhas do próprio ícone.
     def _importar_definicao(block) -> None:
         block_entities: list[Entity] = []
+        attdefs: list[AttributeDef] = []
         for dxf_entity in block.entities_in_redraw_order():
             if _is_invisible(dxf_entity):
                 continue
@@ -349,11 +369,17 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 continue
             entity = _from_dxf_entity(dxf_entity, units=document.units)
             if entity is None:
-                if dxf_entity.dxftype() != "ATTDEF":
+                if dxf_entity.dxftype() == "ATTDEF":
                     # ATTDEF (molde de atributo dentro da definição) não é
-                    # geometria perdida: o valor preenchido chega como
-                    # ATTRIB no INSERT e é promovido a Text no loop do
-                    # modelspace abaixo — contar aqui era só ruído no aviso.
+                    # geometria perdida nem desenho: o valor preenchido chega
+                    # como ATTRIB no INSERT e é promovido a Text no loop do
+                    # modelspace abaixo. O molde é guardado à parte, só pra
+                    # voltar ao bloco na gravação — sem ele os ATTRIBs
+                    # gravados ficam órfãos (ver AttributeDef).
+                    attdef = attdef_from_dxf(dxf_entity)
+                    if attdef is not None:
+                        attdefs.append(attdef)
+                else:
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
@@ -362,7 +388,9 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 # ATTRIB de INSERT ANINHADO (bloco dentro de bloco): as
                 # coordenadas já estão no espaço deste bloco pai — vira
                 # Text aqui mesmo (achado attrib-aninhado; ver attrib_texts).
-                block_entities.extend(attrib_texts(dxf_entity, entity.layer, _apply_dxf_color))
+                for text_entity in attrib_texts(dxf_entity, entity.layer, _apply_dxf_color):
+                    text_entity.attrib_owner = entity.id
+                    block_entities.append(text_entity)
         # O modelo do NewSIcad assume ponto base do bloco na origem (os
         # filhos ficam em coordenadas relativas ao ponto de inserção); um
         # BLOCK com base_point ≠ 0 (2 deles num .dwg real de 2026-09-01)
@@ -374,7 +402,13 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         if abs(bx) > 1e-12 or abs(by) > 1e-12:
             for entity in block_entities:
                 translate_entity(entity, -bx, -by)
+            for attdef in attdefs:
+                attdef.insertion_point = Point(
+                    attdef.insertion_point.x - bx, attdef.insertion_point.y - by
+                )
         document.define_block(block.name, block_entities)
+        if attdefs:
+            document.block_attdefs[block.name] = attdefs
 
     for block in dxf_doc.blocks:
         name = block.name
@@ -879,11 +913,16 @@ def save_dxf(document: Document, path: str | Path) -> None:
         dxf_block_names[name] = name
     for name, entities in document.block_definitions.items():
         block_layout = dxf_doc.blocks.get(dxf_block_names[name])
-        for entity in entities:
-            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style)
+        _write_attdefs(block_layout, document.block_attdefs.get(name, []))
+        # Um bloco pode conter outro bloco COM atributos (achado
+        # attrib-aninhado) — mesma separação de um espaço qualquer.
+        restantes, attribs_by_owner = split_attribute_texts(entities)
+        for entity in restantes:
+            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style, attribs_by_owner)
 
-    for entity in document.all_entities():
-        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style)
+    restantes, attribs_by_owner = split_attribute_texts(document.all_entities())
+    for entity in restantes:
+        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style, attribs_by_owner)
 
     # Pranchas (paper space): grava cada uma de volta no layout de mesmo
     # nome (cria se não existir — ex.: um .dwg de arquiteto com pranchas
@@ -895,8 +934,9 @@ def save_dxf(document: Document, path: str | Path) -> None:
     existing_layout_names = set(dxf_doc.layouts.names())
     for name, entities in document.layouts.items():
         layout = dxf_doc.layouts.get(name) if name in existing_layout_names else dxf_doc.layouts.new(name)
-        for entity in entities.values():
-            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style)
+        restantes, attribs_by_owner = split_attribute_texts(list(entities.values()))
+        for entity in restantes:
+            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style, attribs_by_owner)
     if document.layouts and "Layout1" not in document.layouts and "Layout1" in dxf_doc.layouts.names():
         dxf_doc.layouts.delete("Layout1")
 
@@ -906,33 +946,114 @@ def save_dxf(document: Document, path: str | Path) -> None:
         raise DxfIoError(f"Não foi possível salvar '{path}': {exc}") from exc
 
 
+def _apply_color_attribs(dxfattribs: dict, entity: Entity) -> None:
+    """Escreve a cor da entidade no dicionário de atributos do DXF.
+
+    ByLayer (`entity.color=None`) fica de fora de propósito: omitir a chave
+    "color" faz o ezdxf usar o padrão DXF 256/BYLAYER sozinho. Sem isto,
+    uma cor própria de entidade era descartada ao salvar (bug real de
+    auditoria, 2026-08-22). `true_color` (grupo 420) preserva o RGB exato;
+    o ACI vai junto como aproximação pra quem só lê a paleta antiga."""
+    if entity.color == BYBLOCK:
+        # Sentinel BYBLOCK (core/entities.py) = cor 0 do DXF: herda do INSERT.
+        dxfattribs["color"] = 0
+        return
+    if not entity.color:
+        return
+    rgb = _hex_to_rgb(entity.color)
+    if rgb is not None:
+        dxfattribs["true_color"] = ezdxf.colors.rgb2int(rgb)
+    aci = _hex_to_aci(entity.color)
+    if aci is not None:
+        dxfattribs["color"] = aci
+
+
+def split_attribute_texts(entities: list[Entity]) -> tuple[list[Entity], dict[str, list[Text]]]:
+    """Separa, de uma lista de entidades de UM espaço (modelspace, uma
+    prancha ou o corpo de uma definição de bloco), os textos que são valor
+    de ATRIBUTO de um bloco presente nessa mesma lista.
+
+    Devolve (o que se grava normalmente, {id da BlockReference: [Text]}).
+    Um texto de atributo cujo bloco não está aqui — porque foi apagado, ou
+    porque o bloco foi explodido — perde o vínculo e volta a ser texto
+    comum, que é o que ele de fato virou."""
+    ref_ids = {e.id for e in entities if isinstance(e, BlockReference)}
+    by_owner: dict[str, list[Text]] = {}
+    restantes: list[Entity] = []
+    for entity in entities:
+        if (
+            isinstance(entity, Text)
+            and entity.attrib_tag
+            and entity.attrib_owner in ref_ids
+            # ATTRIB é TEXT-like, de uma linha só. Conteúdo com quebra de
+            # linha (o usuário editou e escreveu duas linhas) não cabe: vai
+            # como MTEXT comum, que preserva o texto, em vez de ser truncado.
+            and "\n" not in entity.content
+        ):
+            by_owner.setdefault(entity.attrib_owner, []).append(entity)
+        else:
+            restantes.append(entity)
+    return restantes, by_owner
+
+
+def _write_attdefs(block_layout, attdefs: list[AttributeDef]) -> None:
+    """Devolve os moldes de atributo (ATTDEF) pra dentro da definição do
+    bloco — ver AttributeDef em core/entities.py."""
+    for attdef in attdefs:
+        ponto = (attdef.insertion_point.x, attdef.insertion_point.y)
+        dxfattribs = {
+            "layer": attdef.layer,
+            "height": max(attdef.height, 1e-3),
+            "rotation": math.degrees(attdef.rotation),
+            "style": attdef.style,
+            "width": max(attdef.width_factor, 0.01),
+            "prompt": attdef.prompt,
+        }
+        if attdef.invisible:
+            dxfattribs["flags"] = 1
+        escrito = block_layout.add_attdef(tag=attdef.tag, insert=ponto, text=attdef.default, dxfattribs=dxfattribs)
+        alinhamento = _JUSTIFY_TO_ALIGN.get(attdef.justify)
+        if alinhamento is not None and alinhamento is not TextEntityAlignment.LEFT:
+            escrito.set_placement(ponto, align=alinhamento)
+
+
+def _write_attribs(insert, textos: list[Text]) -> None:
+    """Pendura os valores de atributo no INSERT como ATTRIB de verdade, em
+    vez de gravá-los como TEXT solto ao lado do bloco.
+
+    Até a 2.16.0 todo atributo saía como texto comum: o campo funcionava
+    dentro do NewSIcad, mas ao reabrir no AutoCAD deixava de ser um campo
+    preenchível — o "Editar atributos" do bloco vinha vazio e a etiqueta
+    virava um texto qualquer por cima do símbolo."""
+    for texto in textos:
+        ponto = (texto.insertion_point.x, texto.insertion_point.y)
+        dxfattribs = {
+            "layer": texto.layer,
+            "height": max(texto.height, 1e-3),
+            "rotation": math.degrees(texto.rotation),
+            "style": texto.style,
+            "width": max(texto.width_factor, 0.01),
+        }
+        _apply_color_attribs(dxfattribs, texto)
+        escrito = insert.add_attrib(tag=texto.attrib_tag, text=texto.content, insert=ponto, dxfattribs=dxfattribs)
+        alinhamento = _JUSTIFY_TO_ALIGN.get(texto.justify)
+        if alinhamento is not None and alinhamento is not TextEntityAlignment.LEFT:
+            escrito.set_placement(ponto, align=alinhamento)
+
+
 def _to_dxf_entity(
     msp,
     entity: Entity,
     block_names: dict[str, str] | None = None,
     dim_style: DimStyle | None = None,
+    attribs_by_owner: dict[str, list[Text]] | None = None,
 ) -> None:
     """`block_names`: nome interno -> nome gravado (ver save_dxf; None =
     mesmo nome). `dim_style`: tamanho de texto/seta das cotas (None =
-    padrão DimStyle())."""
+    padrão DimStyle()). `attribs_by_owner`: valores de atributo a pendurar
+    em cada BlockReference, de `split_attribute_texts`."""
     attribs = {"layer": entity.layer}
-    if entity.color == BYBLOCK:
-        # Sentinel BYBLOCK (core/entities.py) = cor 0 do DXF: herda do INSERT.
-        attribs["color"] = 0
-    elif entity.color:
-        # ByLayer (entity.color=None) fica de fora de propósito: omitir a
-        # chave "color" faz o ezdxf usar o padrão DXF 256/BYLAYER sozinho.
-        # Sem esse bloco, uma cor própria de entidade (exceção ao ByLayer)
-        # era sempre descartada ao salvar (bug real de auditoria,
-        # 2026-08-22).
-        # `true_color` (grupo 420) preserva o RGB exato; o ACI vai junto
-        # como aproximação para quem só lê a paleta antiga.
-        rgb = _hex_to_rgb(entity.color)
-        if rgb is not None:
-            attribs["true_color"] = ezdxf.colors.rgb2int(rgb)
-        aci = _hex_to_aci(entity.color)
-        if aci is not None:
-            attribs["color"] = aci
+    _apply_color_attribs(attribs, entity)
 
     if isinstance(entity, Line):
         msp.add_line((entity.start.x, entity.start.y), (entity.end.x, entity.end.y), dxfattribs=attribs)
@@ -1008,7 +1129,12 @@ def _to_dxf_entity(
             "rotation": math.degrees(entity.rotation),
         }
         dxf_name = (block_names or {}).get(entity.block_name, entity.block_name)
-        msp.add_blockref(dxf_name, (entity.insertion_point.x, entity.insertion_point.y), dxfattribs=insert_attribs)
+        insert = msp.add_blockref(
+            dxf_name, (entity.insertion_point.x, entity.insertion_point.y), dxfattribs=insert_attribs
+        )
+        valores = (attribs_by_owner or {}).get(entity.id)
+        if valores:
+            _write_attribs(insert, valores)
         return
 
     if isinstance(entity, ImageReference):

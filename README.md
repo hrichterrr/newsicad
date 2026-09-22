@@ -440,6 +440,20 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
+806/806 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.1 — o atributo de bloco volta ao `.dxf` como atributo** (22/09/2026):
+
+A 2.16.0 deixou os ATTRIBs (TÍTULO, ESCALA, PAVIMENTO, CIRCUITO — os campos preenchíveis da legenda e do selo) visíveis e editáveis dentro do NewSIcad, mas a gravação continuava mandando todos como MTEXT solto: ao reabrir no AutoCAD, o campo deixava de ser preenchível, o "Editar atributos" do bloco vinha vazio e a etiqueta virava um texto qualquer por cima do símbolo. Um arquivo que passasse pelo NewSIcad perdia os campos do template para sempre.
+
+- **`Document.block_attdefs`** guarda o MOLDE de cada campo (`AttributeDef`: tag, prompt, valor padrão, posição relativa ao ponto base, altura, rotação, alinhamento, estilo, flag de invisível). ATTDEF não é geometria nem é desenhado — quem aparece é o ATTRIB de cada instância —, então fica fora de `block_definitions`, num dicionário próprio que entra no undo e no cache de abertura.
+- **`split_attribute_texts`** separa, em cada espaço (modelspace, prancha ou corpo de uma definição de bloco), os textos que são valor de atributo de um bloco presente ali. Eles saem da lista normal e vão como `ATTRIB` pendurado no `INSERT` (`_write_attribs`); os moldes voltam pra dentro do bloco (`_write_attdefs`). Isso vale também pro **bloco dentro de bloco**, que já tinha atributos lidos desde o achado attrib-aninhado.
+- Texto de atributo cujo bloco **não está mais ali** — apagado ou explodido — perde o vínculo e é gravado como texto comum, que é o que ele de fato virou.
+- Conteúdo com quebra de linha não cabe num `ATTRIB` (que é TEXT-like, de uma linha): nesse caso sai como MTEXT comum, preservando o texto em vez de truncá-lo.
+- `CACHE_VERSION` → "7": uma entrada antiga voltaria sem os moldes e gravar o arquivo perderia os campos, que é justamente o que esta leva veio consertar.
+
+Conferido no `NEWSI-TEMPLATE-LEG_R00.dwg` do Michael: 22 blocos com molde e 25 etiquetas lidos, editados, gravados e relidos — 20 INSERTs saem com `ATTRIB`, os 22 blocos saem com `ATTDEF`, e o `ezdxf.audit` do arquivo gravado dá 0 erro e 0 correção.
+
+**Limitação que fica:** um `ATTRIB` marcado como INVISÍVEL no arquivo de origem continua sendo descartado na leitura (é assim desde sempre — ele não é desenho), então não volta na gravação; o molde dele, sim. Nenhum dos 25 atributos do template da New SI é invisível.
+
 803/803 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.0 — a rodada de feedback do grupo de 22/09/2026** (Michael Albert), com o `NEWSI-TEMPLATE-LEG_R00.dwg` que ele mandou como arquivo de referência:
 
 1. **Opção de prompt aceita a abreviação.** O prompt só reconhecia a opção escrita POR EXTENSO: quem digitava `R` no `[Radius]` do FILLET ou `U` no `[Undo]` da LINE — o que o AutoCAD ensina e o próprio prompt sugere com a maiúscula — caía no parser de coordenada e levava um "valor inválido". `interpreter.match_option` agora aceita o nome inteiro, a abreviação em maiúsculas (`eXit` → X, `DElta` → DE) e um prefixo sem ambiguidade; prompt que pede texto livre fica de fora do prefixo, pra "e" continuar sendo a letra "e" numa célula de TABLE. É o que estava por trás de "Fillet não está funcionando" e de "não dá pra recuar a linha".

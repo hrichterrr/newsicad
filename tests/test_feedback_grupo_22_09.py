@@ -320,3 +320,88 @@ def test_atributo_do_dwg_chega_com_a_tag_e_o_dono():
     assert etiqueta.content == "C-12"
     assert etiqueta.attrib_tag == "CIRCUITO"
     assert etiqueta.attrib_owner == ref.id
+
+
+# --------------------------------------------- atributo de volta no .dxf
+def _dwg_com_atributo(caminho):
+    """Um .dxf mínimo com um bloco que tem um campo preenchível, como o
+    selo e a legenda do template da New SI."""
+    import ezdxf
+
+    doc = ezdxf.new(setup=True)
+    bloco = doc.blocks.new("TABELA DE ICONS")
+    bloco.add_line((0, 0), (10, 0))
+    bloco.add_attdef("TÍTULO", (1, 1), height=0.25, dxfattribs={"prompt": "Nome da seção"})
+    insert = doc.modelspace().add_blockref("TABELA DE ICONS", (0, 0))
+    insert.add_auto_attribs({"TÍTULO": "ÁUDIO"})
+    doc.saveas(caminho)
+
+
+def test_atributo_editado_volta_como_attrib_de_verdade(tmp_path):
+    """Antes da 2.16.1 todo atributo saía como texto comum: o campo
+    funcionava dentro do NewSIcad, mas ao reabrir no AutoCAD deixava de ser
+    preenchível e virava um texto solto por cima do símbolo."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo(str(origem))
+    doc, _ = load_dxf(origem)
+
+    etiqueta = next(e for e in doc.entities.values() if isinstance(e, Text) and e.attrib_tag)
+    assert etiqueta.content == "ÁUDIO"
+    etiqueta.content = "VÍDEO"  # a edição que o painel/duplo clique faz
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+
+    inserts = [e for e in gravado.modelspace() if e.dxftype() == "INSERT"]
+    assert len(inserts) == 1
+    attribs = [(a.dxf.tag, a.dxf.text) for a in inserts[0].attribs]
+    assert attribs == [("TÍTULO", "VÍDEO")]
+    # e o valor NÃO saiu também como texto solto ao lado
+    assert not [e for e in gravado.modelspace() if e.dxftype() in ("TEXT", "MTEXT")]
+
+
+def test_molde_do_atributo_volta_para_dentro_do_bloco(tmp_path):
+    """Sem o ATTDEF de volta na definição, os ATTRIBs ficam órfãos: o
+    AutoCAD perde os campos no primeiro ATTSYNC e inserir uma cópia nova do
+    bloco deixa de perguntar os valores."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo(str(origem))
+    doc, _ = load_dxf(origem)
+    assert [a.tag for a in doc.block_attdefs["TABELA DE ICONS"]] == ["TÍTULO"]
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    bloco = gravado.blocks.get("TABELA DE ICONS")
+    attdefs = [e for e in bloco if e.dxftype() == "ATTDEF"]
+    assert [(a.dxf.tag, a.dxf.prompt) for a in attdefs] == [("TÍTULO", "Nome da seção")]
+
+
+def test_atributo_sem_o_bloco_volta_a_ser_texto_comum(tmp_path):
+    """Apagou o bloco (ou explodiu) e sobrou a etiqueta: ela é texto comum
+    mesmo, e é assim que tem que ser gravada."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo(str(origem))
+    doc, _ = load_dxf(origem)
+    ref = next(e for e in doc.entities.values() if isinstance(e, BlockReference))
+    doc.remove_entity(ref.id)
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    textos = [e for e in gravado.modelspace() if e.dxftype() in ("TEXT", "MTEXT")]
+    assert len(textos) == 1
+    assert "ÁUDIO" in textos[0].plain_text()

@@ -68,7 +68,7 @@ from newsicad.ui.properties_panel import PropertiesPanel
 from newsicad.ui.ribbon import build_quick_access_toolbar, build_ribbon
 from newsicad.ui.xref_panel import XrefPanel
 
-APP_VERSION = "2.16.0"
+APP_VERSION = "2.16.1"
 APP_TITLE = f"NewSIcad {APP_VERSION} — Developed by HRichter"
 
 STATUS_TOGGLE_STYLE = """
@@ -1409,6 +1409,7 @@ class MainWindow(QMainWindow):
             document.add_layer(layer.name, layer.color)
         for name, entities in loaded.block_definitions.items():
             document.define_block(name, entities)
+        document.block_attdefs = dict(loaded.block_attdefs)
         for entity in loaded.all_entities():
             document.add_entity(entity)
         # Configurações do DESENHO lidas do arquivo. Sem isto elas eram lidas
