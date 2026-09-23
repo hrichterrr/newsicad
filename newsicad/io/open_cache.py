@@ -37,7 +37,10 @@ from typing import Any
 # antiga volta sem os moldes e sem as etiquetas dentro da instância, e
 # gravar o arquivo perderia os campos preenchíveis do bloco, que é
 # justamente o que essa leva veio consertar.
-CACHE_VERSION = "7"
+# "8": Text ganhou `invisible` (atributo oculto, 23/09/2026) — uma entrada
+# antiga volta sem o campo, e o atributo oculto que ela guarda seria
+# gravado VISÍVEL, expondo na prancha um dado que o arquivo escondia.
+CACHE_VERSION = "8"
 MAX_ENTRIES = 20
 
 

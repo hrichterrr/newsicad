@@ -1718,7 +1718,9 @@ class CanvasView(QGraphicsView):
         # entram no cache de geometria por definição: o valor é POR
         # instância, e duas instâncias do mesmo bloco têm textos diferentes.
         for attribute in entity.attributes:
-            if not self._block_child_visible(attribute, insert_layer):
+            # Atributo invisível existe só como dado (ver Text.invisible):
+            # não é desenhado, como no AutoCAD.
+            if attribute.invisible or not self._block_child_visible(attribute, insert_layer):
                 continue
             group.addToGroup(self._create_item(attribute, self._effective_color(attribute, child_ctx)))
 
@@ -2001,7 +2003,9 @@ class CanvasView(QGraphicsView):
 
         best: float | None = None
         filhos = list(self.document.block_definitions.get(entity.block_name, []))
-        filhos.extend(entity.attributes)  # a etiqueta faz parte do bloco
+        # A etiqueta faz parte do bloco; a invisível não está na tela, então
+        # também não entra no clique.
+        filhos.extend(a for a in entity.attributes if not a.invisible)
         for child in filhos:
             if isinstance(child, BlockReference):
                 d = self._distance_to_block_reference(local, child, _depth + 1)
@@ -2129,7 +2133,8 @@ class CanvasView(QGraphicsView):
             return QRectF()
         local_rect: QRectF | None = None
         filhos = list(self.document.block_definitions.get(entity.block_name, []))
-        filhos.extend(entity.attributes)  # a etiqueta conta na extensão
+        # A etiqueta conta na extensão; a invisível não ocupa lugar na tela.
+        filhos.extend(a for a in entity.attributes if not a.invisible)
         for child in filhos:
             child_rect = (
                 self._block_reference_bbox_scene(child, _depth + 1)

@@ -494,3 +494,96 @@ def test_etiqueta_sobrevive_a_mover_salvar_e_reabrir(tmp_path):
     assert ref2.insertion_point.as_tuple() == (50, 30)
     assert ref2.attributes[0].insertion_point.x == pytest.approx(1)
     assert ref2.attributes[0].insertion_point.y == pytest.approx(1)
+
+
+# ------------------------------------------------- atributo invisível
+def _dwg_com_atributo_invisivel(caminho):
+    """Bloco com um campo visível e um INVISÍVEL — o padrão de quem guarda
+    dado de lista/fabricante dentro do símbolo."""
+    import ezdxf
+
+    doc = ezdxf.new(setup=True)
+    bloco = doc.blocks.new("SIMBOLO")
+    bloco.add_line((0, 0), (1, 0))
+    bloco.add_attdef("TAG", (0, 1), height=0.25)
+    bloco.add_attdef("COD_FABRICANTE", (0, 2), height=0.25, dxfattribs={"flags": 1})
+    insert = doc.modelspace().add_blockref("SIMBOLO", (0, 0))
+    insert.add_attrib("TAG", "T-01", (0, 1), dxfattribs={"height": 0.25})
+    insert.add_attrib("COD_FABRICANTE", "NICE-4820", (0, 2), dxfattribs={"height": 0.25, "flags": 1})
+    doc.saveas(caminho)
+
+
+def test_atributo_invisivel_sobrevive_a_abrir_e_salvar(tmp_path):
+    """Até a 2.16.2 a leitura DESCARTAVA o ATTRIB invisível: abrir e salvar
+    apagava do arquivo um dado que ninguém vê — e por isso ninguém notaria."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo_invisivel(str(origem))
+    doc, _ = load_dxf(origem)
+
+    ref = next(e for e in doc.entities.values() if isinstance(e, BlockReference))
+    por_tag = {a.attrib_tag: a for a in ref.attributes}
+    assert por_tag["COD_FABRICANTE"].content == "NICE-4820"
+    assert por_tag["COD_FABRICANTE"].invisible is True
+    assert por_tag["TAG"].invisible is False
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    insert = next(e for e in gravado.modelspace() if e.dxftype() == "INSERT")
+    valores = {a.dxf.tag: (a.dxf.text, a.is_invisible) for a in insert.attribs}
+    assert valores["COD_FABRICANTE"] == ("NICE-4820", True)
+    assert valores["TAG"] == ("T-01", False)
+
+
+def test_atributo_invisivel_nao_e_desenhado_nem_clicado(tmp_path):
+    from PySide6.QtWidgets import QApplication
+
+    from newsicad.io.dxf_io import load_dxf
+    from newsicad.ui.canvas import CanvasView
+
+    QApplication.instance() or QApplication([])
+    origem = tmp_path / "origem.dxf"
+    _dwg_com_atributo_invisivel(str(origem))
+    doc, _ = load_dxf(origem)
+    interp, _vazio = make_interpreter()
+    interp.context.document = doc
+    canvas = CanvasView(doc, interp)
+    canvas.refresh_entities()
+
+    ref = next(e for e in doc.entities.values() if isinstance(e, BlockReference))
+    # o invisível está em (0,2): clicar ali não pode encostar no bloco
+    perto_do_visivel = canvas._distance_to_block_reference(Point(0, 1), ref)
+    perto_do_invisivel = canvas._distance_to_block_reference(Point(0, 2), ref)
+    assert perto_do_visivel is not None and perto_do_visivel < 0.3
+    assert perto_do_invisivel is None or perto_do_invisivel > 0.5
+
+
+def test_atributo_de_valor_vazio_nao_some_do_arquivo(tmp_path):
+    """Campo em branco continua sendo um campo: descartá-lo na leitura
+    fazia o `.dxf` voltar sem ele."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "origem.dxf"
+    doc = ezdxf.new(setup=True)
+    bloco = doc.blocks.new("VAZIO")
+    bloco.add_line((0, 0), (1, 0))
+    bloco.add_attdef("OBS", (0, 1), height=0.25)
+    insert = doc.modelspace().add_blockref("VAZIO", (0, 0))
+    insert.add_attrib("OBS", "", (0, 1), dxfattribs={"height": 0.25})
+    doc.saveas(str(origem))
+
+    lido, _ = load_dxf(origem)
+    ref = next(e for e in lido.entities.values() if isinstance(e, BlockReference))
+    assert [a.attrib_tag for a in ref.attributes] == ["OBS"]
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(lido, saida)
+    gravado = ezdxf.readfile(saida)
+    insert = next(e for e in gravado.modelspace() if e.dxftype() == "INSERT")
+    assert [a.dxf.tag for a in insert.attribs] == ["OBS"]

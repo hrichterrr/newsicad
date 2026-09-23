@@ -440,6 +440,19 @@ tests/         testes automatizados (pytest) — incluindo testes de integraçã
 .venv\Scripts\python -m pytest
 ```
 
+813/813 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.3 — o atributo invisível deixa de ser apagado** (23/09/2026):
+
+Um `ATTRIB` marcado como INVISÍVEL (bit 1 do group code 70) é um campo que guarda valor e que o AutoCAD não desenha — é assim que um bloco carrega dado que não sai na prancha: código de fabricante, quantidade, referência de lista. A leitura do NewSIcad **descartava** esse ATTRIB desde sempre, então abrir um arquivo e salvar apagava esse dado. Pior tipo de perda: como ninguém vê o campo, ninguém nota que sumiu.
+
+- `Text.invisible` guarda a marca; `attrib_texts` para de pular esses ATTRIBs e a gravação devolve o bit 1.
+- O canvas não desenha, não clica e não mede um atributo invisível (`_create_block_reference_item`, `_distance_to_block_reference`, `_block_reference_bbox_scene`) — na tela nada muda.
+- O painel de **Propriedades** mostra e edita, com um `·` depois do nome do campo: é o único lugar onde ele pode ser alcançado, como o editor de atributos do AutoCAD. O DDEDIT/duplo clique fica de fora de propósito — pedir na linha de comando para editar algo que não está na tela confunde mais do que ajuda.
+- Atributo invisível com quebra de linha segue `ATTRIB` com as quebras viradas em espaço, em vez de cair no ramo "vira MTEXT" da 2.16.1: virar MTEXT exporia na prancha justamente o dado que o arquivo escondia.
+- Na mesma leva, **valor de atributo VAZIO parou de sumir**: `text_from_dxf_text` recusa texto vazio ou altura zero — certo para um TEXT do desenho, errado para um ATTRIB, que é um CAMPO e cujo valor vazio é um valor. Agora um ATTRIB com tag sempre entra, por um `Text` mínimo quando preciso.
+- `CACHE_VERSION` → "8": uma entrada antiga volta sem o campo e o atributo oculto que ela guarda seria gravado VISÍVEL.
+
+Conferido: bloco com um campo visível e um oculto abre, salva e reabre com os dois intactos e com a marca certa; o oculto não entra no clique; e nas duas plantas reais (NEWSI-TEMPLATE e CASA PAU BRASIL) a gravação segue com `ezdxf.audit` em 0 erro e 0 correção.
+
 810/810 testes passando (offscreen; validado no Windows 10 com Python 3.12, PySide6 6.11, ezdxf 1.4.4). **Marco 2.16.2 — a etiqueta do atributo passa a fazer parte do bloco** (22/09/2026):
 
 Até a 2.16.1 o valor de um atributo era uma entidade INDEPENDENTE amarrada ao bloco por um id (`Text.attrib_owner`): dava pra ver e editar, e a gravação já devolvia um `ATTRIB` de verdade, mas **mover o símbolo deixava a etiqueta para trás** — e um clique de seleção pegava um ou outro, nunca os dois.

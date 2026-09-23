@@ -405,22 +405,48 @@ def attrib_texts(
     O chamador (dxf_io) converte cada um pro referencial do bloco e guarda
     em `BlockReference.attributes`, de onde a etiqueta passa a ser desenhada
     e transformada junto com a instância. `apply_color` (o
-    `_apply_dxf_color` de dxf_io) aplica a cor própria do ATTRIB."""
+    `_apply_dxf_color` de dxf_io) aplica a cor própria do ATTRIB.
+
+    ATRIBUTO INVISÍVEL vem junto, marcado em `Text.invisible`: ele guarda
+    dado que não aparece na prancha, e descartá-lo na leitura fazia abrir e
+    salvar apagar esse dado do arquivo."""
     for attrib in getattr(insert, "attribs", ()):
-        try:
-            if attrib.is_invisible:
-                continue
-        except AttributeError:
-            pass
-        text = text_from_dxf_text(attrib, layer=attrib.dxf.get("layer", fallback_layer) or fallback_layer)
+        layer = attrib.dxf.get("layer", fallback_layer) or fallback_layer
+        tag = str(attrib.dxf.get("tag", "") or "")
+        text = text_from_dxf_text(attrib, layer=layer)
         if text is None:
-            continue
+            # `text_from_dxf_text` recusa texto vazio ou altura zero — o que
+            # é certo para um TEXT do desenho, mas não para um ATTRIB: ele é
+            # um CAMPO, e o valor vazio é um valor. Sem este ramo, abrir e
+            # salvar apagava o campo do arquivo. O canvas não desenha
+            # conteúdo vazio de qualquer forma.
+            if not tag:
+                continue
+            text = _attrib_placeholder(attrib, layer)
         if apply_color is not None:
             apply_color(text, attrib)
         # Nome do campo guardado no Text (ver Text.attrib_tag): é por ele que
         # o painel de Propriedades mostra os atributos do bloco selecionado.
-        text.attrib_tag = str(attrib.dxf.get("tag", "") or "")
+        text.attrib_tag = tag
+        text.invisible = bool(getattr(attrib, "is_invisible", False))
         yield text
+
+
+def _attrib_placeholder(attrib, layer: str) -> Text:
+    """Um `Text` mínimo para um ATTRIB que `text_from_dxf_text` recusaria
+    (valor vazio ou altura zero) — só pra o campo não sumir do arquivo na
+    ida e volta. Posição/altura/rotação como estão no ATTRIB."""
+    insert_point = attrib.dxf.get("insert", (0.0, 0.0, 0.0))
+    return Text(
+        layer=layer,
+        insertion_point=_point(insert_point),
+        content=str(attrib.dxf.get("text", "") or ""),
+        height=float(attrib.dxf.get("height", 0.0) or 0.0),
+        rotation=math.radians(float(attrib.dxf.get("rotation", 0.0) or 0.0)),
+        justify="BL",
+        style=_style_name(attrib),
+        width_factor=float(attrib.dxf.get("width", 1.0) or 1.0),
+    )
 
 
 def read_dim_style(header, imported_text_heights: list[float]) -> tuple[float, float]:

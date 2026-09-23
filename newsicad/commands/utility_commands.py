@@ -96,7 +96,11 @@ def annotation_texts(ctx: CommandContext, ref: BlockReference) -> list[Text]:
     if not isinstance(ref, BlockReference):
         return []
     if ref.attributes:
-        return [a for a in ref.attributes if a.content.strip()]
+        # Atributo invisível fica de fora: o DDEDIT pergunta pelo texto na
+        # linha de comando, e pedir para editar algo que não está na tela
+        # confunde mais do que ajuda. Ele é alcançado pelo painel de
+        # Propriedades, que mostra o campo e diz que é oculto.
+        return [a for a in ref.attributes if a.content.strip() and not a.invisible]
     if not is_annotation_block(ref.block_name):
         return []
     parts = ctx.document.get_block_definition(ref.block_name)

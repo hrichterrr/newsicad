@@ -1004,9 +1004,18 @@ def _write_attribs(insert, ref: BlockReference) -> None:
     texto em vez de truncá-lo."""
     for local in ref.attributes:
         texto = attribute_to_world(local, ref)
-        if "\n" in local.content:
-            _to_dxf_entity(insert.get_layout(), texto)
-            continue
+        conteudo = texto.content
+        if "\n" in conteudo:
+            destino = None if local.invisible else insert.get_layout()
+            if destino is not None:
+                _to_dxf_entity(destino, texto)
+                continue
+            # Atributo INVISÍVEL (ou INSERT cujo layout não é alcançável,
+            # dentro de uma definição de bloco) não pode virar MTEXT: isso
+            # exporia na prancha um dado que o arquivo escondia de
+            # propósito. Segue ATTRIB, com as quebras viradas em espaço —
+            # que num campo que nunca é desenhado não representam nada.
+            conteudo = " ".join(conteudo.splitlines())
         ponto = (texto.insertion_point.x, texto.insertion_point.y)
         dxfattribs = {
             "layer": texto.layer,
@@ -1015,8 +1024,11 @@ def _write_attribs(insert, ref: BlockReference) -> None:
             "style": texto.style,
             "width": max(texto.width_factor, 0.01),
         }
+        if local.invisible:
+            # Bit 1 do group code 70: o AutoCAD guarda o valor e não desenha.
+            dxfattribs["flags"] = 1
         _apply_color_attribs(dxfattribs, texto)
-        escrito = insert.add_attrib(tag=local.attrib_tag, text=texto.content, insert=ponto, dxfattribs=dxfattribs)
+        escrito = insert.add_attrib(tag=local.attrib_tag, text=conteudo, insert=ponto, dxfattribs=dxfattribs)
         alinhamento = _JUSTIFY_TO_ALIGN.get(texto.justify)
         if alinhamento is not None and alinhamento is not TextEntityAlignment.LEFT:
             escrito.set_placement(ponto, align=alinhamento)

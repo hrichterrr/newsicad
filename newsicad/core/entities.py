@@ -363,6 +363,16 @@ class Text(Entity):
     #: Um atributo que perdeu o bloco (bloco apagado) guarda a tag e vira
     #: texto comum, que é o que ele de fato virou.
     attrib_tag: str = ""
+    #: Atributo INVISÍVEL (bit 1 do group code 70 do ATTRIB): o campo existe
+    #: e guarda valor, mas o AutoCAD não o desenha — é assim que um bloco
+    #: carrega dado que não aparece na prancha (código de fabricante,
+    #: quantidade, referência de lista). Até a 2.16.2 a leitura DESCARTAVA
+    #: esse ATTRIB, então abrir e salvar apagava o dado do arquivo sem
+    #: avisar. Agora ele entra no desenho como qualquer atributo e só não é
+    #: desenhado, nem clicado, nem medido — e volta invisível no `.dxf`. O
+    #: painel de Propriedades mostra e edita, que é o único lugar onde ele
+    #: pode ser alcançado (o AutoCAD faz o mesmo no editor de atributos).
+    invisible: bool = False
     #: STYLE: nome de uma entrada em `Document.text_styles` — controla a
     #: fonte usada no render (`CanvasView`); "Standard" sempre existe.
     style: str = "Standard"

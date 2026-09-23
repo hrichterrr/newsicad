@@ -391,4 +391,8 @@ class PropertiesPanel(QDockWidget):
             return
         self._section("Atributos")
         for attr in attrs:
-            self._text_row(attr.attrib_tag, attr.content, lambda v, a=attr: _set_attribute(ref, a, v))
+            # Atributo invisível não aparece na prancha — o painel é o único
+            # lugar onde ele pode ser visto e mudado, como o editor de
+            # atributos do AutoCAD. O "·" marca essa diferença.
+            rotulo = f"{attr.attrib_tag} ·" if attr.invisible else attr.attrib_tag
+            self._text_row(rotulo, attr.content, lambda v, a=attr: _set_attribute(ref, a, v))
