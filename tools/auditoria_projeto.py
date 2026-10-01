@@ -70,7 +70,14 @@ TOL_EXTENSAO = 0.01
 #: Camadas que o AutoCAD NÃO plota e que não entram na comparação. Defpoints
 #: guarda os pontos de definição das cotas; é invisível no papel por
 #: definição do próprio AutoCAD.
-CAMADAS_NAO_PLOTADAS = {"defpoints", "viewport"}
+CAMADAS_NAO_PLOTADAS = {"defpoints"}
+
+#: Tipos que nunca são desenho da prancha. VIEWPORT é a JANELA do layout,
+#: não conteúdo — e o nome da camada dela varia por escritório
+#: (`_NEWSI_VIEWPORTS` no padrão da New SI), então filtrar por nome de
+#: camada não pega. A moldura de um único viewport cobre 3,4% da grade e
+#: aparecia como "some desenho".
+_NAO_SAO_DESENHO = {"VIEWPORT"}
 
 _MAX_ANINHAMENTO = 6
 
@@ -121,7 +128,7 @@ def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
         camada = camada_pai if (propria == "0" and camada_pai) else propria
         if camada.lower() in CAMADAS_NAO_PLOTADAS:
             continue
-        if e.dxftype() in _TIPOS_DE_TEXTO:
+        if e.dxftype() in _TIPOS_DE_TEXTO or e.dxftype() in _NAO_SAO_DESENHO:
             continue
         if e.dxftype() in _EXPANDIR and profundidade < _MAX_ANINHAMENTO:
             # INSERT e ANOTAÇÃO (cota, chamada, tabela) são expandidos na
@@ -165,9 +172,22 @@ def textos(caminho: Path) -> list[tuple[str, float, float]]:
                     conteudo = str(e.dxf.get("text", "") or "")
                 if not conteudo.strip():
                     continue
+                # ÂNCORA, não o ponto 10. Num TEXT centralizado ou à
+                # direita o ponto 10 é a esquerda-baseline e a âncora de
+                # verdade é o ponto 11 (`align_point`) — é o que
+                # `get_placement()` devolve e é o que o importador do
+                # NewSIcad guarda. Comparar o ponto 10 do TEXT original
+                # contra o `insert` do nosso MTEXT acusava deslocamento de
+                # 0,7 em cada cabeçalho de legenda (22 etiquetas no
+                # NEWSI-LEG_R07 da Casa Sanchez) que não existe.
                 try:
-                    p = e.dxf.get("insert", None) or e.dxf.get("align_point", (0, 0, 0))
-                    out.append((conteudo, round(float(p[0]), 1), round(float(p[1]), 1)))
+                    _al, ancora, _p2 = e.get_placement()
+                except Exception:
+                    ancora = e.dxf.get("insert", (0, 0, 0))
+                if ancora is None:
+                    ancora = e.dxf.get("insert", (0, 0, 0))
+                try:
+                    out.append((conteudo, round(float(ancora[0]), 1), round(float(ancora[1]), 1)))
                 except Exception:
                     pass
                 continue
