@@ -15,7 +15,14 @@ import ezdxf.recover
 from ezdxf.enums import TextEntityAlignment
 
 import newsicad.core.entities as entities_module
-from newsicad.core.document import DimStyle, Document, TextStyle, dim_arrow_size, dim_text_height
+from newsicad.core.document import (
+    DimStyle,
+    Document,
+    LineType,
+    TextStyle,
+    dim_arrow_size,
+    dim_text_height,
+)
 from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     impressao_do_bloco,
@@ -269,6 +276,39 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             new_layer.color = _aci_to_hex(aci)
         new_layer.visible = not layer.is_off()
         new_layer.locked = layer.is_locked()
+        # Tipo de linha e espessura DA CAMADA: é o que uma entidade ByLayer
+        # herda, e é onde o projetista configura o tracejado na prática (7
+        # das 64 camadas de um projeto da amostra; 25 das 346 de outro).
+        new_layer.linetype = layer.dxf.get("linetype", "CONTINUOUS") or "CONTINUOUS"
+        new_layer.lineweight = int(layer.dxf.get("lineweight", -3))
+
+    # LTYPE: o padrão de traço de cada tipo de linha. Sem essa tabela o nome
+    # ("DASHED", "LINHA TRACEJADA 2_1") não significaria nada nem pra
+    # desenhar nem pra gravar de volta — a linha de eixo do cliente voltava
+    # contínua. Elemento positivo é traço, negativo é lacuna, zero é ponto.
+    for ltype in dxf_doc.linetypes:
+        nome = ltype.dxf.name
+        if nome.upper() in ("BYLAYER", "BYBLOCK"):
+            continue
+        elementos: list[float] = []
+        total = 0.0
+        for tag in ltype.pattern_tags.tags:
+            if tag.code == 40:
+                total = float(tag.value)
+            elif tag.code == 49:
+                elementos.append(float(tag.value))
+        document.linetypes[nome] = LineType(
+            name=nome,
+            pattern=elementos,
+            length=total or sum(abs(v) for v in elementos),
+            description=ltype.dxf.get("description", "") or "",
+        )
+    # LTSCALE global: multiplica o comprimento de todo padrão. Numa planta em
+    # centímetros o projetista deixa em 10 ou 50; gravar 1.0 fixo entregaria
+    # a linha "tracejada" visualmente contínua.
+    ltscale = dxf_doc.header.get("$LTSCALE")
+    if ltscale:
+        document.linetype_scale = float(ltscale)
 
     # STYLE (nome do estilo de texto -> fonte/altura, ver Document.text_styles
     # em core/document.py) — sem isso, todo Text lido de volta ficava preso
@@ -385,6 +425,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
+            _apply_dxf_traco(entity, dxf_entity)
             block_entities.append(entity)
             if dxf_entity.dxftype() == "INSERT":
                 # ATTRIB de INSERT ANINHADO (bloco dentro de bloco): as
@@ -441,6 +482,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 skipped_by_type[dxf_entity.dxftype()] += 1
             continue
         _apply_dxf_color(entity, dxf_entity)
+        _apply_dxf_traco(entity, dxf_entity)
         document.add_entity(entity)
 
         if dxf_entity.dxftype() == "INSERT":
@@ -494,6 +536,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
+            _apply_dxf_traco(entity, dxf_entity)
             _store_in_layout(entity)
             if dxf_entity.dxftype() == "INSERT":
                 entity.attributes = [
@@ -635,6 +678,26 @@ def _file_notes(dxf_doc) -> list[str]:
 
 def _point(v) -> Point:
     return Point(float(v[0]), float(v[1]))
+
+
+def _apply_dxf_traco(entity: Entity, e) -> None:
+    """Tipo de linha, espessura e escala do traço da entidade.
+
+    Os três eram descartados na leitura: toda linha tracejada do cliente
+    voltava contínua no arquivo entregue e toda espessura voltava "padrão".
+    No censo da base (01/10/2026), 6 de 7 projetos têm linha não contínua —
+    7 % das entidades em média, 25 % no pior caso — e 29 % das entidades têm
+    espessura própria, 75 % no pior caso. A perda é silenciosa: o desenho
+    continua lá, só deixou de distinguir eixo de parede e projeção de corte.
+    """
+    linetype = e.dxf.get("linetype", "BYLAYER") or "BYLAYER"
+    # ByLayer guardado como "" deixa a resolução em `Document.linetype_of`
+    # com um caminho só (ver lá).
+    entity.linetype = "" if linetype.upper() == "BYLAYER" else linetype
+    entity.lineweight = int(e.dxf.get("lineweight", -1))
+    escala = float(e.dxf.get("ltscale", 1.0) or 1.0)
+    if escala > 0:
+        entity.linetype_scale = escala
 
 
 def _apply_dxf_color(entity: Entity, e) -> None:
@@ -885,6 +948,25 @@ def save_dxf(document: Document, path: str | Path) -> None:
         dxf_doc.appids.new(NEWSICAD_APPID)
     msp = dxf_doc.modelspace()
 
+    # LTYPE antes das camadas: uma camada não pode citar um tipo de linha que
+    # ainda não está na tabela.
+    for nome, ltype in document.linetypes.items():
+        if nome.upper() in ("CONTINUOUS", "BYLAYER", "BYBLOCK") or nome in dxf_doc.linetypes:
+            continue
+        try:
+            dxf_doc.linetypes.add(
+                nome,
+                pattern=([ltype.length or sum(abs(v) for v in ltype.pattern), *ltype.pattern]
+                         if ltype.pattern else [0.0]),
+                description=ltype.description,
+            )
+        except Exception:
+            # Nome que o DXF não aceita ou padrão degenerado: perder o
+            # tracejado desse tipo é menos grave que não gravar o arquivo.
+            continue
+    if document.linetype_scale and document.linetype_scale != 1.0:
+        dxf_doc.header["$LTSCALE"] = float(document.linetype_scale)
+
     for layer in document.layers.values():
         if layer.name != "0" and layer.name not in dxf_doc.layers:
             dxf_doc.layers.add(layer.name)
@@ -899,6 +981,10 @@ def save_dxf(document: Document, path: str | Path) -> None:
         rgb_layer = _hex_to_rgb(layer.color)
         if rgb_layer is not None:
             dxf_layer.rgb = rgb_layer
+        if layer.linetype and layer.linetype in dxf_doc.linetypes:
+            dxf_layer.dxf.linetype = layer.linetype
+        if layer.lineweight != -3:
+            dxf_layer.dxf.lineweight = int(layer.lineweight)
         if not layer.visible:
             dxf_layer.off()
         if layer.locked:
@@ -1018,6 +1104,23 @@ def _apply_color_attribs(dxfattribs: dict, entity: Entity) -> None:
     aci = _hex_to_aci(entity.color)
     if aci is not None:
         dxfattribs["color"] = aci
+
+
+def _apply_traco_attribs(dxfattribs: dict, entity: Entity, msp=None) -> None:
+    """Tipo de linha, espessura e escala do traço no DXF gravado.
+
+    ByLayer fica de fora de propósito (chave ausente = o próprio padrão do
+    formato), igual à cor. O tipo de linha só é citado se a tabela LTYPE do
+    arquivo o tiver: um nome órfão deixa o arquivo inválido pro AutoCAD, e um
+    tracejado perdido é menos grave que um arquivo que não abre."""
+    if entity.linetype:
+        tabela = getattr(getattr(msp, "doc", None), "linetypes", None)
+        if tabela is None or entity.linetype in tabela:
+            dxfattribs["linetype"] = entity.linetype
+    if entity.lineweight != -1:
+        dxfattribs["lineweight"] = int(entity.lineweight)
+    if entity.linetype_scale and entity.linetype_scale != 1.0:
+        dxfattribs["ltscale"] = float(entity.linetype_scale)
 
 
 def _escreve_dimension_preservada(msp, ref: BlockReference, fonte: dict,
@@ -1142,6 +1245,7 @@ def _to_dxf_entity(
     importada como anotação (ver `_escreve_dimension_preservada`)."""
     attribs = {"layer": entity.layer}
     _apply_color_attribs(attribs, entity)
+    _apply_traco_attribs(attribs, entity, msp)
 
     if isinstance(entity, Line):
         msp.add_line((entity.start.x, entity.start.y), (entity.end.x, entity.end.y), dxfattribs=attribs)

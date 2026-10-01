@@ -123,6 +123,11 @@ _WIPEOUT_DATA_KEY = 2
 #: Espessura (unidades do desenho) da polilinha que o item desenha, para a
 #: caneta certa voltar depois de desselecionar e na exportação em PDF.
 _WIDTH_DATA_KEY = 3
+
+#: Nome do tipo de linha já resolvido (ByLayer aplicado) do item, pra
+#: `_restore_base_pen` refazer a caneta tracejada ao desselecionar — sem
+#: isso, selecionar e desselecionar uma linha de eixo a deixava contínua.
+_LINETYPE_DATA_KEY = 4
 # Ordem de desenho: cada entidade do modelspace recebe zValue = (posição no
 # dict do Document) x este passo, então a cena empilha na mesma ordem em que
 # as entidades estão no documento (= ordem de criação, ou a ordem de desenho
@@ -229,6 +234,70 @@ def _pen_for(color: str, width: float = 0.0) -> QPen:
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         _WIDE_PEN_CACHE[chave] = pen
+    return pen
+
+
+#: Comprimento, em pixels de tela, do padrão de traço inteiro. O DXF guarda
+#: o padrão em unidades do DESENHO, multiplicado pelo LTSCALE do arquivo (que
+#: numa planta em centímetros costuma ser 10 ou 50). Converter isso pra cena e
+#: deixar a caneta não cosmética significaria refazer a caneta de 185 mil
+#: itens a cada zoom; o que a gente faz é manter o RITMO do padrão (traço
+#: longo + traço curto é linha de eixo; traço igual é tracejada; traço e ponto
+#: é eixo de simetria) com um comprimento fixo na tela, do mesmo jeito que a
+#: caneta cosmética mantém 1 px de espessura em qualquer zoom. O arquivo
+#: entregue leva o padrão exato — ver `_apply_traco_attribs` em io/dxf_io.py.
+_PADRAO_PX = 14.0
+_MINIMO_PX = 0.9
+
+_DASH_CACHE: dict[tuple[float, ...], list[float] | None] = {}
+
+
+def dash_pattern_do_padrao(pattern: list[float]) -> list[float] | None:
+    """Padrão do LTYPE (unidades do desenho) -> dash pattern do Qt (pixels).
+
+    No DXF, elemento positivo é traço, negativo é lacuna e zero é ponto. O Qt
+    quer uma lista estritamente alternada traço/lacuna, só com valores
+    positivos — daí a normalização. `None` = linha contínua."""
+    if not pattern or all(v >= 0 for v in pattern):
+        return None
+    chave = tuple(pattern)
+    if chave in _DASH_CACHE:
+        return _DASH_CACHE[chave]
+    total = sum(abs(v) for v in pattern) or 1.0
+    k = _PADRAO_PX / total
+    saida: list[float] = []
+    for v in pattern:
+        quer_traco = v >= 0
+        proximo_e_traco = len(saida) % 2 == 0
+        if quer_traco != proximo_e_traco:
+            saida.append(_MINIMO_PX)  # o par que falta, pra não desalinhar
+        saida.append(max(abs(v) * k, _MINIMO_PX))
+    if len(saida) % 2:
+        saida.append(_MINIMO_PX)
+    _DASH_CACHE[chave] = saida
+    return saida
+
+
+#: Canetas tracejadas por (cor, nome do tipo de linha) — mesmo motivo do
+#: `_PEN_CACHE`: criar QPen por item custa segundos numa planta grande.
+_DASH_PEN_CACHE: dict[tuple[str, str], QPen] = {}
+
+
+def _pen_tracejada(color: str, linetype: str, pattern: list[float]) -> QPen:
+    chave = (color, linetype)
+    pen = _DASH_PEN_CACHE.get(chave)
+    if pen is None:
+        dash = dash_pattern_do_padrao(pattern)
+        if dash is None:
+            pen = _entity_pen(color)
+        else:
+            pen = QPen(QColor(color))
+            pen.setWidth(0)
+            pen.setDashPattern(dash)
+            # Ponta reta: com RoundCap o ponto do padrão traço-ponto vira uma
+            # bolinha maior que o traço e a linha fica borrada no zoom-out.
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        _DASH_PEN_CACHE[chave] = pen
     return pen
 
 
@@ -1293,10 +1362,49 @@ class CanvasView(QGraphicsView):
             for child in item.childItems():
                 self._restore_base_pen(child)
         elif hasattr(item, "setPen"):
-            color = item.data(_BASE_COLOR_DATA_KEY)
-            item.setPen(_pen_for(color if color else ENTITY_COLOR, item.data(_WIDTH_DATA_KEY) or 0.0))
+            color = item.data(_BASE_COLOR_DATA_KEY) or ENTITY_COLOR
+            linetype = item.data(_LINETYPE_DATA_KEY)
+            if linetype:
+                padrao = self.document.linetypes.get(linetype)
+                if padrao is not None and padrao.pattern:
+                    item.setPen(_pen_tracejada(color, linetype, padrao.pattern))
+                    return
+            item.setPen(_pen_for(color, item.data(_WIDTH_DATA_KEY) or 0.0))
+
+    def _traco_do_item(self, entity: Entity) -> tuple[str, list[float]]:
+        """(nome, padrão) do tipo de linha que vale pra esta entidade. O
+        ByLayer é resolvido pelo documento (`Document.linetype_of`), igual à
+        cor."""
+        ltype = self.document.linetype_of(entity)
+        return ltype.name, ltype.pattern
+
+    def _aplica_traco(self, item: QGraphicsItem, entity: Entity) -> None:
+        """Troca a caneta do item pela tracejada, quando for o caso.
+
+        Roda uma vez por item criado. Grupo (BlockReference) não entra: cada
+        filho já passou por `_create_item` com o tipo de linha dele próprio —
+        um INSERT com tipo de linha explícito não força o dos filhos, mesma
+        simplificação do BYBLOCK em `Document.linetype_of`."""
+        if isinstance(item, QGraphicsItemGroup) or not hasattr(item, "setPen"):
+            return
+        nome, padrao = self._traco_do_item(entity)
+        if not padrao or all(v >= 0 for v in padrao):
+            return
+        cor = item.data(_BASE_COLOR_DATA_KEY) or ENTITY_COLOR
+        if item.data(_WIDTH_DATA_KEY):
+            # Polilinha com espessura de verdade (símbolos da New SI): a
+            # caneta larga não é cosmética, misturar com dash em pixels
+            # daria traço do tamanho errado. Fica contínua.
+            return
+        item.setData(_LINETYPE_DATA_KEY, nome)
+        item.setPen(_pen_tracejada(cor, nome, padrao))
 
     def _create_item(self, entity: Entity, color: str | None = None) -> QGraphicsItem:
+        item = self._create_item_sem_traco(entity, color)
+        self._aplica_traco(item, entity)
+        return item
+
+    def _create_item_sem_traco(self, entity: Entity, color: str | None = None) -> QGraphicsItem:
         """QGraphicsItem de uma entidade. `color` = cor efetiva já resolvida
         (passada por `_create_block_reference_item` pros filhos de bloco, que
         herdam do INSERT); `None` = resolve pela regra de `_effective_color`

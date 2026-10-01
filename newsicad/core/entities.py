@@ -95,6 +95,23 @@ class Entity:
     #: None = ByLayer | `BYBLOCK` (sentinel acima) | "#RRGGBB" = cor própria.
     color: str | None = None
     id: str = field(default_factory=_new_id)
+    #: Tipo de linha (LTYPE): "" = ByLayer, "BYBLOCK" = herda do INSERT,
+    #: senão o nome da entrada em `Document.linetypes` ("DASHED", "CENTER",
+    #: "LINHA TRACEJADA 2_1"...). Antes era descartado na leitura: toda linha
+    #: tracejada do cliente — eixo, projeção, circuito elétrico — voltava
+    #: contínua no arquivo entregue. Na amostra da base, 6 de 7 projetos têm
+    #: linha não contínua; um deles com 5.270 entidades só na camada de
+    #: tracejado (censo de 01/10/2026).
+    linetype: str = ""
+    #: Espessura do traço em centésimos de milímetro, como no DXF:
+    #: -1 = ByLayer, -2 = ByBlock, -3 = padrão do arquivo, 0..211 = valor
+    #: real (50 = 0,50 mm). 29 % das entidades da amostra têm espessura
+    #: própria, e num projeto são 74 %.
+    lineweight: int = -1
+    #: Multiplicador do comprimento do padrão de traço desta entidade
+    #: (group code 48, o CELTSCALE do AutoCAD). Sem ele, uma linha que o
+    #: projetista ajustou pra tracejado miúdo volta com o traço do padrão.
+    linetype_scale: float = 1.0
 
     def __setattr__(self, name: str, value) -> None:
         """Toda atribuição carimba a entidade com uma versão nova.

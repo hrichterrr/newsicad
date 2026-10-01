@@ -15,6 +15,37 @@ class Layer:
     color: str = DEFAULT_LAYER_COLOR
     visible: bool = True
     locked: bool = False
+    #: Tipo de linha da camada (o que uma entidade ByLayer herda). Nome de
+    #: uma entrada em `Document.linetypes`.
+    linetype: str = "CONTINUOUS"
+    #: Espessura da camada em centésimos de milímetro; -3 = padrão do
+    #: arquivo (ver `Entity.lineweight`).
+    lineweight: int = -3
+
+
+@dataclass
+class LineType:
+    """LTYPE: o padrão de traço de um tipo de linha, do jeito que o DXF
+    guarda — uma sequência de comprimentos em unidades do desenho, onde
+    positivo é traço, negativo é lacuna e zero é ponto.
+
+    O que o AutoCAD chama de linetype complexo (com texto ou forma no meio
+    do traço, "GAS_LINE ----GAS----GAS----") não cabe aqui: o que a gente
+    preserva é o RITMO do traço, que é o que faz a linha de eixo parecer
+    linha de eixo. É melhor entregar o tracejado sem o textinho do que
+    entregar uma linha contínua no lugar dele.
+    """
+
+    name: str
+    #: Comprimentos dos elementos (group code 49): +traço, -lacuna, 0 ponto.
+    pattern: list[float] = field(default_factory=list)
+    #: Comprimento total do padrão (group code 40).
+    length: float = 0.0
+    description: str = ""
+
+    @property
+    def continuous(self) -> bool:
+        return not self.pattern or all(v >= 0 for v in self.pattern)
 
 
 @dataclass
@@ -162,6 +193,13 @@ class Document:
         # não na função do comando, pra valer da segunda chamada em
         # diante — ver fillet_command.
         self.fillet_radius: float = 0.0
+        # LTYPE: tabela de tipos de linha do arquivo (o padrão de traço de
+        # cada nome). "CONTINUOUS" existe sempre, igual ao AutoCAD.
+        self.linetypes: dict[str, LineType] = {"CONTINUOUS": LineType(name="CONTINUOUS")}
+        # LTSCALE global: multiplica o comprimento de TODO padrão de traço.
+        # Numa planta em centímetros o projetista costuma deixar em 10 ou 50;
+        # gravar 1.0 fixo entregaria a linha "tracejada" visualmente contínua.
+        self.linetype_scale: float = 1.0
         # Altura de texto lembrada do último MTEXT (igual à TEXTSIZE do
         # AutoCAD) e, ao abrir um arquivo, a altura mais comum dos textos que
         # ele já tem — sem isso, digitar um texto numa planta em metros saía
@@ -211,6 +249,34 @@ class Document:
         # fechar a janela não perguntava nada e a escolha se perdia
         # (auditoria de 07/09/2026 com as amostras da Autodesk).
         self.touch()
+
+    def linetype_of(self, entity: Entity) -> LineType:
+        """O tipo de linha que vale pra esta entidade, resolvendo o ByLayer.
+
+        Mesma cadeia da cor: a entidade manda; se ela não disser nada ("" =
+        ByLayer), vale o da camada; se nada for encontrado, é contínua.
+        Nome desconhecido também cai em contínua em vez de estourar — um
+        .dwg real cita LTYPE que o dwg2dxf não traduziu."""
+        nome = entity.linetype
+        if not nome or nome.upper() == "BYLAYER":
+            camada = self.layers.get(entity.layer)
+            nome = camada.linetype if camada else "CONTINUOUS"
+        if not nome or nome.upper() in ("BYBLOCK", "BYLAYER"):
+            return self.linetypes.get("CONTINUOUS", LineType(name="CONTINUOUS"))
+        achado = self.linetypes.get(nome)
+        if achado is None:  # nomes de LTYPE não têm caixa definida no DXF
+            alvo = nome.upper()
+            achado = next((lt for n, lt in self.linetypes.items() if n.upper() == alvo), None)
+        return achado or LineType(name="CONTINUOUS")
+
+    def lineweight_of(self, entity: Entity) -> int:
+        """Espessura em centésimos de mm que vale pra esta entidade, com o
+        ByLayer resolvido. -3 (padrão do arquivo) e -2 (ByBlock) voltam como
+        estão: quem desenha decide o que fazer com "sem espessura"."""
+        if entity.lineweight != -1:
+            return entity.lineweight
+        camada = self.layers.get(entity.layer)
+        return camada.lineweight if camada else -3
 
     def is_layer_visible(self, entity: Entity) -> bool:
         layer = self.layers.get(entity.layer)
