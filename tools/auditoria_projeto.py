@@ -101,17 +101,25 @@ def _invisivel(e) -> bool:
         return False
 
 
-def _visiveis(entidades, profundidade: int = 0):
-    """Expande blocos honrando invisibilidade e camada não-plotada — o que o
-    AutoCAD de fato desenha, que é o único referencial honesto."""
+def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
+    """(entidade, camada efetiva) do que o AutoCAD de fato desenha.
+
+    Honra invisibilidade, pula camada não-plotada e aplica a HERANÇA DE
+    CAMADA: conteúdo de bloco na camada "0" assume a camada do INSERT — a
+    regra do AutoCAD, que o importador do NewSIcad aplica e o
+    `virtual_entities` do ezdxf não. Sem isto a camada "0" da referência
+    fica com tudo que no nosso modelo foi para a camada do símbolo, e a
+    comparação por camada acusa 44,9% de deslocamento num arquivo com 100%
+    de cobertura."""
     for e in entidades:
         if _invisivel(e):
             continue
         try:
-            camada = (e.dxf.get("layer", "0") or "0").strip().lower()
+            propria = (e.dxf.get("layer", "0") or "0").strip()
         except Exception:
-            camada = "0"
-        if camada in CAMADAS_NAO_PLOTADAS:
+            propria = "0"
+        camada = camada_pai if (propria == "0" and camada_pai) else propria
+        if camada.lower() in CAMADAS_NAO_PLOTADAS:
             continue
         if e.dxftype() in _TIPOS_DE_TEXTO:
             continue
@@ -127,9 +135,9 @@ def _visiveis(entidades, profundidade: int = 0):
                 filhos = list(e.virtual_entities())
             except Exception:
                 continue
-            yield from _visiveis(filhos, profundidade + 1)
+            yield from _visiveis(filhos, profundidade + 1, camada)
             continue
-        yield e
+        yield e, camada
 
 
 def textos(caminho: Path) -> list[tuple[str, float, float]]:
@@ -138,15 +146,16 @@ def textos(caminho: Path) -> list[tuple[str, float, float]]:
     doc = ezdxf.readfile(caminho)
     out: list[tuple[str, float, float]] = []
 
-    def anda(entidades, prof=0):
+    def anda(entidades, prof=0, camada_pai=""):
         for e in entidades:
             if _invisivel(e):
                 continue
             try:
-                camada = (e.dxf.get("layer", "0") or "0").strip().lower()
+                propria = (e.dxf.get("layer", "0") or "0").strip()
             except Exception:
-                camada = "0"
-            if camada in CAMADAS_NAO_PLOTADAS:
+                propria = "0"
+            camada = camada_pai if (propria == "0" and camada_pai) else propria
+            if camada.lower() in CAMADAS_NAO_PLOTADAS:
                 continue
             t = e.dxftype()
             if t in _TIPOS_DE_TEXTO:
@@ -164,7 +173,7 @@ def textos(caminho: Path) -> list[tuple[str, float, float]]:
                 continue
             if t in _EXPANDIR and prof < _MAX_ANINHAMENTO:
                 try:
-                    anda(list(e.virtual_entities()), prof + 1)
+                    anda(list(e.virtual_entities()), prof + 1, camada)
                 except Exception:
                     pass
     anda(doc.modelspace())
@@ -204,7 +213,7 @@ def segmentos(caminho: Path) -> tuple[list[tuple[str, list[tuple[float, float]]]
     # Uma entidade defeituosa não pode derrubar a medição do arquivo
     # inteiro: o `dwg2dxf` grava spline com contagem de nós errada em
     # alguns arquivos reais, e o achatador do ezdxf levanta no meio.
-    for entidade in _visiveis(msp):
+    for entidade, camada_efetiva in _visiveis(msp):
         try:
             primitivas = list(dis.to_primitives([entidade]))
         except Exception:
@@ -218,8 +227,7 @@ def segmentos(caminho: Path) -> tuple[list[tuple[str, list[tuple[float, float]]]
                 continue
             if len(pontos) < 1:
                 continue
-            camada = getattr(prim.entity.dxf, "layer", "0") or "0"
-            saida.append((camada, pontos))
+            saida.append((camada_efetiva, pontos))
             for x, y in pontos:
                 if not (math.isfinite(x) and math.isfinite(y)):
                     continue
@@ -256,7 +264,7 @@ PERDA_QUE_IMPORTA = {
 
 def tipos_desenhaveis(caminho: Path) -> collections.Counter:
     doc = ezdxf.readfile(caminho)
-    return collections.Counter(e.dxftype() for e in _visiveis(doc.modelspace()))
+    return collections.Counter(e.dxftype() for e, _camada in _visiveis(doc.modelspace()))
 
 
 def degradacao(ref: collections.Counter, nosso: collections.Counter) -> list[dict]:
