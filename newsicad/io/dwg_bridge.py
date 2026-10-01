@@ -116,6 +116,49 @@ def count_unhandled_entities(stderr: str) -> dict[str, int]:
     return counts
 
 
+def pasta_que_a_ferramenta_enxerga(pasta: Path) -> Path:
+    """Equivalente da pasta com caminho ASCII, pro `dwg2dxf` conseguir
+    GRAVAR o DXF nela. Mesmo motivo de `entrada_que_a_ferramenta_abre`: um
+    usuário do Windows chamado "José" tem %TEMP% fora do ASCII, e o nosso
+    arquivo temporário cairia justamente lá. O nome curto 8.3 do Windows
+    (JOS~1) resolve sem copiar nada."""
+    if str(pasta).isascii() or platform.system() != "Windows":
+        return pasta
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(1024)
+        n = ctypes.windll.kernel32.GetShortPathNameW(str(pasta), buf, 1024)
+        if n and buf.value and buf.value.isascii() and Path(buf.value).exists():
+            return Path(buf.value)
+    except Exception:
+        pass
+    return pasta
+
+
+def entrada_que_a_ferramenta_abre(origem: Path, pasta_de_trabalho: Path) -> Path:
+    """Caminho do .dwg que o `dwg2dxf` consegue de fato abrir.
+
+    O binário do LibreDWG no Windows abre o arquivo pela API de byte do
+    sistema, não pela de Unicode: um caminho com caractere fora da página de
+    código da máquina chega truncado na ferramenta, que responde
+    `ERROR: File not found` pra um arquivo que existe. O caso que estourou
+    na base real foi o acento DECOMPOSTO (NFD) que o macOS/iCloud grava —
+    "ELÉTRICA" guardado como E + acento combinante, caractere que não existe
+    no cp1252. Nomes assim são a regra nos projetos (ELÉTRICA, HIDRÁULICA,
+    TÉRREO, ILUMINAÇÃO): 28 dos 218 arquivos da base têm acento no nome.
+
+    Quando o caminho não é ASCII, o arquivo é copiado pra pasta de trabalho
+    com um nome neutro. A cópia custa uma fração do que custa a conversão, e
+    só acontece nesses casos.
+    """
+    if str(origem).isascii():
+        return origem
+    copia = pasta_de_trabalho / ("entrada" + (origem.suffix.lower() or ".dwg"))
+    shutil.copy2(origem, copia)
+    return copia
+
+
 def _run(args: list[str]) -> str:
     """Executa a ferramenta e devolve o stderr (avisos do dwg2dxf)."""
     try:
@@ -191,8 +234,10 @@ def dwg_to_document(path: str | Path) -> tuple[Document, int]:
     próprio dwg2dxf avisou ter descartado na conversão, ex. ACAD_TABLE)."""
     tool = _tool_path("dwg2dxf")
     with tempfile.TemporaryDirectory() as tmp_dir:
-        dxf_path = Path(tmp_dir) / "converted.dxf"
-        stderr = _run([tool, "-o", str(dxf_path), "-y", str(path)])
+        tmp_dir = pasta_que_a_ferramenta_enxerga(Path(tmp_dir))
+        dxf_path = tmp_dir / "converted.dxf"
+        entrada = entrada_que_a_ferramenta_abre(Path(path), tmp_dir)
+        stderr = _run([tool, "-o", str(dxf_path), "-y", str(entrada)])
         if not dxf_path.exists():
             raise DwgBridgeError(f"dwg2dxf não gerou o arquivo DXF esperado para '{path}'.")
         _sanitize_dxf_file(dxf_path)

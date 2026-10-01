@@ -36,10 +36,12 @@ from __future__ import annotations
 
 import argparse
 import collections
+import concurrent.futures
 import subprocess
 import json
 import math
 import sys
+import threading
 import tempfile
 import time
 import traceback
@@ -416,8 +418,12 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
             # 1) verdade: o arquivo do cliente como DXF
             if caminho.suffix.lower() == ".dwg":
                 ferramenta = dwg_bridge._tool_path("dwg2dxf")
+                tmp = dwg_bridge.pasta_que_a_ferramenta_enxerga(tmp)
                 ref_dxf = tmp / "ref.dxf"
-                dwg_bridge._run([ferramenta, "-o", str(ref_dxf), "-y", str(caminho)])
+                # Mesmo desvio do programa: nome com acento (28 arquivos da
+                # base) chega truncado na ferramenta e "nao existe".
+                entrada = dwg_bridge.entrada_que_a_ferramenta_abre(caminho, tmp)
+                dwg_bridge._run([ferramenta, "-o", str(ref_dxf), "-y", str(entrada)])
                 dwg_bridge._sanitize_dxf_file(ref_dxf)
             else:
                 ref_dxf = caminho
@@ -574,6 +580,8 @@ def main() -> None:
     ap.add_argument("--limite", type=int, default=0)
     ap.add_argument("--um-arquivo", action="store_true",
                     help="uso interno: audita um arquivo e imprime o JSON")
+    ap.add_argument("--trabalhadores", type=int, default=1,
+                    help="quantos arquivos auditar ao mesmo tempo")
     ap.add_argument("--tempo-limite", type=int, default=600,
                     help="segundos por arquivo antes de desistir dele")
     args = ap.parse_args()
@@ -603,21 +611,51 @@ def main() -> None:
         except Exception:
             feitos = {}
 
-    print(f"{len(arquivos)} arquivos | {len(feitos)} já auditados", flush=True)
-    for i, caminho in enumerate(arquivos, 1):
-        chave = caminho.name + "|" + caminho.parent.name
-        if chave in feitos:
-            continue
-        print(f"[{i}/{len(arquivos)}] {caminho.parent.name} / {caminho.name} ({caminho.stat().st_size/1024/1024:.1f} MB)", flush=True)
-        reg = audita_isolado(caminho, args.mapas, args.tempo_limite)
-        feitos[chave] = reg
-        if reg["status"] == "FALHOU":
-            print(f"    FALHOU: {reg['erro'][:140]}", flush=True)
-        else:
-            print(f"    cobertura {reg['cobertura']*100:.1f}% | {reg['segmentos_ref']} -> {reg['segmentos_nosso']} seg | {reg['segundos']}s", flush=True)
-            for a in reg["alertas"]:
-                print(f"       ! {a}", flush=True)
-        args.saida.write_text(json.dumps(list(feitos.values()), ensure_ascii=False, indent=1), encoding="utf-8")
+    pendentes = [p for p in arquivos if p.name + "|" + p.parent.name not in feitos]
+    print(f"{len(arquivos)} arquivos | {len(feitos)} auditados antes |"
+          f" {len(pendentes)} na fila | {args.trabalhadores} por vez", flush=True)
+
+    trava = threading.Lock()
+    total = len(arquivos)
+    pronto = len(feitos)
+
+    def conta(caminho: Path, reg: dict) -> None:
+        # So quem tem a trava imprime e grava: um JSON pego no meio da
+        # escrita e o que da "Expecting value" quando a gente le o
+        # relatorio com a varredura ainda rodando.
+        nonlocal pronto
+        with trava:
+            pronto += 1
+            feitos[caminho.name + "|" + caminho.parent.name] = reg
+            mb = caminho.stat().st_size / 1024 / 1024
+            print(f"[{pronto}/{total}] {caminho.parent.name} / {caminho.name} ({mb:.1f} MB)", flush=True)
+            if reg["status"] == "FALHOU":
+                print(f"    FALHOU: {reg['erro'][:140]}", flush=True)
+            else:
+                print(f"    cobertura {reg['cobertura']*100:.1f}% | {reg['segmentos_ref']}"
+                      f" -> {reg['segmentos_nosso']} seg | {reg['segundos']}s", flush=True)
+                for a in reg["alertas"]:
+                    print(f"       ! {a}", flush=True)
+            temp = args.saida.with_suffix(".parcial")
+            temp.write_text(json.dumps(list(feitos.values()), ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+            temp.replace(args.saida)
+
+    if args.trabalhadores <= 1:
+        for caminho in pendentes:
+            conta(caminho, audita_isolado(caminho, args.mapas, args.tempo_limite))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.trabalhadores) as pool:
+            futuros = {pool.submit(audita_isolado, c, args.mapas, args.tempo_limite): c
+                       for c in pendentes}
+            for f in concurrent.futures.as_completed(futuros):
+                caminho = futuros[f]
+                try:
+                    conta(caminho, f.result())
+                except Exception as exc:  # o pool nao pode morrer por um arquivo
+                    conta(caminho, {"arquivo": caminho.name, "pasta": caminho.parent.name,
+                                    "status": "FALHOU", "erro": f"{type(exc).__name__}: {exc}",
+                                    "alertas": ["ERRO NO PROPRIO AUDITOR"]})
 
     print(f"\nrelatório: {args.saida.resolve()}")
 
