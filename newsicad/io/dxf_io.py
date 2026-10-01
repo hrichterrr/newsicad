@@ -754,6 +754,23 @@ def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
     return None
 
 
+def escapa_mtext(conteudo: str) -> str:
+    r"""Prepara um texto do modelo para virar o conteúdo CRU de um MTEXT.
+
+    O modelo guarda o texto já legível ("Q.A. {INFRA}", "0,16^ m"); o MTEXT
+    do DXF guarda uma linguagem de formatação, onde "{" e "}" agrupam, a
+    barra invertida inicia comando e "^" é notação de caractere de controle.
+    Gravar o texto legível direto fazia o leitor interpretá-lo de novo e
+    devolver outra coisa: "Q.A. {INFRA}" voltava "Q.A. INFRA" e "a^b"
+    voltava 'a"'. Ou seja, o texto do cliente era corrompido ao salvar —
+    achado na varredura da base em 01/10/2026, nas etiquetas de área do
+    projeto hidráulico da Academia Pegasus. Com o escape, os dez casos de
+    teste sobrevivem à ida e volta; sem ele, três."""
+    conteudo = conteudo.replace("\\", "\\\\")
+    conteudo = conteudo.replace("{", r"\{").replace("}", r"\}")
+    return conteudo.replace("^", "^ ")
+
+
 def nada_a_desenhar(e) -> bool:
     """A entidade foi recusada porque não desenha NADA, não porque o
     NewSIcad não a suporta?
@@ -1255,7 +1272,7 @@ def _to_dxf_entity(
             text_attribs["width"] = float(entity.width)
         if abs(entity.line_spacing_factor - 1.0) > 1e-9:
             text_attribs["line_spacing_factor"] = float(entity.line_spacing_factor)
-        msp.add_mtext(entity.content, dxfattribs=text_attribs)
+        msp.add_mtext(escapa_mtext(entity.content), dxfattribs=text_attribs)
         return
 
     if isinstance(entity, PointEntity):

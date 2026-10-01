@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import subprocess
 import json
 import math
 import sys
@@ -459,13 +460,52 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
     return reg
 
 
+def audita_isolado(caminho: Path, pasta_mapas: Path | None, tempo_limite: int) -> dict:
+    """Audita o arquivo num processo separado. Travamento duro ou demora
+    viram um registro de falha em vez de interromper a varredura."""
+    cmd = [sys.executable, str(Path(__file__).resolve()), str(caminho), "--um-arquivo"]
+    if pasta_mapas is not None:
+        cmd += ["--mapas", str(pasta_mapas)]
+    base = {"arquivo": caminho.name, "pasta": caminho.parent.name,
+            "mb": round(caminho.stat().st_size / 1024 / 1024, 2)}
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=tempo_limite)
+    except subprocess.TimeoutExpired:
+        return {**base, "status": "FALHOU", "erro": f"passou de {tempo_limite}s",
+                "alertas": [f"NAO TERMINOU EM {tempo_limite}s"]}
+    marca = "<<<JSON>>>"
+    for linha in (r.stdout or "").splitlines():
+        if linha.startswith(marca):
+            try:
+                return json.loads(linha[len(marca):])
+            except Exception:
+                break
+    erro = (r.stderr or "").strip().splitlines()
+    return {**base, "status": "FALHOU",
+            "erro": f"processo encerrou com codigo {r.returncode}: " + (erro[-1] if erro else "sem saida"),
+            "alertas": ["O PROCESSO MORREU AUDITANDO ESTE ARQUIVO"]}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("alvo", type=Path)
     ap.add_argument("--saida", type=Path, default=Path("auditoria.json"))
     ap.add_argument("--mapas", type=Path, default=None)
     ap.add_argument("--limite", type=int, default=0)
+    ap.add_argument("--um-arquivo", action="store_true",
+                    help="uso interno: audita um arquivo e imprime o JSON")
+    ap.add_argument("--tempo-limite", type=int, default=600,
+                    help="segundos por arquivo antes de desistir dele")
     args = ap.parse_args()
+
+    if args.um_arquivo:
+        # Modo filho: um arquivo, resultado no stdout. É assim que a
+        # varredura sobrevive a um travamento duro — ezdxf e o achatador
+        # derrubaram o processo inteiro no arquivo 70 de 218 na primeira
+        # tentativa, sem nem deixar traceback.
+        print("<<<JSON>>>" + json.dumps(audita(args.alvo, args.mapas), ensure_ascii=False))
+        return
 
     if args.alvo.is_file():
         arquivos = [args.alvo]
@@ -490,7 +530,7 @@ def main() -> None:
         if chave in feitos:
             continue
         print(f"[{i}/{len(arquivos)}] {caminho.parent.name} / {caminho.name} ({caminho.stat().st_size/1024/1024:.1f} MB)", flush=True)
-        reg = audita(caminho, args.mapas)
+        reg = audita_isolado(caminho, args.mapas, args.tempo_limite)
         feitos[chave] = reg
         if reg["status"] == "FALHOU":
             print(f"    FALHOU: {reg['erro'][:140]}", flush=True)

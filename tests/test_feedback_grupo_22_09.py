@@ -757,3 +757,32 @@ def test_spline_que_virou_um_ponto_nao_e_gravada(tmp_path):
     save_dxf(doc, caminho)
     lido = ezdxf.readfile(caminho)
     assert not [e for e in lido.modelspace() if e.dxftype() == "SPLINE"]
+
+
+# -------------------------------- texto do cliente corrompido ao salvar
+@pytest.mark.parametrize(
+    "conteudo",
+    [
+        "Q.A. {INFRA}",          # chaves agrupam no MTEXT e sumiam
+        "a^b",                   # caret vira caractere de controle
+        "0.16^ m",               # etiqueta de área de projeto hidráulico
+        "14E(0.16^ m)^^",        # caso real, Academia Pegasus
+        "a}b{c",
+        "CABO 2,5mm2 - 127V",    # nenhum caractere especial: tem que ficar igual
+    ],
+)
+def test_texto_sobrevive_a_gravar_e_reabrir(tmp_path, conteudo):
+    """O modelo guarda texto legível; o MTEXT do .dxf guarda uma linguagem
+    de formatação. Gravar um direto no outro fazia o leitor reinterpretar e
+    devolver outra coisa — o texto do cliente era corrompido ao salvar.
+    Achado na varredura da base em 01/10/2026."""
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    doc = Document()
+    doc.add_entity(Text(insertion_point=Point(0, 0), content=conteudo, height=2.5))
+    caminho = tmp_path / "texto.dxf"
+    save_dxf(doc, caminho)
+
+    lido, _ = load_dxf(caminho)
+    voltou = [e.content for e in lido.entities.values() if isinstance(e, Text)]
+    assert voltou == [conteudo]
