@@ -30,6 +30,7 @@ from newsicad.io.dwg_bridge import (
     dwg_to_document,
     entrada_que_a_ferramenta_abre,
     pasta_que_a_ferramenta_enxerga,
+    repara_seqend,
     sanitize_dxf_text,
 )
 
@@ -176,3 +177,92 @@ def test_dwg_com_acento_no_nome_abre():
         referencia, _ = dwg_to_document(dwgs[0])
 
         assert len(documento.entities) == len(referencia.entities)
+
+
+
+# --------------------------------------------------------------------- #
+# POLYLINE sem SEQEND (achado da varredura da base, 01/10/2026)
+#
+# A POLYLINE "clássica" guarda os vértices como entidades VERTEX soltas
+# depois dela, terminadas por um SEQEND obrigatório. O `dwg2dxf` às vezes não
+# emite esse SEQEND, e aí o leitor não sabe onde a polilinha acaba e recusa o
+# arquivo INTEIRO: o projetista vê "arquivo inválido ou corrompido" num .dwg
+# que o AutoCAD abre sem reclamar. Seis arquivos de dois clientes da base
+# estavam assim (Mauro e Marcia, Casa Alphaville R00/R01/R02); num deles
+# faltavam 4 pares de linhas em 6,9 milhões.
+# --------------------------------------------------------------------- #
+
+_POLYLINE_ABERTA = (
+    "  0\nPOLYLINE\n  8\nEIXO\n 66\n1\n 70\n0\n"
+    "  0\nVERTEX\n  8\nEIXO\n 10\n0.0\n 20\n0.0\n"
+    "  0\nVERTEX\n  8\nEIXO\n 10\n1.0\n 20\n0.0\n"
+    "  0\nVERTEX\n  8\nEIXO\n 10\n1.0\n 20\n1.0\n"
+)
+_LINHA = "  0\nLINE\n  8\nPAREDE\n 10\n0.0\n 20\n0.0\n 11\n5.0\n 21\n5.0\n"
+
+
+def _dxf_de_entidades(corpo: str) -> str:
+    return "  0\nSECTION\n  2\nENTITIES\n" + corpo + "  0\nENDSEC\n  0\nEOF\n"
+
+
+def _entidades_lidas(texto: str) -> list[tuple[str, str]]:
+    import io
+
+    import ezdxf
+
+    doc = ezdxf.read(io.StringIO(texto))
+    return [(e.dxftype(), e.dxf.layer) for e in doc.modelspace()]
+
+
+def test_repara_seqend_nao_toca_arquivo_bom():
+    bom = _dxf_de_entidades(_POLYLINE_ABERTA + "  0\nSEQEND\n  8\nEIXO\n" + _LINHA)
+    saida, remendos = repara_seqend(bom)
+
+    assert remendos == 0
+    assert saida == bom, "arquivo íntegro não pode ser reescrito"
+
+
+def test_repara_seqend_fecha_polyline_cortada():
+    quebrado = _dxf_de_entidades(_POLYLINE_ABERTA + _LINHA)
+    with pytest.raises(Exception):
+        _entidades_lidas(quebrado)  # é exatamente isto que o projetista via
+
+    saida, remendos = repara_seqend(quebrado)
+
+    assert remendos == 1
+    assert _entidades_lidas(saida) == [("POLYLINE", "EIXO"), ("LINE", "PAREDE")]
+
+
+def test_repara_seqend_usa_a_camada_de_quem_abriu():
+    """O SEQEND pertence à entidade que abriu a sequência, não à que a
+    interrompeu — camada errada ali move a polilinha de camada."""
+    saida, _ = repara_seqend(_dxf_de_entidades(_POLYLINE_ABERTA + _LINHA))
+    linhas = saida.splitlines()
+    assert linhas[linhas.index("SEQEND") + 2] == "EIXO"
+
+
+def test_repara_seqend_varias_sequencias_e_no_fim_do_arquivo():
+    """Os dois casos reais: polilinha cortada pela polilinha seguinte, e
+    polilinha que fica aberta até o fim da seção."""
+    duas = _dxf_de_entidades(_POLYLINE_ABERTA + _POLYLINE_ABERTA + _LINHA)
+    saida, remendos = repara_seqend(duas)
+    assert remendos == 2
+    assert _entidades_lidas(saida) == [
+        ("POLYLINE", "EIXO"), ("POLYLINE", "EIXO"), ("LINE", "PAREDE"),
+    ]
+
+    no_fim, remendos = repara_seqend(_dxf_de_entidades(_POLYLINE_ABERTA))
+    assert remendos == 1
+    assert _entidades_lidas(no_fim) == [("POLYLINE", "EIXO")]
+
+
+def test_repara_seqend_fecha_insert_com_atributo():
+    """INSERT com `attribs_follow` (código 66 = 1) também precisa de SEQEND."""
+    insert = (
+        "  0\nINSERT\n  8\nSIMBOLO\n 66\n1\n  2\nTOMADA\n 10\n0.0\n 20\n0.0\n"
+        "  0\nATTRIB\n  8\nSIMBOLO\n 10\n0.0\n 20\n0.0\n  1\nT1\n  2\nTAG\n 40\n2.5\n"
+    )
+    saida, remendos = repara_seqend(_dxf_de_entidades(insert + _LINHA))
+    assert remendos == 1
+    linhas = saida.splitlines()
+    assert linhas[linhas.index("SEQEND") + 2] == "SIMBOLO"

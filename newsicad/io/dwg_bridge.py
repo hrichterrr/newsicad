@@ -220,10 +220,103 @@ def sanitize_dxf_text(text: str) -> tuple[str, int]:
     return "\n".join(out) + "\n", merged
 
 
+#: Entidades que podem aparecer DENTRO de uma sequência, antes do SEQEND.
+_FILHOS_DE_SEQUENCIA = frozenset({"VERTEX", "ATTRIB"})
+
+
+def _entidades_do_texto(linhas: list[str]):
+    """(linha do código 0, tipo, camada, atributos_seguem) de cada entidade.
+
+    Varrer por entidade, e não tag por tag, é o que mantém a camada do PAI
+    separada da dos filhos: o VERTEX tem código 8 dele próprio, e usar o
+    último visto poria o SEQEND na camada errada. `atributos_seguem` é o
+    código 66 do INSERT, que vem DEPOIS do tipo — daí não dar pra decidir no
+    momento em que o `0 INSERT` é lido."""
+    atual: list | None = None
+    for linha, codigo, valor in _pares_dxf(linhas):
+        if codigo == 0:
+            if atual is not None:
+                yield tuple(atual)
+            atual = [linha, valor.strip().upper(), "0", False]
+        elif atual is None:
+            continue
+        elif codigo == 8 and atual[2] == "0":
+            atual[2] = valor
+        elif codigo == 66:
+            atual[3] = valor.strip() == "1"
+    if atual is not None:
+        yield tuple(atual)
+
+
+def _pares_dxf(linhas: list[str]):
+    """(índice da linha do código, código, valor) do arquivo. O DXF é uma
+    sequência de pares código/valor em duas linhas cada."""
+    i, n = 0, len(linhas)
+    while i + 1 < n:
+        codigo = linhas[i].strip()
+        if codigo.isdigit():
+            yield i, int(codigo), linhas[i + 1]
+        i += 2
+
+
+def repara_seqend(text: str) -> tuple[str, int]:
+    """Fecha sequência POLYLINE/INSERT que o `dwg2dxf` deixou sem SEQEND.
+
+    Segunda corrupção recorrente do LibreDWG, e esta não deixa NADA passar: a
+    POLYLINE "clássica" guarda os vértices como entidades VERTEX soltas
+    depois dela, terminadas por um SEQEND obrigatório. Quando o SEQEND não
+    vem, o leitor não tem como saber onde a polilinha acaba e recusa o
+    arquivo INTEIRO — "Expected DXF entity ENDBLK or SEQEND" — e o
+    projetista vê "arquivo inválido ou corrompido" num .dwg que o AutoCAD
+    abre sem reclamar.
+
+    Na base real foram quatro arquivos de dois clientes (Mauro e Marcia,
+    Casa Alphaville). Sempre o mesmo padrão: uma POLYLINE de 3 vértices
+    cortada pela entidade seguinte (HATCH, INSERT, ENDBLK ou outra
+    POLYLINE). Um deles tem 6,9 milhões de linhas de DXF e 4 sequências
+    abertas — 4 pares de linhas faltando para o arquivo abrir.
+
+    Repara inserindo o SEQEND que falta, na camada da entidade que abriu a
+    sequência (é o que o formato pede), antes da entidade que a interrompeu.
+    """
+    linhas = text.splitlines()
+    #: {índice da linha onde inserir: camada do pai}
+    remendos: dict[int, str] = {}
+    aberta: str | None = None       # camada da sequência aberta, None = nenhuma
+
+    for linha, tipo, camada, atributos_seguem in _entidades_do_texto(linhas):
+        if aberta is not None:
+            if tipo in _FILHOS_DE_SEQUENCIA:
+                continue
+            if tipo == "SEQEND":
+                aberta = None
+                continue
+            remendos[linha] = aberta
+            aberta = None
+        # INSERT só abre sequência se declarar que vêm atributos (código 66).
+        if tipo == "POLYLINE" or (tipo == "INSERT" and atributos_seguem):
+            aberta = camada
+
+    if aberta is not None:  # sequência aberta até o fim do arquivo
+        remendos[len(linhas)] = aberta
+    if not remendos:
+        return text, 0
+
+    saida: list[str] = []
+    for i, conteudo in enumerate(linhas):
+        if i in remendos:
+            saida += ["  0", "SEQEND", "  8", remendos[i]]
+        saida.append(conteudo)
+    if len(linhas) in remendos:
+        saida += ["  0", "SEQEND", "  8", remendos[len(linhas)]]
+    return "\n".join(saida) + "\n", len(remendos)
+
+
 def _sanitize_dxf_file(path: Path) -> int:
     text = _read_text_flexible(path)
     sanitized, merged = sanitize_dxf_text(text)
-    if merged:
+    sanitized, fechadas = repara_seqend(sanitized)
+    if merged or fechadas:
         path.write_text(sanitized, encoding="utf-8")
     return merged
 

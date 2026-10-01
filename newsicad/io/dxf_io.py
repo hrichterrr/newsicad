@@ -708,6 +708,70 @@ def _apply_dxf_color(entity: Entity, e) -> None:
     dxf_fills.apply_dxf_color(entity, e)
 
 
+#: Códigos do 3DFACE que marcam cada aresta como invisível (group code 70).
+_ARESTA_INVISIVEL = (1, 2, 4, 8)
+
+
+def _face_3d(e, layer: str) -> Entity | None:
+    """3DFACE -> o CONTORNO dela como polilinha 2D.
+
+    O 3DFACE é um triângulo ou quadrilátero plano — como o arquiteto entrega
+    laje, telhado e terreno no .dwg base. Era descartado inteiro, e isso
+    custava o desenho: o `BASE_XREF_LEE` do Joe Lee, com 72 deles, fechava em
+    **4,0% de cobertura** — 4.213 dos 4.289 segmentos estavam lá, mas os 76
+    que faltavam eram justamente os que cobrem a prancha. Duas revisões do
+    mesmo arquivo, e o projetista abria praticamente sem desenho.
+
+    Vira contorno, não superfície: o NewSIcad é editor 2D (ver docs/ESCOPO.md)
+    e o que o projetista precisa é VER a base para projetar em cima. Aresta
+    marcada como invisível no DXF é respeitada — é com ela que o AutoCAD
+    esconde a diagonal de um quadrilátero partido em dois triângulos; desenhar
+    essas diagonais encheria a planta de linhas que o cliente não vê.
+    """
+    try:
+        cantos = [_point(e.dxf.get(nome)) for nome in ("vtx0", "vtx1", "vtx2", "vtx3")]
+    except Exception:
+        return None
+    flags = int(e.dxf.get("invisible_edges", 0) or 0)
+
+    def mesmo(a: Point, b: Point) -> bool:
+        return abs(a.x - b.x) < 1e-9 and abs(a.y - b.y) < 1e-9
+
+    # As quatro arestas do DXF, na ordem — e o sinalizador de invisibilidade é
+    # indexado por ESSA ordem, não pela lista de cantos distintos. Num
+    # triângulo gravado como A,B,C,C a aresta de volta é a 3 (C→A) e a 2 é a
+    # degenerada; casar errado esconde a aresta errada.
+    arestas: list[tuple[Point, Point]] = []
+    for i in range(4):
+        a, b = cantos[i], cantos[(i + 1) % 4]
+        if mesmo(a, b):          # aresta degenerada do triângulo
+            continue
+        if flags & _ARESTA_INVISIVEL[i]:
+            continue
+        arestas.append((a, b))
+    if not arestas:
+        return None
+
+    # Emenda as arestas visíveis em sequências contínuas (circularmente) e
+    # devolve a MAIOR. Com todas visíveis sai o contorno fechado; com a
+    # diagonal escondida — o quadrilátero partido em dois triângulos, que é
+    # como vem a malha de terreno do arquiteto — sai o contorno aberto.
+    cadeias: list[list[Point]] = []
+    for a, b in arestas:
+        if cadeias and mesmo(cadeias[-1][-1], a):
+            cadeias[-1].append(b)
+        else:
+            cadeias.append([a, b])
+    if len(cadeias) > 1 and mesmo(cadeias[-1][-1], cadeias[0][0]):
+        cadeias[0] = cadeias[-1] + cadeias[0][1:]
+        cadeias.pop()
+    maior = max(cadeias, key=len)
+    fechada = len(maior) > 3 and mesmo(maior[0], maior[-1])
+    if fechada:
+        maior = maior[:-1]
+    return LWPolyline(layer=layer, points=maior, closed=fechada)
+
+
 def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
     """Entidade DXF -> entidade do NewSIcad (None = tipo não suportado).
     `units` (Document.units) só entra no espaçamento aproximado de HATCH com
@@ -717,6 +781,9 @@ def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
 
     if dxftype == "LINE":
         return Line(layer=layer, start=_point(e.dxf.start), end=_point(e.dxf.end))
+
+    if dxftype == "3DFACE":
+        return _face_3d(e, layer)
 
     # CIRCLE/ARC/LWPOLYLINE/ELLIPSE/INSERT passam por dxf_fills porque podem
     # estar definidos num OCS (extrusão (0,0,-1) = espelhados pelo MIRROR do
