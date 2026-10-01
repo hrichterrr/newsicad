@@ -73,6 +73,18 @@ CAMADAS_NAO_PLOTADAS = {"defpoints", "viewport"}
 
 _MAX_ANINHAMENTO = 6
 
+#: Tipos que viram geometria ao serem desenhados — a mesma lista que o
+#: importador expande (ver newsicad/io/dxf_annotations.py).
+_EXPANDIR = {"INSERT", "DIMENSION", "LEADER", "MULTILEADER", "ACAD_TABLE"}
+
+#: Texto fica FORA da comparação geométrica e é comparado à parte, por
+#: posição e conteúdo. Motivo: o ezdxf achata um texto como a CAIXA
+#: delimitadora dele, e a nossa gravação (sempre MTEXT) produz caixa de
+#: largura diferente da do TEXT original — a caixa não é desenho, mas
+#: entrava na grade como se fosse e acusava "geometria que o original não
+#: tem" em cima de cada etiqueta.
+_TIPOS_DE_TEXTO = {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}
+
 
 def _invisivel(e) -> bool:
     """Group code 60: o AutoCAD nunca desenha. É assim que um bloco dinâmico
@@ -100,7 +112,16 @@ def _visiveis(entidades, profundidade: int = 0):
             camada = "0"
         if camada in CAMADAS_NAO_PLOTADAS:
             continue
-        if e.dxftype() == "INSERT" and profundidade < _MAX_ANINHAMENTO:
+        if e.dxftype() in _TIPOS_DE_TEXTO:
+            continue
+        if e.dxftype() in _EXPANDIR and profundidade < _MAX_ANINHAMENTO:
+            # INSERT e ANOTAÇÃO (cota, chamada, tabela) são expandidos na
+            # geometria que o AutoCAD já calculou e gravou. É o mesmo que o
+            # importador do NewSIcad faz — sem isto, o achatador genérico do
+            # ezdxf não materializa a seta nem a linha da chamada, e a
+            # auditoria acusa o NewSIcad de INVENTAR geometria que na
+            # verdade existe nos dois lados (67 LEADER num layout do Joe
+            # Lee davam 4.501 células de "sobra" inexistente).
             try:
                 filhos = list(e.virtual_entities())
             except Exception:
@@ -108,6 +129,64 @@ def _visiveis(entidades, profundidade: int = 0):
             yield from _visiveis(filhos, profundidade + 1)
             continue
         yield e
+
+
+def textos(caminho: Path) -> list[tuple[str, float, float]]:
+    """(conteúdo, x, y) de cada texto desenhável, com blocos e anotações já
+    expandidos — para comparar etiqueta por etiqueta, por posição."""
+    doc = ezdxf.readfile(caminho)
+    out: list[tuple[str, float, float]] = []
+
+    def anda(entidades, prof=0):
+        for e in entidades:
+            if _invisivel(e):
+                continue
+            try:
+                camada = (e.dxf.get("layer", "0") or "0").strip().lower()
+            except Exception:
+                camada = "0"
+            if camada in CAMADAS_NAO_PLOTADAS:
+                continue
+            t = e.dxftype()
+            if t in _TIPOS_DE_TEXTO:
+                try:
+                    conteudo = " ".join(e.plain_text().split())
+                except Exception:
+                    conteudo = str(e.dxf.get("text", "") or "")
+                if not conteudo.strip():
+                    continue
+                try:
+                    p = e.dxf.get("insert", None) or e.dxf.get("align_point", (0, 0, 0))
+                    out.append((conteudo, round(float(p[0]), 1), round(float(p[1]), 1)))
+                except Exception:
+                    pass
+                continue
+            if t in _EXPANDIR and prof < _MAX_ANINHAMENTO:
+                try:
+                    anda(list(e.virtual_entities()), prof + 1)
+                except Exception:
+                    pass
+    anda(doc.modelspace())
+    return out
+
+
+def compara_textos(ref: list, nosso: list) -> dict:
+    """Quantas etiquetas do original têm correspondente no nosso, pelo
+    conteúdo e pela posição (tolerância de 0,1 unidade de desenho)."""
+    falta = collections.Counter(ref)
+    falta.subtract(collections.Counter(nosso))
+    sumidos = [(c, n) for c, n in falta.items() if n > 0]
+    # mesmo conteúdo, posição diferente = saiu do lugar
+    pos_ref = collections.Counter(c for c, _x, _y in ref)
+    pos_nos = collections.Counter(c for c, _x, _y in nosso)
+    conteudo_sumido = [c for c, n in (pos_ref - pos_nos).items()]
+    return {
+        "no_original": len(ref),
+        "no_nosso": len(nosso),
+        "sem_correspondente": sum(n for _c, n in sumidos),
+        "conteudo_que_sumiu": conteudo_sumido[:15],
+        "exemplos_fora_do_lugar": [c for (c, _x, _y), _n in sumidos[:10] if c not in conteudo_sumido][:10],
+    }
 
 
 def segmentos(caminho: Path) -> tuple[list[tuple[str, list[tuple[float, float]]]], tuple]:
@@ -287,6 +366,7 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
             segs_ref, caixa_ref = segmentos(ref_dxf)
             segs_nos, caixa_nos = segmentos(nosso_dxf)
             deg = degradacao(tipos_desenhaveis(ref_dxf), tipos_desenhaveis(nosso_dxf))
+            txt = compara_textos(textos(ref_dxf), textos(nosso_dxf))
 
         reg["segmentos_ref"] = len(segs_ref)
         reg["segmentos_nosso"] = len(segs_nos)
@@ -339,7 +419,13 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
         reg["camadas_com_perda"] = sorted(perdas, key=lambda x: -x["perdidos"])[:20]
 
         reg["degradacao_de_tipo"] = deg
+        reg["textos"] = txt
         alertas = []
+        if txt["sem_correspondente"]:
+            alertas.append(
+                f"{txt['sem_correspondente']} de {txt['no_original']} etiquetas sem correspondente"
+                + (f" (ex.: {txt['conteudo_que_sumiu'][:3]})" if txt["conteudo_que_sumiu"] else " — mesmas palavras, posição diferente")
+            )
         for d in deg:
             if d["importa"]:
                 alertas.append(f"{d['no_original']}x {d['tipo']}: {d['consequencia']}")
