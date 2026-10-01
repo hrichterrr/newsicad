@@ -19,6 +19,7 @@ from newsicad.core.document import DimStyle, Document, TextStyle, dim_arrow_size
 from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     JUSTIFY_TO_ATTACHMENT as _JUSTIFY_TO_ATTACHMENT,
+    TEXT_HEIGHT_MIN,
     AnnotationImporter,
     attdef_from_dxf,
     attrib_texts,
@@ -379,7 +380,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                     attdef = attdef_from_dxf(dxf_entity)
                     if attdef is not None:
                         attdefs.append(attdef)
-                else:
+                elif not nada_a_desenhar(dxf_entity):
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
@@ -429,11 +430,13 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             continue
         entity = _from_dxf_entity(dxf_entity, units=document.units)
         if entity is None:
-            if dxf_entity.dxftype() != "ATTDEF":
+            if dxf_entity.dxftype() != "ATTDEF" and not nada_a_desenhar(dxf_entity):
                 # ATTDEF é só o "molde" do atributo dentro da definição do
                 # bloco — o valor preenchido de verdade vem como ATTRIB
                 # pendurado em cada INSERT (lido logo abaixo). Contá-lo como
-                # "não suportado" era ruído puro no aviso de abertura.
+                # "não suportado" era ruído puro no aviso de abertura, e o
+                # mesmo vale para texto que não desenha nada (ver
+                # `nada_a_desenhar`).
                 skipped_by_type[dxf_entity.dxftype()] += 1
             continue
         _apply_dxf_color(entity, dxf_entity)
@@ -486,7 +489,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 continue
             entity = _from_dxf_entity(dxf_entity, units=document.units)
             if entity is None:
-                if dxf_entity.dxftype() != "ATTDEF":
+                if dxf_entity.dxftype() != "ATTDEF" and not nada_a_desenhar(dxf_entity):
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
@@ -748,6 +751,37 @@ def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
         return Ray(layer=layer, point=_point(e.dxf.start), angle=math.atan2(vec[1], vec[0]))
 
     return None
+
+
+def nada_a_desenhar(e) -> bool:
+    """A entidade foi recusada porque não desenha NADA, não porque o
+    NewSIcad não a suporta?
+
+    Vale para TEXT/MTEXT/ATTRIB de conteúdo vazio ou só espaço e para altura
+    zero — `text_from_dxf_text` recusa os dois, e com razão: o AutoCAD também
+    não desenha. Contá-los como "não suportadas" inflava o aviso de abertura
+    e dizia ao projetista que o programa tinha perdido coisa do arquivo dele
+    quando não tinha perdido nada. Caso real da varredura da base
+    (01/10/2026): os blocos de margem A0–A3 do padrão da New SI têm um TEXT
+    de um espaço em branco cada, e todo projeto abria avisando "10 entidades
+    não suportadas"."""
+    if e.dxftype() not in ("TEXT", "MTEXT", "ATTRIB", "ATTDEF"):
+        return False
+    try:
+        conteudo = e.plain_text()
+    except Exception:
+        conteudo = e.dxf.get("text", "") or ""
+    if not str(conteudo).strip():
+        return True
+    # TEXT/ATTRIB guardam a altura em `height`; MTEXT em `char_height`.
+    for campo in ("height", "char_height"):
+        try:
+            altura = float(e.dxf.get(campo, 0.0) or 0.0)
+        except Exception:
+            continue
+        if altura:
+            return altura <= TEXT_HEIGHT_MIN
+    return True
 
 
 def _from_dxf_dimension(e, layer: str) -> Entity | None:

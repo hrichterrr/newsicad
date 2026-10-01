@@ -587,3 +587,45 @@ def test_atributo_de_valor_vazio_nao_some_do_arquivo(tmp_path):
     gravado = ezdxf.readfile(saida)
     insert = next(e for e in gravado.modelspace() if e.dxftype() == "INSERT")
     assert [a.dxf.tag for a in insert.attribs] == ["OBS"]
+
+
+# ------------------------------- ruido no aviso de "nao suportadas"
+def test_texto_em_branco_nao_conta_como_nao_suportado(tmp_path):
+    """Os blocos de margem A0–A3 do padrão da New SI têm um TEXT de UM
+    ESPAÇO cada. O AutoCAD não desenha nada com eles e o NewSIcad também
+    não — mas eles eram contados como "entidades não suportadas", e todo
+    projeto abria avisando que o programa tinha perdido 10 coisas do
+    arquivo. Achado na varredura da base em 01/10/2026."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, nada_a_desenhar
+
+    doc = ezdxf.new(setup=True)
+    bloco = doc.blocks.new("MARGEM A1")
+    bloco.add_line((0, 0), (10, 0))
+    bloco.add_text(" ", dxfattribs={"height": 1.5})  # o texto de um espaço
+    msp = doc.modelspace()
+    msp.add_blockref("MARGEM A1", (0, 0))
+    msp.add_text("", dxfattribs={"height": 2.5})  # vazio, idem
+    msp.add_text("VALE", dxfattribs={"height": 2.5})
+    caminho = tmp_path / "margem.dxf"
+    doc.saveas(caminho)
+
+    lido, skipped = load_dxf(caminho)
+    assert int(skipped) == 0, f"contou como não suportado: {dict(skipped.by_type)}"
+    assert [e.content for e in lido.entities.values() if isinstance(e, Text)] == ["VALE"]
+
+
+def test_nada_a_desenhar_so_vale_para_texto_sem_conteudo():
+    import ezdxf
+
+    from newsicad.io.dxf_io import nada_a_desenhar
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    assert nada_a_desenhar(msp.add_text(" ", dxfattribs={"height": 1.5})) is True
+    assert nada_a_desenhar(msp.add_text("", dxfattribs={"height": 1.5})) is True
+    assert nada_a_desenhar(msp.add_mtext("", dxfattribs={"char_height": 2.0})) is True
+    assert nada_a_desenhar(msp.add_text("OK", dxfattribs={"height": 2.5})) is False
+    # entidade que não é texto nunca é "nada a desenhar" — some de verdade
+    assert nada_a_desenhar(msp.add_line((0, 0), (1, 1))) is False
