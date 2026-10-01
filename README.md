@@ -4,6 +4,21 @@ CAD 2D desktop com interface e comandos no estilo AutoCAD (menu superior, linha 
 
 **Developed by HRichter**
 
+## Escopo
+
+**O NewSIcad é o editor de projetos da New SI**, não um substituto geral do
+AutoCAD: abre a planta do arquiteto, lança os pontos dos nossos sistemas,
+mantém o padrão de prancha da casa e entrega o arquivo para o cliente. Os 72
+comandos de desenho e edição já implementados cobrem esse fluxo e a lista
+para de crescer por padrão — comando novo de CAD genérico só entra quando um
+projeto real travar sem ele.
+
+Decisão do Hamilton em 01/10/2026, depois de medir as alternativas de base
+(LibreCAD, FreeCAD, QCAD, ODA File Converter — todas reprovadas ou
+empatadas). **Leia [docs/ESCOPO.md](docs/ESCOPO.md) antes de aceitar um
+pedido novo**: ele traz os três compromissos, o que está congelado, a regra de
+decisão e o roteiro.
+
 ## Status
 
 Em desenvolvimento — marco atual: desenho + modificação (seleção, MOVE/COPY/ROTATE/MIRROR/SCALE/ERASE) + menu superior estilo AutoCAD + **blocos, referências externas e exportação PDF** + **anotação (texto, cotas, hachura, leader)** + **edição geométrica avançada (TRIM/EXTEND/OFFSET/FILLET/CHAMFER/JOIN/EXPLODE/STRETCH/DIVIDE/MEASURE) e OSNAP/POLAR reais** + **POLYGON, ALIGN, ARRAY, MATCHPROP, SELECTSIMILAR, SPLINE, BOUNDARY, PEDIT e HATCHEDIT** (feedback do grupo de testers via WhatsApp) + **proteção contra perda de trabalho não salvo** + **MLINE, XLINE/RAY, BREAK/BREAK AT POINT, LENGTHEN, DONUT, um tipo `POINT` real e justificação de MTEXT** (marco B do plano de melhorias, 2026-08-22) + **redesign da interface: ribbon colorido por categoria, Quick Access Toolbar, abas de documento (vários desenhos abertos ao mesmo tempo), painel de Propriedades reorganizado em seções, tema escuro em todo diálogo/menu (não só no canvas), ícones do ribbon em resolução mais alta (nítidos em telas HiDPI), painel de Camadas redesenhado com cor de camada afetando o desenho de verdade, e REVCLOUD/WIPEOUT/LAYMCH/LAYISO/LAYUNISO/QSELECT/CENTERMARK/DIMBREAK/TABLE**, inspirado no print do AutoCAD 2019 que o Hamilton mandou e no catálogo de comandos do ribbon do AutoCAD estudado a partir daí (2026-08-22) — com `TABLE` isso fecha a lista original de comandos que a Rafaela pediu lá no início do projeto.

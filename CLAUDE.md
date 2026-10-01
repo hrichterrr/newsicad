@@ -3,6 +3,25 @@
 CAD 2D desktop estilo AutoCAD, uso interno da New SI. Python 3.12 + PySide6 + ezdxf.
 Abre `.dxf`/`.dwg`, grava `.dxf`. Versão atual em `pyproject.toml`.
 
+## ESCOPO — leia antes de aceitar pedido novo
+
+**O NewSIcad é o editor de projetos da New SI, não um substituto geral do AutoCAD**
+(decisão do Hamilton em 01/10/2026). Abre a planta do arquiteto, lança os pontos dos
+nossos sistemas, mantém o padrão de prancha e entrega o arquivo ao cliente.
+
+- Os **72 comandos** de desenho/edição já implementados cobrem o fluxo. **A lista para
+  de crescer por padrão**: comando novo de CAD genérico só entra se um projeto real
+  travar sem ele — não porque o AutoCAD tem.
+- **Fura a fila:** fidelidade de leitura do arquivo `.dwg` do cliente. É o único lugar
+  onde errar custa a confiança da equipe.
+- **É o roteiro:** biblioteca de símbolos da casa, tag automática na nomenclatura,
+  legenda que se monta sozinha, selo/revisão/caderno por etapa, checklist do padrão.
+- Já foi medido que **não há para onde migrar**: LibreCAD, FreeCAD, QCAD e ODA File
+  Converter testados com os arquivos reais em 01/10/2026, todos reprovados ou
+  empatados. Não refazer sem motivo novo.
+
+Detalhe em **`docs/ESCOPO.md`**.
+
 ## Antes de qualquer coisa
 
 - **Este é o repo bom: `C:\Users\Hamilton\dev\newsicad`.** Existe uma cópia no iCloud
