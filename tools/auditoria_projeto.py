@@ -147,7 +147,7 @@ def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
         yield e, camada
 
 
-def textos(caminho: Path) -> list[tuple[str, float, float]]:
+def textos(caminho: Path, espaco: str = "Model") -> list[tuple[str, float, float]]:
     """(conteúdo, x, y) de cada texto desenhável, com blocos e anotações já
     expandidos — para comparar etiqueta por etiqueta, por posição."""
     doc = ezdxf.readfile(caminho)
@@ -196,7 +196,7 @@ def textos(caminho: Path) -> list[tuple[str, float, float]]:
                     anda(list(e.virtual_entities()), prof + 1, camada)
                 except Exception:
                     pass
-    anda(doc.modelspace())
+    anda(_entidades_do_espaco(doc, espaco))
     return out
 
 
@@ -219,14 +219,42 @@ def compara_textos(ref: list, nosso: list) -> dict:
     }
 
 
-def segmentos(caminho: Path) -> tuple[list[tuple[str, list[tuple[float, float]]]], tuple]:
+def espacos(caminho: Path) -> list[str]:
+    """Nomes dos espaços de desenho do arquivo: "Model" e cada prancha.
+
+    Auditar só o Model deixa de fora um desenho inteiro: no luminotécnico
+    da Mauro e Marcia o modelspace está VAZIO e as 1.432 entidades vivem
+    todas na prancha. A auditoria reportava "0% de cobertura" — alarme
+    falso e ponto cego ao mesmo tempo."""
+    doc = ezdxf.readfile(caminho)
+    nomes = ["Model"]
+    for nome in doc.layout_names():
+        if nome != "Model" and len(list(doc.layouts.get(nome))):
+            nomes.append(nome)
+    return nomes
+
+
+def _entidades_do_espaco(doc, espaco: str):
+    """As entidades de um espaço, ou lista vazia se ele não existe nesse
+    arquivo. Prancha que existe no original e não no nosso é achado — some
+    o selo, a legenda e o enquadramento —, então vira medição de cobertura
+    zero naquele espaço, não exceção."""
+    if espaco == "Model":
+        return doc.modelspace()
+    try:
+        return doc.layouts.get(espaco)
+    except Exception:
+        return []
+
+
+def segmentos(caminho: Path, espaco: str = "Model") -> tuple[list[tuple[str, list[tuple[float, float]]]], tuple]:
     """[(camada, [(x, y), ...]), ...] + extensão (minx, miny, maxx, maxy).
 
     Explode blocos honrando invisibilidade (ver `_visiveis`) e tessela arco,
     círculo, elipse e spline — o mesmo tratamento para os dois lados da
     comparação."""
     doc = ezdxf.readfile(caminho)
-    msp = doc.modelspace()
+    msp = _entidades_do_espaco(doc, espaco)
     saida: list[tuple[str, list[tuple[float, float]]]] = []
     minx = miny = math.inf
     maxx = maxy = -math.inf
@@ -282,9 +310,11 @@ PERDA_QUE_IMPORTA = {
 }
 
 
-def tipos_desenhaveis(caminho: Path) -> collections.Counter:
+def tipos_desenhaveis(caminho: Path, espaco: str = "Model") -> collections.Counter:
     doc = ezdxf.readfile(caminho)
-    return collections.Counter(e.dxftype() for e, _camada in _visiveis(doc.modelspace()))
+    return collections.Counter(
+        e.dxftype() for e, _camada in _visiveis(_entidades_do_espaco(doc, espaco))
+    )
 
 
 def degradacao(ref: collections.Counter, nosso: collections.Counter) -> list[dict]:
@@ -399,65 +429,79 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
             nosso_dxf = tmp / "nosso.dxf"
             save_dxf(doc, nosso_dxf)
 
-            # 3) achata os dois com o mesmo código
-            segs_ref, caixa_ref = segmentos(ref_dxf)
-            segs_nos, caixa_nos = segmentos(nosso_dxf)
-            deg = degradacao(tipos_desenhaveis(ref_dxf), tipos_desenhaveis(nosso_dxf))
-            txt = compara_textos(textos(ref_dxf), textos(nosso_dxf))
+            # 3) mede CADA espaço de desenho (Model e cada prancha),
+            #    porque há arquivo cujo desenho inteiro vive na prancha.
+            por_espaco = []
+            pranchas_perdidas: list[str] = []
+            deg_total: list[dict] = []
+            for espaco in espacos(ref_dxf):
+                segs_ref, caixa_ref = segmentos(ref_dxf, espaco)
+                if not segs_ref:
+                    continue
+                if espaco != "Model" and espaco not in espacos(nosso_dxf):
+                    pranchas_perdidas.append(espaco)
+                segs_nos, _caixa_nos = segmentos(nosso_dxf, espaco)
+                diag_e = math.hypot(caixa_ref[2] - caixa_ref[0], caixa_ref[3] - caixa_ref[1]) or 1.0
+                oc_r = ocupacao(segs_ref, caixa_ref)
+                oc_n = ocupacao(segs_nos, caixa_ref)
+                t = compara_textos(textos(ref_dxf, espaco), textos(nosso_dxf, espaco))
+                deg_total.extend(
+                    degradacao(tipos_desenhaveis(ref_dxf, espaco), tipos_desenhaveis(nosso_dxf, espaco))
+                )
+                cx_r = extensao_por_camada(segs_ref)
+                cx_n = extensao_por_camada(segs_nos)
+                sumidas = [c for c in cx_r if c not in cx_n]
+                fora = []
+                for camada, cref in cx_r.items():
+                    cnos = cx_n.get(camada)
+                    if cnos is None:
+                        continue
+                    d = max(abs(a - b) for a, b in zip(cref, cnos))
+                    if d / diag_e > TOL_EXTENSAO:
+                        fora.append({"camada": camada, "desvio_rel": round(d / diag_e, 4)})
+                por_espaco.append({
+                    "espaco": espaco,
+                    "segmentos_ref": len(segs_ref),
+                    "segmentos_nosso": len(segs_nos),
+                    "cobertura": round(len(oc_r & oc_n) / max(len(oc_r), 1), 4),
+                    "celulas_ref": len(oc_r),
+                    "celulas_sobraram": len(oc_n - oc_r),
+                    "camadas_sumidas": sumidas[:10],
+                    "camadas_fora_do_lugar": sorted(fora, key=lambda x: -x["desvio_rel"])[:10],
+                    "textos": t,
+                })
+                if pasta_mapas is not None and espaco == por_espaco[0]["espaco"]:
+                    salva_mapa(oc_r, oc_n, pasta_mapas / f"{caminho.parent.name}__{caminho.stem}.png")
+            deg = {d["tipo"]: d for d in deg_total}
+            deg = sorted(deg.values(), key=lambda x: (not x["importa"], -x["no_original"]))
 
-        reg["segmentos_ref"] = len(segs_ref)
-        reg["segmentos_nosso"] = len(segs_nos)
-        reg["extensao_ref"] = [round(v, 3) for v in caixa_ref]
-        reg["extensao_nosso"] = [round(v, 3) for v in caixa_nos]
+        if not por_espaco:
+            reg["status"] = "ok"
+            reg["alertas"] = ["arquivo sem geometria desenhável"]
+            reg["espacos"] = []
+            reg["segundos"] = round(time.perf_counter() - t0, 1)
+            return reg
 
-        diag = math.hypot(caixa_ref[2] - caixa_ref[0], caixa_ref[3] - caixa_ref[1]) or 1.0
-        desloc = max(abs(a - b) for a, b in zip(caixa_ref, caixa_nos))
-        reg["desvio_extensao_rel"] = round(desloc / diag, 5)
-
-        # grade de ocupação sobre a extensão do ORIGINAL
-        oc_ref = ocupacao(segs_ref, caixa_ref)
-        oc_nos = ocupacao(segs_nos, caixa_ref)
-        sumiu = oc_ref - oc_nos
-        sobrou = oc_nos - oc_ref
-        reg["celulas_ref"] = len(oc_ref)
-        reg["celulas_sumiram"] = len(sumiu)
-        reg["celulas_sobraram"] = len(sobrou)
-        reg["cobertura"] = round(len(oc_ref & oc_nos) / max(len(oc_ref), 1), 4)
-        if pasta_mapas is not None:
-            destino = pasta_mapas / f"{caminho.parent.name}__{caminho.stem}.png"
-            salva_mapa(oc_ref, oc_nos, destino)
-            reg["mapa"] = str(destino)
-
-        # extensão por camada: pega "a legenda explodiu"
-        cx_ref = extensao_por_camada(segs_ref)
-        cx_nos = extensao_por_camada(segs_nos)
-        estouradas = []
-        sumidas = []
-        for camada, cref in cx_ref.items():
-            cnos = cx_nos.get(camada)
-            if cnos is None:
-                sumidas.append(camada)
-                continue
-            d = max(abs(a - b) for a, b in zip(cref, cnos))
-            if d / diag > TOL_EXTENSAO:
-                estouradas.append({"camada": camada, "desvio_rel": round(d / diag, 4)})
-        reg["camadas_sumidas"] = sumidas[:20]
-        reg["camadas_fora_do_lugar"] = sorted(estouradas, key=lambda x: -x["desvio_rel"])[:20]
-
-        # contagem de segmentos por camada: pega "sumiu linha"
-        n_ref = collections.Counter(c for c, _ in segs_ref)
-        n_nos = collections.Counter(c for c, _ in segs_nos)
-        perdas = []
-        for camada, n in n_ref.items():
-            falta = n - n_nos.get(camada, 0)
-            if falta > 0 and falta / n > 0.02:
-                perdas.append({"camada": camada, "perdidos": falta, "de": n,
-                               "pct": round(100 * falta / n, 1)})
-        reg["camadas_com_perda"] = sorted(perdas, key=lambda x: -x["perdidos"])[:20]
-
+        reg["espacos"] = por_espaco
+        pior = min(por_espaco, key=lambda x: x["cobertura"])
+        reg["cobertura"] = pior["cobertura"]
+        reg["espaco_pior"] = pior["espaco"]
+        reg["segmentos_ref"] = sum(x["segmentos_ref"] for x in por_espaco)
+        reg["segmentos_nosso"] = sum(x["segmentos_nosso"] for x in por_espaco)
+        reg["camadas_sumidas"] = pior["camadas_sumidas"]
+        reg["camadas_fora_do_lugar"] = pior["camadas_fora_do_lugar"]
+        reg["textos"] = {
+            "no_original": sum(x["textos"]["no_original"] for x in por_espaco),
+            "no_nosso": sum(x["textos"]["no_nosso"] for x in por_espaco),
+            "sem_correspondente": sum(x["textos"]["sem_correspondente"] for x in por_espaco),
+            "conteudo_que_sumiu": [c for x in por_espaco for c in x["textos"]["conteudo_que_sumiu"]][:15],
+        }
         reg["degradacao_de_tipo"] = deg
-        reg["textos"] = txt
+        reg["pranchas_perdidas"] = pranchas_perdidas
         alertas = []
+        if pranchas_perdidas:
+            alertas.append(f"PRANCHA PERDIDA AO GRAVAR: {pranchas_perdidas}")
+        txt = reg["textos"]
         if txt["sem_correspondente"]:
             alertas.append(
                 f"{txt['sem_correspondente']} de {txt['no_original']} etiquetas sem correspondente"
@@ -467,16 +511,23 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
             if d["importa"]:
                 alertas.append(f"{d['no_original']}x {d['tipo']}: {d['consequencia']}")
         if reg["cobertura"] < 0.97:
-            alertas.append(f"cobertura {reg['cobertura']*100:.1f}% — some desenho")
-        if reg["desvio_extensao_rel"] > TOL_EXTENSAO:
-            alertas.append(f"extensão mudou {reg['desvio_extensao_rel']*100:.1f}% — algo saiu do lugar")
-        if reg["celulas_sobraram"] > 0.02 * max(reg["celulas_ref"], 1):
-            alertas.append(f"{reg['celulas_sobraram']} células com geometria que o original não tem")
-        if sumidas:
-            alertas.append(f"{len(sumidas)} camada(s) sumiram inteiras")
+            alertas.append(
+                f"cobertura {reg['cobertura']*100:.1f}% em '{reg['espaco_pior']}' — some desenho"
+            )
+        sobrou = sum(x["celulas_sobraram"] for x in por_espaco)
+        celulas = sum(x["celulas_ref"] for x in por_espaco)
+        reg["celulas_ref"] = celulas
+        reg["celulas_sobraram"] = sobrou
+        if sobrou > 0.02 * max(celulas, 1):
+            alertas.append(f"{sobrou} células com geometria que o original não tem")
+        if reg["camadas_sumidas"]:
+            alertas.append(
+                f"{len(reg['camadas_sumidas'])} camada(s) sumiram em '{reg['espaco_pior']}': "
+                f"{reg['camadas_sumidas'][:3]}"
+            )
         if reg["camadas_fora_do_lugar"]:
-            pior = reg["camadas_fora_do_lugar"][0]
-            alertas.append(f"camada '{pior['camada']}' fora do lugar ({pior['desvio_rel']*100:.1f}%)")
+            pc = reg["camadas_fora_do_lugar"][0]
+            alertas.append(f"camada '{pc['camada']}' fora do lugar ({pc['desvio_rel']*100:.1f}%)")
         reg["alertas"] = alertas
         reg["status"] = "ok"
     except Exception as exc:
