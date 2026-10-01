@@ -715,3 +715,45 @@ def test_cota_com_texto_editado_volta_como_geometria(tmp_path):
         "MEDIDA CORRIGIDA" in e.plain_text()
         for b in gravado.blocks for e in b if e.dxftype() in ("TEXT", "MTEXT")
     )
+
+
+def test_spline_com_ponto_repetido_nao_quebra_quem_le_o_arquivo(tmp_path):
+    """Pontos de ajuste COINCIDENTES fazem o leitor dividir por zero ao
+    interpolar a curva — o arquivo que a gente entrega não abre no programa
+    do cliente. Arquivos reais de arquiteto têm ponto repetido com
+    frequência (varredura da base, 01/10/2026: Casa Sanchez e Academia
+    Pegasus)."""
+    import ezdxf
+    import ezdxf.disassemble as dis
+
+    from newsicad.core.entities import Spline
+    from newsicad.io.dxf_io import save_dxf
+
+    doc = Document()
+    doc.add_entity(
+        Spline(points=[Point(0, 0), Point(0, 0), Point(5, 5), Point(10, 0)])
+    )
+    caminho = tmp_path / "spline.dxf"
+    save_dxf(doc, caminho)
+
+    lido = ezdxf.readfile(caminho)
+    splines = [e for e in lido.modelspace() if e.dxftype() == "SPLINE"]
+    assert len(splines) == 1
+    assert len(splines[0].fit_points) == 3  # o repetido saiu
+    # e quem lê consegue achatar a curva, que era o que quebrava
+    for prim in dis.to_primitives(splines):
+        assert list(prim.vertices())
+
+
+def test_spline_que_virou_um_ponto_nao_e_gravada(tmp_path):
+    import ezdxf
+
+    from newsicad.core.entities import Spline
+    from newsicad.io.dxf_io import save_dxf
+
+    doc = Document()
+    doc.add_entity(Spline(points=[Point(3, 3), Point(3, 3), Point(3, 3)]))
+    caminho = tmp_path / "degenerada.dxf"
+    save_dxf(doc, caminho)
+    lido = ezdxf.readfile(caminho)
+    assert not [e for e in lido.modelspace() if e.dxftype() == "SPLINE"]

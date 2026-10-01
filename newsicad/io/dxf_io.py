@@ -1181,7 +1181,24 @@ def _to_dxf_entity(
         return
 
     if isinstance(entity, Spline):
-        points = [(p.x, p.y) for p in entity.points]
+        # Pontos de ajuste COINCIDENTES quebram a interpolação de quem lê o
+        # arquivo: o cálculo do espaçamento entre os dois primeiros pontos
+        # vira zero e o leitor divide por zero (ezdxf
+        # `cad_fit_point_interpolation`). Arquivos reais de arquiteto têm
+        # ponto repetido com frequência — achado na varredura da base
+        # (01/10/2026, Casa Sanchez e Academia Pegasus). O ponto repetido
+        # não muda a curva, então some aqui em vez de virar um .dxf que o
+        # programa do cliente não consegue abrir.
+        points: list[tuple[float, float]] = []
+        for p in entity.points:
+            atual = (p.x, p.y)
+            if points and abs(points[-1][0] - atual[0]) < 1e-9 and abs(points[-1][1] - atual[1]) < 1e-9:
+                continue
+            points.append(atual)
+        if len(points) < 2:
+            # Uma spline que virou um ponto só não é desenho — gravá-la
+            # produziria uma entidade degenerada no arquivo do cliente.
+            return
         spline = msp.add_spline(fit_points=points, dxfattribs=attribs)
         spline.closed = entity.closed
         return

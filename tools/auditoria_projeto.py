@@ -200,22 +200,30 @@ def segmentos(caminho: Path) -> tuple[list[tuple[str, list[tuple[float, float]]]
     saida: list[tuple[str, list[tuple[float, float]]]] = []
     minx = miny = math.inf
     maxx = maxy = -math.inf
-    for prim in dis.to_primitives(_visiveis(msp)):
-        if prim.is_empty:
-            continue
+    # Uma entidade defeituosa não pode derrubar a medição do arquivo
+    # inteiro: o `dwg2dxf` grava spline com contagem de nós errada em
+    # alguns arquivos reais, e o achatador do ezdxf levanta no meio.
+    for entidade in _visiveis(msp):
         try:
-            pontos = [(float(v.x), float(v.y)) for v in prim.vertices()]
+            primitivas = list(dis.to_primitives([entidade]))
         except Exception:
             continue
-        if len(pontos) < 1:
-            continue
-        camada = getattr(prim.entity.dxf, "layer", "0") or "0"
-        saida.append((camada, pontos))
-        for x, y in pontos:
-            if not (math.isfinite(x) and math.isfinite(y)):
+        for prim in primitivas:
+            if prim.is_empty:
                 continue
-            minx, maxx = min(minx, x), max(maxx, x)
-            miny, maxy = min(miny, y), max(maxy, y)
+            try:
+                pontos = [(float(v.x), float(v.y)) for v in prim.vertices()]
+            except Exception:
+                continue
+            if len(pontos) < 1:
+                continue
+            camada = getattr(prim.entity.dxf, "layer", "0") or "0"
+            saida.append((camada, pontos))
+            for x, y in pontos:
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    continue
+                minx, maxx = min(minx, x), max(maxx, x)
+                miny, maxy = min(miny, y), max(maxy, y)
     if not math.isfinite(minx):
         return saida, (0.0, 0.0, 0.0, 0.0)
     return saida, (minx, miny, maxx, maxy)
