@@ -47,6 +47,7 @@ _MAX_UNDO_BYTES = 300 * 1024 * 1024
 _STRUCTURE_FIELDS = (
     "block_definitions",
     "block_attdefs",
+    "annotation_source",
     "layers",
     "units",
     "text_styles",

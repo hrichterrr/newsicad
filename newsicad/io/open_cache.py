@@ -40,7 +40,9 @@ from typing import Any
 # "8": Text ganhou `invisible` (atributo oculto, 23/09/2026) — uma entrada
 # antiga volta sem o campo, e o atributo oculto que ela guarda seria
 # gravado VISÍVEL, expondo na prancha um dado que o arquivo escondia.
-CACHE_VERSION = "8"
+# "9": Document ganhou `annotation_source` (01/10/2026) — sem ele, uma
+# entrada antiga regrava a cota do cliente como linha solta.
+CACHE_VERSION = "9"
 MAX_ENTRIES = 20
 
 

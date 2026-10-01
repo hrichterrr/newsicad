@@ -18,6 +18,7 @@ import newsicad.core.entities as entities_module
 from newsicad.core.document import DimStyle, Document, TextStyle, dim_arrow_size, dim_text_height
 from newsicad.io.dxf_annotations import (
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
+    impressao_do_bloco,
     JUSTIFY_TO_ATTACHMENT as _JUSTIFY_TO_ATTACHMENT,
     TEXT_HEIGHT_MIN,
     AnnotationImporter,
@@ -954,10 +955,10 @@ def save_dxf(document: Document, path: str | Path) -> None:
         block_layout = dxf_doc.blocks.get(dxf_block_names[name])
         _write_attdefs(block_layout, document.block_attdefs.get(name, []))
         for entity in entities:
-            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style)
+            _to_dxf_entity(block_layout, entity, dxf_block_names, document.dim_style, document)
 
     for entity in document.all_entities():
-        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style)
+        _to_dxf_entity(msp, entity, dxf_block_names, document.dim_style, document)
 
     # Pranchas (paper space): grava cada uma de volta no layout de mesmo
     # nome (cria se não existir — ex.: um .dwg de arquiteto com pranchas
@@ -970,7 +971,7 @@ def save_dxf(document: Document, path: str | Path) -> None:
     for name, entities in document.layouts.items():
         layout = dxf_doc.layouts.get(name) if name in existing_layout_names else dxf_doc.layouts.new(name)
         for entity in entities.values():
-            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style)
+            _to_dxf_entity(layout, entity, dxf_block_names, document.dim_style, document)
     if document.layouts and "Layout1" not in document.layouts and "Layout1" in dxf_doc.layouts.names():
         dxf_doc.layouts.delete("Layout1")
 
@@ -1000,6 +1001,49 @@ def _apply_color_attribs(dxfattribs: dict, entity: Entity) -> None:
     aci = _hex_to_aci(entity.color)
     if aci is not None:
         dxfattribs["color"] = aci
+
+
+def _escreve_dimension_preservada(msp, ref: BlockReference, fonte: dict,
+                                  nome_do_bloco: str, attribs: dict) -> bool:
+    """Regrava uma cota importada como DIMENSION de verdade, apontando para
+    o bloco que carrega o desenho dela.
+
+    Até a 2.16.3 ela voltava como INSERT de um bloco com linhas e texto: o
+    cliente abria no AutoCAD e a cota tinha deixado de ser cota — não dava
+    para editar nem remedir. Quantificado na varredura da base em
+    01/10/2026: 37 cotas num arquivo do Town Houses, 46 num do Pegasus.
+
+    Só vale quando a instância está intocada (sem mover/girar/escalar) e o
+    conteúdo do bloco é o mesmo que foi importado. Mexeu, volta como
+    geometria — o que o usuário vê é o que vale."""
+    sx, sy = ref.scale_xy()
+    intocada = (
+        abs(ref.insertion_point.x) < 1e-9 and abs(ref.insertion_point.y) < 1e-9
+        and abs(sx - 1.0) < 1e-9 and abs(sy - 1.0) < 1e-9
+        and abs(ref.rotation) < 1e-12
+    )
+    if not intocada:
+        return False
+
+    dimattribs = {**attribs, "geometry": nome_do_bloco}
+    for campo in ("dimtype", "text", "attachment_point", "line_spacing_style",
+                  "line_spacing_factor", "angle", "oblique_angle",
+                  "horizontal_direction", "text_rotation"):
+        if campo in fonte:
+            dimattribs[campo] = fonte[campo]
+    for campo in ("defpoint", "defpoint2", "defpoint3", "defpoint4", "defpoint5",
+                  "text_midpoint", "insert"):
+        if campo in fonte:
+            x, y = fonte[campo]
+            dimattribs[campo] = (x, y, 0.0)
+    estilo = fonte.get("dimstyle")
+    doc = msp.doc
+    dimattribs["dimstyle"] = estilo if (estilo and estilo in doc.dimstyles) else "Standard"
+    try:
+        msp.add_entity(ezdxf.entities.Dimension.new(dxfattribs=dimattribs))
+    except Exception:
+        return False
+    return True
 
 
 def _write_attdefs(block_layout, attdefs: list[AttributeDef]) -> None:
@@ -1073,10 +1117,12 @@ def _to_dxf_entity(
     entity: Entity,
     block_names: dict[str, str] | None = None,
     dim_style: DimStyle | None = None,
+    document: Document | None = None,
 ) -> None:
     """`block_names`: nome interno -> nome gravado (ver save_dxf; None =
     mesmo nome). `dim_style`: tamanho de texto/seta das cotas (None =
-    padrão DimStyle())."""
+    padrão DimStyle()). `document`: necessário para regravar uma anotação
+    importada como anotação (ver `_escreve_dimension_preservada`)."""
     attribs = {"layer": entity.layer}
     _apply_color_attribs(attribs, entity)
 
@@ -1154,6 +1200,12 @@ def _to_dxf_entity(
             "rotation": math.degrees(entity.rotation),
         }
         dxf_name = (block_names or {}).get(entity.block_name, entity.block_name)
+        fonte = (document.annotation_source.get(entity.block_name) if document else None)
+        if fonte is not None and fonte.get("tipo") == "DIMENSION":
+            atual = impressao_do_bloco(document.get_block_definition(entity.block_name))
+            if tuple(fonte.get("impressao") or ()) == tuple(atual):
+                if _escreve_dimension_preservada(msp, entity, fonte, dxf_name, attribs):
+                    return
         insert = msp.add_blockref(
             dxf_name, (entity.insertion_point.x, entity.insertion_point.y), dxfattribs=insert_attribs
         )

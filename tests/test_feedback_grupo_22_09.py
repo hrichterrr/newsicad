@@ -629,3 +629,89 @@ def test_nada_a_desenhar_so_vale_para_texto_sem_conteudo():
     assert nada_a_desenhar(msp.add_text("OK", dxfattribs={"height": 2.5})) is False
     # entidade que não é texto nunca é "nada a desenhar" — some de verdade
     assert nada_a_desenhar(msp.add_line((0, 0), (1, 1))) is False
+
+
+# ------------------------------ cota do cliente continua sendo cota
+def _dxf_com_cotas(caminho, n=2):
+    import ezdxf
+
+    doc = ezdxf.new(setup=True)
+    msp = doc.modelspace()
+    for i in range(n):
+        d = msp.add_linear_dim(base=(0, 5 + i * 8), p1=(0, i * 8), p2=(10, i * 8), dimstyle="EZDXF")
+        d.render()
+    msp.add_line((0, 0), (10, 0))
+    doc.saveas(caminho)
+
+
+def test_cota_do_arquiteto_volta_como_cota(tmp_path):
+    """Toda cota de arquivo de arquiteto que passava pelo NewSIcad voltava
+    como linha solta: o cliente abria no AutoCAD dele e a cota tinha
+    deixado de ser cota. Quantificado na varredura da base em 01/10/2026 —
+    37 cotas num arquivo do Town Houses, 46 num do Pegasus."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "arq.dxf"
+    _dxf_com_cotas(origem, n=3)
+    doc, _ = load_dxf(origem)
+    assert len(doc.annotation_source) == 3
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    dims = [e for e in gravado.modelspace() if e.dxftype() == "DIMENSION"]
+    assert len(dims) == 3
+    # cada uma aponta para o bloco que carrega o desenho dela
+    assert all(d.dxf.get("geometry") for d in dims)
+
+
+def test_cota_movida_volta_como_geometria(tmp_path):
+    """Se o usuário moveu a cota, o que ele vê é o que vale: regravar a
+    DIMENSION original a devolveria para o lugar antigo."""
+    import ezdxf
+
+    from newsicad.core.geometry_ops import translate_entity
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "arq.dxf"
+    _dxf_com_cotas(origem, n=1)
+    doc, _ = load_dxf(origem)
+    ref = next(
+        e for e in doc.entities.values()
+        if isinstance(e, BlockReference) and e.block_name in doc.annotation_source
+    )
+    translate_entity(ref, 100, 50)
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    assert not [e for e in gravado.modelspace() if e.dxftype() == "DIMENSION"]
+    assert [e for e in gravado.modelspace() if e.dxftype() == "INSERT"]
+
+
+def test_cota_com_texto_editado_volta_como_geometria(tmp_path):
+    """Editou o texto da cota pelo DDEDIT: a DIMENSION original traria o
+    texto velho de volta, então vale a geometria editada."""
+    import ezdxf
+
+    from newsicad.io.dxf_io import load_dxf, save_dxf
+
+    origem = tmp_path / "arq.dxf"
+    _dxf_com_cotas(origem, n=1)
+    doc, _ = load_dxf(origem)
+    nome = next(iter(doc.annotation_source))
+    partes = doc.get_block_definition(nome)
+    alvo = next(p for p in partes if isinstance(p, Text))
+    alvo.content = "MEDIDA CORRIGIDA"
+
+    saida = tmp_path / "saida.dxf"
+    save_dxf(doc, saida)
+    gravado = ezdxf.readfile(saida)
+    assert not [e for e in gravado.modelspace() if e.dxftype() == "DIMENSION"]
+    textos = [e.plain_text() for e in gravado.modelspace() if e.dxftype() == "MTEXT"]
+    assert any("MEDIDA CORRIGIDA" in t for t in textos) or any(
+        "MEDIDA CORRIGIDA" in e.plain_text()
+        for b in gravado.blocks for e in b if e.dxftype() in ("TEXT", "MTEXT")
+    )

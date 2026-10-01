@@ -308,6 +308,9 @@ class AnnotationImporter:
         self.document.define_block(name, parts)
         ref = BlockReference(layer=entity_layer(e), block_name=name, insertion_point=Point(0, 0))
         self.apply_color(ref, e)
+        fonte = dimension_source(e, parts)
+        if fonte is not None:
+            self.document.annotation_source[name] = fonte
         return ref
 
     def _convert_parts(self, parent, virtual: Iterable, depth: int = 0) -> list[Entity]:
@@ -447,6 +450,56 @@ def _attrib_placeholder(attrib, layer: str) -> Text:
         style=_style_name(attrib),
         width_factor=float(attrib.dxf.get("width", 1.0) or 1.0),
     )
+
+
+#: Campos do DXF de uma DIMENSION que precisam voltar ao arquivo para ela
+#: continuar sendo uma COTA, e não virar linha solta. Os defpoints são o que
+#: define a medida; `dimtype` o tipo; `geometry` aponta para o bloco com o
+#: desenho — esse é reescrito na gravação, com o nome que o bloco recebeu.
+_CAMPOS_DIMENSION = (
+    "dimtype", "dimstyle", "text", "attachment_point", "line_spacing_style",
+    "line_spacing_factor", "angle", "oblique_angle", "horizontal_direction",
+    "text_rotation",
+)
+_PONTOS_DIMENSION = (
+    "defpoint", "defpoint2", "defpoint3", "defpoint4", "defpoint5",
+    "text_midpoint", "insert",
+)
+
+
+def impressao_do_bloco(parts: list[Entity]) -> tuple:
+    """Impressão digital barata do conteúdo de uma anotação, para a gravação
+    saber se o usuário mexeu nela depois de importada. Mexeu: regrava como
+    geometria (o que ele vê é o que vale). Não mexeu: regrava como a
+    anotação original."""
+    textos = tuple(
+        p.content for p in parts if isinstance(p, Text)
+    )
+    return (len(parts), textos)
+
+
+def dimension_source(e, parts: list[Entity]) -> dict | None:
+    """O que guardar de uma DIMENSION importada para poder regravá-la como
+    DIMENSION. `None` para qualquer outro tipo de anotação (multileader,
+    leader e tabela ainda voltam como geometria — ver README)."""
+    if e.dxftype() != "DIMENSION":
+        return None
+    fonte: dict = {"tipo": "DIMENSION", "impressao": impressao_do_bloco(parts)}
+    for campo in _CAMPOS_DIMENSION:
+        try:
+            valor = e.dxf.get(campo, None)
+        except Exception:
+            valor = None
+        if valor is not None:
+            fonte[campo] = valor
+    for campo in _PONTOS_DIMENSION:
+        try:
+            v = e.dxf.get(campo, None)
+        except Exception:
+            v = None
+        if v is not None:
+            fonte[campo] = (float(v[0]), float(v[1]))
+    return fonte
 
 
 def read_dim_style(header, imported_text_heights: list[float]) -> tuple[float, float]:

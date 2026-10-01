@@ -115,6 +115,16 @@ class Document:
         # desenhados: quem aparece é o ATTRIB de cada instância, que a leitura
         # promove a Text. Guardados só pra devolvê-los ao bloco na gravação.
         self.block_attdefs: dict[str, list[AttributeDef]] = {}
+        # Anotação importada (hoje só DIMENSION): o que é preciso guardar
+        # para regravá-la como ANOTAÇÃO e não como geometria solta. Chave =
+        # nome do bloco anônimo que carrega o desenho dela
+        # (`*D_<handle>`); valor = os campos do DXF original + uma
+        # impressão digital do conteúdo, para saber se o usuário mexeu.
+        # Sem isto, toda cota de arquivo de arquiteto que passava pelo
+        # NewSIcad voltava como linha solta e o cliente perdia a cota
+        # editável — 37 cotas num arquivo do Town Houses, 46 num do
+        # Pegasus (varredura da base, 01/10/2026).
+        self.annotation_source: dict[str, dict] = {}
         # Revisão GLOBAL das definições de bloco: bumpada sempre que qualquer
         # definição muda (define_block — BEDIT/BLOCK/XREF reload — ou PURGE).
         # Consumidores que fazem cache de algo derivado do CONTEÚDO das
@@ -242,6 +252,7 @@ class Document:
         self.entities.clear()
         self.block_definitions.clear()
         self.block_attdefs.clear()
+        self.annotation_source.clear()
 
     def define_block(self, name: str, entities: list[Entity]) -> None:
         self.block_definitions[name] = entities

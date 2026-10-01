@@ -1410,6 +1410,7 @@ class MainWindow(QMainWindow):
         for name, entities in loaded.block_definitions.items():
             document.define_block(name, entities)
         document.block_attdefs = dict(loaded.block_attdefs)
+        document.annotation_source = dict(loaded.annotation_source)
         for entity in loaded.all_entities():
             document.add_entity(entity)
         # Configurações do DESENHO lidas do arquivo. Sem isto elas eram lidas
