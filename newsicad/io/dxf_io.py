@@ -5,6 +5,7 @@ Document/Entity do NewSIcad (newsicad/core/). Base também da ponte .dwg
 from __future__ import annotations
 
 import collections
+import functools
 import math
 import re
 from pathlib import Path
@@ -176,30 +177,51 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int] | None:
         return None
 
 
+@functools.lru_cache(maxsize=1)
+def _paleta_aci() -> tuple[tuple[int, tuple[int, int, int]], ...]:
+    """A paleta ACI inteira, montada UMA vez. Ela é fixa: perguntar o RGB de
+    cada um dos 255 índices ao ezdxf a cada conversão de cor era o grosso do
+    custo de `_hex_to_aci`."""
+    tabela = []
+    for aci in range(1, 256):
+        try:
+            tabela.append((aci, tuple(ezdxf.colors.aci2rgb(aci))))
+        except (IndexError, ValueError):
+            continue
+    return tuple(tabela)
+
+
+@functools.lru_cache(maxsize=4096)
 def _hex_to_aci(hex_color: str | None) -> int | None:
     """Cor hex (#RRGGBB) -> ACI (AutoCAD Color Index, 1-255) mais próxima na
     paleta fixa de 255 cores. `DXF_VERSION` aqui é R2000, que não suporta
     true color (grupo 420, só a partir do R2004) — ACI é o único jeito de
     gravar cor de camada/entidade de verdade nesse formato. Sem nenhum
     mapeamento de cor (o estado antes deste conserto), cor de camada e cor
-    por entidade eram descartadas silenciosamente ao salvar."""
+    por entidade eram descartadas silenciosamente ao salvar.
+
+    Memorizada: um desenho usa um punhado de cores distintas, mas a função
+    era chamada uma vez por entidade gravada. No perfil da gravação do
+    `2412_EX_105_CR_ELÉTRICA_R01_BIND` (4.384 blocos, 57.852 entidades
+    dentro deles) ela custava 8,5 s dos 41 s — a função mais cara da
+    gravação inteira, com uma varredura da paleta a cada chamada."""
     if not hex_color:
         return None
     rgb = _hex_to_rgb(hex_color)
     if rgb is None:
         return None
-    best_aci, best_dist = 7, None
-    for aci in range(1, 256):
-        try:
-            candidate = ezdxf.colors.aci2rgb(aci)
-        except (IndexError, ValueError):
-            continue
-        dist = sum((a - b) ** 2 for a, b in zip(rgb, candidate))
-        if best_dist is None or dist < best_dist:
-            best_dist, best_aci = dist, aci
-    return best_aci
+    melhor_aci, melhor_dist = 7, None
+    for aci, candidato in _paleta_aci():
+        dr = rgb[0] - candidato[0]
+        dg = rgb[1] - candidato[1]
+        db = rgb[2] - candidato[2]
+        dist = dr * dr + dg * dg + db * db
+        if melhor_dist is None or dist < melhor_dist:
+            melhor_dist, melhor_aci = dist, aci
+    return melhor_aci
 
 
+@functools.lru_cache(maxsize=512)
 def _aci_to_hex(aci: int) -> str:
     r, g, b = ezdxf.colors.aci2rgb(aci)
     return f"#{r:02X}{g:02X}{b:02X}"
