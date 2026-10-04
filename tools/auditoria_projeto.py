@@ -57,7 +57,8 @@ except Exception:
 import ezdxf  # noqa: E402
 import ezdxf.disassemble as dis  # noqa: E402
 
-from newsicad.io import dwg_bridge  # noqa: E402
+from newsicad.io import dwg_bridge
+from newsicad.io.dxf_annotations import remonta_acento  # noqa: E402
 from newsicad.io.dxf_io import load_dxf, save_dxf  # noqa: E402
 
 GRADE = 256
@@ -193,6 +194,11 @@ def textos(caminho: Path, espaco: str = "Model") -> list[tuple[str, float, float
                 conteudo = " ".join(e.plain_text().split())
             except Exception:
                 conteudo = str(e.dxf.get("text", "") or "")
+        # O mesmo remendo de acento que o importador aplica (o dwg2dxf parte
+        # a string no meio de um caractere de dois bytes). Sem aplicar nos
+        # DOIS lados, a auditoria punia o importador por fazer a coisa certa:
+        # a referencia ficava com os bytes soltos e o nosso lado, remontado.
+        conteudo = remonta_acento(conteudo)
         if not conteudo.strip():
             continue
         # ÂNCORA, não o ponto 10. Num TEXT centralizado ou à direita o ponto

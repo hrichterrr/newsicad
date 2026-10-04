@@ -58,7 +58,15 @@ def main() -> None:
 
     regs = json.loads(args.relatorio.read_text(encoding="utf-8"))
     ok = [r for r in regs if r.get("status") == "ok"]
-    falhou = [r for r in regs if r.get("status") != "ok"]
+    # Estourar o limite de tempo DA AUDITORIA não é "o arquivo não abre": a
+    # auditoria converte, lê, grava E mede os dois lados, e chega a custar
+    # dez vezes o que o programa custa. Misturar as duas coisas foi o erro
+    # que quase virou relatório (ver docs/VARREDURA.md), então o rótulo aqui
+    # mantém a diferença visível.
+    demorou = [r for r in regs
+               if r.get("status") != "ok" and "passou de" in str(r.get("erro", ""))]
+    lentos_ids = {id(r) for r in demorou}
+    falhou = [r for r in regs if r.get("status") != "ok" and id(r) not in lentos_ids]
     clientes = {r.get("pasta") for r in regs}
 
     print("=" * 78)
@@ -80,7 +88,7 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     print("\n" + "-" * 78)
     if falhou:
-        print(f"1) NÃO ABRE — {len(falhou)} arquivo(s). É a classe mais grave.")
+        print(f"1) O PROGRAMA NÃO LÊ — {len(falhou)} arquivo(s). É a classe mais grave.")
         print("-" * 78)
         por_erro = collections.defaultdict(list)
         for r in falhou:
@@ -92,8 +100,16 @@ def main() -> None:
             if len(lista) > 4:
                 print(f"          · (+{len(lista) - 4} outros)")
     else:
-        print(f"1) NÃO ABRE — nenhum. Os {len(ok)} arquivos auditados abrem.")
+        print(f"1) O PROGRAMA NÃO LÊ — nenhum. Os {len(ok)} arquivos auditados abrem.")
         print("-" * 78)
+
+    if demorou:
+        print()
+        print(f"   {len(demorou)} arquivo(s) estouraram o limite de tempo DA AUDITORIA.")
+        print("   NÃO é o tempo do programa: a auditoria mede os dois lados do")
+        print("   arquivo. O tempo de verdade está em tools/tempo_de_abertura.py.")
+        for r in sorted(demorou, key=lambda r: -(r.get("mb") or 0))[:6]:
+            print(f"      {r.get('mb'):6.1f} MB  {r.get('pasta')} / {r.get('arquivo')}")
 
     # ------------------------------------------------------------------ #
     # 2) O QUE O CLIENTE PERDE NO ARQUIVO QUE RECEBE
