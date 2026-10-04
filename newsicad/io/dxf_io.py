@@ -24,6 +24,7 @@ from newsicad.core.document import (
     dim_text_height,
 )
 from newsicad.io.dxf_annotations import (
+    texto_do_dxf,
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     impressao_do_bloco,
     JUSTIFY_TO_ATTACHMENT as _JUSTIFY_TO_ATTACHMENT,
@@ -933,10 +934,7 @@ def nada_a_desenhar(e) -> bool:
     não suportadas"."""
     if e.dxftype() not in ("TEXT", "MTEXT", "ATTRIB", "ATTDEF"):
         return False
-    try:
-        conteudo = e.plain_text()
-    except Exception:
-        conteudo = e.dxf.get("text", "") or ""
+    conteudo = texto_do_dxf(e)
     if not str(conteudo).strip():
         return True
     # TEXT/ATTRIB guardam a altura em `height`; MTEXT em `char_height`.

@@ -120,6 +120,46 @@ def entity_layer(e) -> str:
     return e.dxf.get("layer", "0") or "0"
 
 
+def texto_do_dxf(e) -> str:
+    """Conteúdo legível de um TEXT/MTEXT/ATTRIB, com o acento remontado.
+
+    O `dwg2dxf` quebra string longa de MTEXT em pedaços de 250 caracteres e
+    quebra CONTANDO BYTES: quando a fatia cai no meio de um caractere de dois
+    bytes, cada metade vira um byte solto que o leitor não sabe decodificar e
+    guarda como substituto (`\udcc3\udc95`). Caso real da base: na contracapa
+    do LEVANTAMENTO do Joe Lee a nota do projeto chega "ALTERAÇ??ES" — o
+    arquivo que a gente GRAVA já sai certo (a string volta inteira, num
+    pedaço só), mas na TELA o projetista via os dois caracteres quebrados.
+
+    Remontar é exatamente desfazer o escape: os substitutos voltam a ser os
+    bytes originais e aí sim decodificam juntos.
+    """
+    try:
+        conteudo = e.plain_text()
+    except Exception:
+        conteudo = e.dxf.get("text", "") or ""
+    return remonta_acento(str(conteudo))
+
+
+def remonta_acento(texto: str) -> str:
+    """Junta os bytes que ficaram soltos na leitura (ver `texto_do_dxf`).
+    Texto sem byte solto passa intacto e sem custo."""
+    if not any(0xDC80 <= ord(c) <= 0xDCFF for c in texto):
+        return texto
+    try:
+        crus = texto.encode("utf-8", "surrogateescape")
+    except Exception:
+        return texto
+    for codec in ("utf-8", "cp1252"):
+        try:
+            return crus.decode(codec)
+        except UnicodeDecodeError:
+            continue
+    # Nem UTF-8 nem a página de código do AutoCAD: melhor um caractere de
+    # substituição visível do que um byte solto que quebra a gravação.
+    return crus.decode("utf-8", "replace")
+
+
 def text_from_dxf_text(e, layer: str | None = None) -> Text | None:
     """TEXT/ATTRIB -> `Text`, respeitando halign/valign/align_point via
     `get_placement()` (ver `_ALIGN_TO_JUSTIFY`). Antes disso todo TEXT era
@@ -130,10 +170,7 @@ def text_from_dxf_text(e, layer: str | None = None) -> Text | None:
     Devolve None pra texto vazio ou altura <= `TEXT_HEIGHT_MIN`. `layer`
     força a camada (ATTRIB herdando a do INSERT, TEXT de leader herdando a
     do MULTILEADER); padrão é a camada da própria entidade."""
-    try:
-        content = e.plain_text()
-    except Exception:
-        content = e.dxf.get("text", "") or ""
+    content = texto_do_dxf(e)
     height = float(e.dxf.get("height", 0.0) or 0.0)
     if not content.strip() or height <= TEXT_HEIGHT_MIN:
         return None
@@ -176,7 +213,7 @@ def text_from_dxf_mtext(e, layer: str | None = None) -> Text | None:
     return Text(
         layer=layer or e.dxf.layer,
         insertion_point=_point(e.dxf.insert),
-        content=e.plain_text(),
+        content=texto_do_dxf(e),
         height=height,
         rotation=rotation,
         justify=ATTACHMENT_TO_JUSTIFY.get(attachment, "TL"),
