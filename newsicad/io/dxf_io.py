@@ -992,6 +992,37 @@ def escapa_mtext(conteudo: str) -> str:
     return conteudo.replace("^", "^ ")
 
 
+def _preenchimento_sem_area(e) -> bool:
+    """SOLID/TRACE/HATCH cujo contorno tem menos de 3 cantos distintos.
+
+    Um polígono de dois cantos tem área zero: não há o que preencher, e o
+    AutoCAD não desenha nada (o preenchimento é o padrão — FILLMODE ligado).
+    São contornos que vão "ida e volta", A->B->A, e vêm aos milhares de
+    arquivo importado de PDF: num único projeto da base (Carla e Raymond) são
+    2.099 SOLID assim, e as camadas das hachuras começam com `PDF2_`.
+
+    Recusá-los está certo; o que estava errado era contá-los como entidade
+    perdida no aviso de abertura — dizer ao projetista que o programa comeu
+    4.579 coisas do arquivo dele quando não comeu nenhuma.
+    """
+    def poucos(pontos) -> bool:
+        distintos = {(round(float(x), 9), round(float(y), 9)) for x, y in pontos}
+        return len(distintos) < 3
+
+    try:
+        if e.dxftype() in ("SOLID", "TRACE"):
+            return poucos((v.x, v.y) for v in e.wcs_vertices())
+        for bp in e.paths:  # HATCH: basta um contorno com área para desenhar
+            vertices = getattr(bp, "vertices", None)
+            if vertices is None:  # contorno por arestas (arco/spline): tem área
+                return False
+            if not poucos((v[0], v[1]) for v in vertices):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def nada_a_desenhar(e) -> bool:
     """A entidade foi recusada porque não desenha NADA, não porque o
     NewSIcad não a suporta?
@@ -1003,7 +1034,14 @@ def nada_a_desenhar(e) -> bool:
     quando não tinha perdido nada. Caso real da varredura da base
     (01/10/2026): os blocos de margem A0–A3 do padrão da New SI têm um TEXT
     de um espaço em branco cada, e todo projeto abria avisando "10 entidades
-    não suportadas"."""
+    não suportadas".
+
+    Vale também para SOLID/TRACE/HATCH de ÁREA ZERO — ver
+    `_preenchimento_sem_area`. Achado da varredura de 03/10/2026: 4.579
+    SOLID e 1.229 HATCH da base caíam no aviso, e nenhum deles desenha nada.
+    """
+    if e.dxftype() in ("SOLID", "TRACE", "HATCH"):
+        return _preenchimento_sem_area(e)
     if e.dxftype() not in ("TEXT", "MTEXT", "ATTRIB", "ATTDEF"):
         return False
     conteudo = texto_do_dxf(e)
