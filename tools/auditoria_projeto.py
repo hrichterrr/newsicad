@@ -130,7 +130,13 @@ def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
         camada = camada_pai if (propria == "0" and camada_pai) else propria
         if camada.lower() in CAMADAS_NAO_PLOTADAS:
             continue
-        if e.dxftype() in _TIPOS_DE_TEXTO or e.dxftype() in _NAO_SAO_DESENHO:
+        if e.dxftype() in _NAO_SAO_DESENHO:
+            continue
+        if e.dxftype() in _TIPOS_DE_TEXTO:
+            # Texto sai da travessia junto com o desenho (quem mede geometria
+            # filtra depois): era a mesma expansão de bloco feita duas vezes,
+            # e expandir bloco é o que custa caro aqui.
+            yield e, camada
             continue
         if e.dxftype() in _EXPANDIR and profundidade < _MAX_ANINHAMENTO:
             # INSERT e ANOTAÇÃO (cota, chamada, tabela) são expandidos na
@@ -149,56 +155,56 @@ def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
         yield e, camada
 
 
+#: (arquivo, espaço) -> lista de (entidade, camada efetiva) já achatada.
+#: Achatar é o passo caro da auditoria: no 2412_AP_101_LAY (3.782 entidades,
+#: 142 blocos) uma travessia do modelspace custa 110 s, e ela era refeita
+#: para medir segmento, para medir texto e para contar tipo — em cada um dos
+#: dois arquivos comparados. É o que estourava o limite de 1.500 s num
+#: arquivo de 0,69 MB que o PROGRAMA abre em 3,6 s.
+_ACHATADO: dict[tuple[str, str], list] = {}
+
+
+def achatado(caminho: Path, espaco: str = "Model") -> list:
+    chave = (str(caminho), espaco)
+    pronto = _ACHATADO.get(chave)
+    if pronto is None:
+        pronto = list(_visiveis(_entidades_do_espaco(abre(caminho), espaco)))
+        if len(_ACHATADO) >= 4:   # Model + prancha, dos dois lados
+            _ACHATADO.pop(next(iter(_ACHATADO)))
+        _ACHATADO[chave] = pronto
+    return pronto
+
+
 def textos(caminho: Path, espaco: str = "Model") -> list[tuple[str, float, float]]:
     """(conteúdo, x, y) de cada texto desenhável, com blocos e anotações já
     expandidos — para comparar etiqueta por etiqueta, por posição."""
-    doc = ezdxf.readfile(caminho)
     out: list[tuple[str, float, float]] = []
-
-    def anda(entidades, prof=0, camada_pai=""):
-        for e in entidades:
-            if _invisivel(e):
-                continue
-            try:
-                propria = (e.dxf.get("layer", "0") or "0").strip()
-            except Exception:
-                propria = "0"
-            camada = camada_pai if (propria == "0" and camada_pai) else propria
-            if camada.lower() in CAMADAS_NAO_PLOTADAS:
-                continue
-            t = e.dxftype()
-            if t in _TIPOS_DE_TEXTO:
-                try:
-                    conteudo = " ".join(e.plain_text().split())
-                except Exception:
-                    conteudo = str(e.dxf.get("text", "") or "")
-                if not conteudo.strip():
-                    continue
-                # ÂNCORA, não o ponto 10. Num TEXT centralizado ou à
-                # direita o ponto 10 é a esquerda-baseline e a âncora de
-                # verdade é o ponto 11 (`align_point`) — é o que
-                # `get_placement()` devolve e é o que o importador do
-                # NewSIcad guarda. Comparar o ponto 10 do TEXT original
-                # contra o `insert` do nosso MTEXT acusava deslocamento de
-                # 0,7 em cada cabeçalho de legenda (22 etiquetas no
-                # NEWSI-LEG_R07 da Casa Sanchez) que não existe.
-                try:
-                    _al, ancora, _p2 = e.get_placement()
-                except Exception:
-                    ancora = e.dxf.get("insert", (0, 0, 0))
-                if ancora is None:
-                    ancora = e.dxf.get("insert", (0, 0, 0))
-                try:
-                    out.append((conteudo, round(float(ancora[0]), 1), round(float(ancora[1]), 1)))
-                except Exception:
-                    pass
-                continue
-            if t in _EXPANDIR and prof < _MAX_ANINHAMENTO:
-                try:
-                    anda(list(e.virtual_entities()), prof + 1, camada)
-                except Exception:
-                    pass
-    anda(_entidades_do_espaco(doc, espaco))
+    for e, _camada in achatado(caminho, espaco):
+        if e.dxftype() not in _TIPOS_DE_TEXTO:
+            continue
+        try:
+            conteudo = " ".join(e.plain_text().split())
+        except Exception:
+            conteudo = str(e.dxf.get("text", "") or "")
+        if not conteudo.strip():
+            continue
+        # ÂNCORA, não o ponto 10. Num TEXT centralizado ou à direita o ponto
+        # 10 é a esquerda-baseline e a âncora de verdade é o ponto 11
+        # (`align_point`) — é o que `get_placement()` devolve e o que o
+        # importador do NewSIcad guarda. Comparar o ponto 10 do TEXT original
+        # contra o `insert` do nosso MTEXT acusava deslocamento de 0,7 em cada
+        # cabeçalho de legenda (22 etiquetas no NEWSI-LEG_R07 da Casa Sanchez)
+        # que não existe.
+        try:
+            _al, ancora, _p2 = e.get_placement()
+        except Exception:
+            ancora = None
+        if ancora is None:
+            ancora = e.dxf.get("insert", (0, 0, 0))
+        try:
+            out.append((conteudo, round(float(ancora[0]), 1), round(float(ancora[1]), 1)))
+        except Exception:
+            pass
     return out
 
 
@@ -221,6 +227,25 @@ def compara_textos(ref: list, nosso: list) -> dict:
     }
 
 
+#: Os dois arquivos em comparação, já abertos. Reler o DXF a cada medição
+#: era o que fazia a auditoria estourar 1.500 s em arquivo de 0,6 MB: com 11
+#: pranchas, o mesmo arquivo era desmontado mais de vinte vezes (duas
+#: medições de segmento, duas de texto e uma de tipos por espaço). São só
+#: dois documentos — a referência e o nosso —, então o cache tem tamanho 2.
+_ABERTOS: dict[str, object] = {}
+
+
+def abre(caminho: Path):
+    chave = str(caminho)
+    doc = _ABERTOS.get(chave)
+    if doc is None:
+        doc = ezdxf.readfile(Path(chave))
+        if len(_ABERTOS) >= 2:
+            _ABERTOS.pop(next(iter(_ABERTOS)))
+        _ABERTOS[chave] = doc
+    return doc
+
+
 def espacos(caminho: Path) -> list[str]:
     """Nomes dos espaços de desenho do arquivo: "Model" e cada prancha.
 
@@ -228,7 +253,7 @@ def espacos(caminho: Path) -> list[str]:
     da Mauro e Marcia o modelspace está VAZIO e as 1.432 entidades vivem
     todas na prancha. A auditoria reportava "0% de cobertura" — alarme
     falso e ponto cego ao mesmo tempo."""
-    doc = ezdxf.readfile(caminho)
+    doc = abre(caminho)
     nomes = ["Model"]
     for nome in doc.layout_names():
         if nome != "Model" and len(list(doc.layouts.get(nome))):
@@ -255,15 +280,19 @@ def segmentos(caminho: Path, espaco: str = "Model") -> tuple[list[tuple[str, lis
     Explode blocos honrando invisibilidade (ver `_visiveis`) e tessela arco,
     círculo, elipse e spline — o mesmo tratamento para os dois lados da
     comparação."""
-    doc = ezdxf.readfile(caminho)
-    msp = _entidades_do_espaco(doc, espaco)
     saida: list[tuple[str, list[tuple[float, float]]]] = []
     minx = miny = math.inf
     maxx = maxy = -math.inf
     # Uma entidade defeituosa não pode derrubar a medição do arquivo
     # inteiro: o `dwg2dxf` grava spline com contagem de nós errada em
     # alguns arquivos reais, e o achatador do ezdxf levanta no meio.
-    for entidade, camada_efetiva in _visiveis(msp):
+    for entidade, camada_efetiva in achatado(caminho, espaco):
+        if entidade.dxftype() in _TIPOS_DE_TEXTO:
+            # Texto entra na travessia (ver `achatado`) mas não na geometria:
+            # achatá-lo vira a CAIXA dele, e a nossa, sempre MTEXT, tem
+            # largura diferente — acusava "geometria que o original não tem"
+            # em toda etiqueta.
+            continue
         try:
             primitivas = list(dis.to_primitives([entidade]))
         except Exception:
@@ -313,9 +342,9 @@ PERDA_QUE_IMPORTA = {
 
 
 def tipos_desenhaveis(caminho: Path, espaco: str = "Model") -> collections.Counter:
-    doc = ezdxf.readfile(caminho)
     return collections.Counter(
-        e.dxftype() for e, _camada in _visiveis(_entidades_do_espaco(doc, espaco))
+        e.dxftype() for e, _camada in achatado(caminho, espaco)
+        if e.dxftype() not in _TIPOS_DE_TEXTO
     )
 
 
@@ -367,21 +396,31 @@ def ocupacao(segs, caixa, n: int = GRADE) -> set[tuple[int, int]]:
             min(n - 1, max(0, int((y - miny) / altura * n))),
         )
 
+    # A célula de cada vértice é calculada UMA vez (cada ponto é fim de um
+    # trecho e começo do seguinte), e trecho que começa e termina na mesma
+    # célula não é interpolado. Sem as duas coisas, uma planta com curva
+    # tesselada vira milhões de passos de interpolação para marcar sempre a
+    # mesma célula: era o que fazia a auditoria passar de 1.500 s no
+    # 2412_AP_101_LAY (12.519 polilinhas achatadas).
     for _camada, pontos in segs:
-        if len(pontos) == 1:
-            x, y = pontos[0]
-            if math.isfinite(x) and math.isfinite(y):
-                celulas.add(celula(x, y))
+        limpos = [(x, y) for x, y in pontos if math.isfinite(x) and math.isfinite(y)]
+        if not limpos:
             continue
-        for (x1, y1), (x2, y2) in zip(pontos, pontos[1:]):
-            if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+        cells = [celula(x, y) for x, y in limpos]
+        if len(cells) == 1:
+            celulas.add(cells[0])
+            continue
+        for indice, (c1, c2) in enumerate(zip(cells, cells[1:])):
+            if c1 == c2:
+                celulas.add(c1)
                 continue
-            c1, c2 = celula(x1, y1), celula(x2, y2)
-            passos = max(abs(c2[0] - c1[0]), abs(c2[1] - c1[1]), 1)
+            passos = max(abs(c2[0] - c1[0]), abs(c2[1] - c1[1]))
             if passos > 4 * n:  # segmento absurdo: marca só as pontas
                 celulas.add(c1)
                 celulas.add(c2)
                 continue
+            x1, y1 = limpos[indice]
+            x2, y2 = limpos[indice + 1]
             for i in range(passos + 1):
                 t = i / passos
                 celulas.add(celula(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t))
