@@ -84,7 +84,7 @@ Implementado:
 - **Blocos (`BLOCK`/`B`, `INSERT`/`I`)**: define um bloco a partir de entidades selecionadas (coordenadas gravadas relativas ao ponto base, entidades originais "consumidas" e substituídas por uma instância — igual ao AutoCAD) e insere instâncias (`BlockReference`, com escala/rotação) de blocos já definidos. Sobrevive a salvar/reabrir `.dxf` de verdade (bloco vira `BLOCK`/`INSERT` do DXF, testado com round-trip automatizado)
 - **Block Editor (`BEDIT`/`BE`, `REFEDIT`)**: abre um mini-desenho à parte (mesmo canvas/interpretador/linha de comando da janela principal) com cópias das entidades da definição — todos os comandos normais funcionam lá dentro (LINE, ERASE, MOVE, outro BLOCK aninhado...). "Save" grava de volta na definição e atualiza todas as instâncias no desenho principal automaticamente. Ver limitações na seção "Blocos e referências" abaixo
 - **Referências externas (`XREF`/`XR`, `EXTERNALREFERENCES`/`ER`)**: XREF anexa um `.dxf` externo como uma `BlockReference` marcada (`is_xref=True`); o painel EXTERNALREFERENCES lista as xrefs do desenho (nome + caminho) com um botão Reload que relê o arquivo. **Sem watch automático de arquivo** — ver limitações abaixo
-- **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. **Não é gravada em `.dxf`** — ver limitações
+- **Imagem raster (`IMAGEATTACH`/`IM`)**: insere `.png`/`.jpg`/`.bmp` como `ImageReference` (ponto de inserção + largura/altura), renderizada via `QGraphicsPixmapItem`. A `IMAGE` do `.dxf` do cliente é lida e devolvida ao arquivo com a `IMAGEDEF` (o formato guarda só o caminho, nunca os pixels) — ver limitações
 - **Exportar PDF (`PLOT`, `PUBLISH`, File > Print/Export PDF..., Ctrl+P)**: renderiza o desenho inteiro (não só o que está visível na tela) numa página PDF via `QPdfWriter`, perguntando antes o **tamanho da folha** (A4/A3/A2/A1/A0) e a **orientação** (automática — escolhe retrato ou paisagem pela proporção do desenho, igual a um PLOT com "Fit" — ou fixa em retrato/paisagem)
 - **Painel de Camadas redesenhado (`LAYER`/`LA`, View > Layers..., aba View do ribbon)**: lista todas as camadas do desenho (vem tabificado com o painel Properties) com **botões-ícone de lâmpada/cadeado** (visibilidade/trava, em vez dos checkboxes de antes — mesmo visual do Layer Properties Manager do AutoCAD) e uma coluna de **cor** (swatch clicável, abre um seletor de cor), e duplo clique no nome define a **camada atual** (onde LINE/CIRCLE/ARC/MTEXT/cotas/BLOCK/INSERT novos são desenhados). Desligar a visibilidade tira a entidade do desenho de verdade (some da tela, do hit-test/seleção e do zoom extents/Export PDF), não só "esconde visualmente"; travar mantém visível mas bloqueia seleção. Botão "Nova camada..." cria uma camada vazia; clique direito numa camada (ou o comando `RENAME`/`REN`) renomeia
 - **Cor por camada/entidade agora afeta o desenho de verdade** — antes disso, `Layer.color`/`Entity.color` existiam no modelo mas o canvas sempre desenhava tudo na mesma cor fixa (limitação documentada explicitamente no painel de camadas, que por isso nem oferecia editar cor). `CanvasView._effective_color` resolve a cor real de cada entidade (a própria, se não for ByLayer, senão a da camada) e é usada tanto na renderização quanto restaurada corretamente ao desselecionar — inclusive dentro de um `BlockReference`, onde cada entidade filha pode estar numa camada/cor diferente das outras
@@ -133,12 +133,19 @@ que é uma versão reduzida, propositalmente, dentro do orçamento deste marco:
   ao salvar o desenho como `.dxf`, uma xref vira um `BLOCK`/`INSERT` comum
   (perde a marcação `is_xref`/o caminho do arquivo original) — reabrir
   esse `.dxf` não vai mais oferecer "Reload" pra esse bloco.
-- **Imagem raster não sobrevive ao `.dxf`**: `ImageReference` é só um
-  conceito do NewSIcad em memória; salvar como `.dxf` descarta silenciosamente
-  qualquer imagem inserida (raster embutido em DXF é raro e complexo o
-  suficiente pra ficar fora de escopo). Se o arquivo de imagem não existir
-  ou não puder ser aberto, o canvas mostra um retângulo tracejado no lugar
-  em vez de quebrar.
+- **Imagem raster: a REFERÊNCIA sobrevive ao `.dxf`, os pixels nunca**
+  (03/10/2026). A `IMAGE` do arquivo do cliente é lida (posição, tamanho,
+  tamanho em pixels e recorte) e volta ao `.dxf` com a `IMAGEDEF` que a
+  define — é assim no AutoCAD também: o formato guarda só o CAMINHO do
+  arquivo, nunca o conteúdo. Como o `.png` quase nunca vem junto com o
+  `.dwg` do cliente, o canvas desenha um retângulo tracejado no lugar certo
+  quando o arquivo falta (igual ao AutoCAD), e a imagem reaparece na máquina
+  de quem tem o arquivo. **Limitação**: imagem girada entra com a caixa
+  alinhada aos eixos (`ImageReference` não modela rotação). Antes disto a
+  imagem era descartada na leitura E na gravação — 19% dos arquivos da base
+  têm imagem, e nas plantas de luminotécnico ela É a planta de fundo do
+  arquiteto: três arquivos reais saíram de 73,6%, 83,9% e 89,5% de cobertura
+  para 100%.
 - **`VIEWPORTS`/`VM` (Viewport Configuration)**: a decisão original deste
   projeto era não implementar (um viewport de verdade vive numa layout de
   papel/paper space, conceito que o NewSIcad não tinha até 09/09/2026 — ver
@@ -246,6 +253,23 @@ Segunda leva do relato "os textos não vieram / tabelas explodidas / planta expl
 - **DIVIDE/MEASURE**: pontos de divisão representados por `Circle` de raio fixo (0.05), já que não existe um tipo `POINT` no NewSIcad ainda.
 
 ### Camadas — simplificações documentadas
+
+- **Tipo de linha (LTYPE) e espessura** entram e voltam inteiros desde
+  03/10/2026: a tabela de padrões do arquivo, o `$LTSCALE`, o tipo e a
+  espessura DE CAMADA (que é de onde o ByLayer herda) e, por entidade, o
+  tipo, a espessura em centésimos de milímetro e a escala de traço própria.
+  `Document.linetype_of`/`lineweight_of` resolvem o ByLayer na mesma cadeia
+  da cor. **Na tela, o traço sai com o RITMO do padrão num comprimento fixo
+  de pixels** (traço longo + curto é linha de eixo; traço e ponto é eixo de
+  simetria), não no comprimento em unidades de desenho: converter para
+  unidades de cena obrigaria a refazer a caneta de 185 mil itens a cada
+  zoom. O arquivo ENTREGUE leva o padrão exato. **A espessura fica fora do
+  render de propósito** — o AutoCAD também não mostra espessura no model
+  space por padrão (`LWDISPLAY` off), e engrossar o traço agora pareceria
+  regressão para quem está acostumado com o desenho atual. Antes disto, toda
+  linha de eixo, projeção e circuito do cliente voltava CONTÍNUA: 6 de 7
+  projetos de uma amostra da base têm linha não contínua, e num deles são
+  5.270 entidades numa única camada de tracejado.
 
 - **Sem cor por camada na tela**: `Layer.color` existe no modelo (grava/lê certinho de `.dxf`) mas o canvas nunca usou cor nenhuma pra desenhar entidades — é sempre um branco fixo (`ENTITY_COLOR`), então o painel de camadas não oferece editar cor: seria um controle que muda o dado sem nenhum efeito visível.
 - **Apagar camada** ainda não tem UI — só criar (`Nova camada...`), renomear, ligar/desligar visibilidade, travar, definir qual é a atual, e `PURGE` (remove só camadas sem nenhuma entidade, não uma remoção forçada).
