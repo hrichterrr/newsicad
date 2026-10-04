@@ -182,10 +182,17 @@ def textos(caminho: Path, espaco: str = "Model") -> list[tuple[str, float, float
     for e, _camada in achatado(caminho, espaco):
         if e.dxftype() not in _TIPOS_DE_TEXTO:
             continue
-        try:
-            conteudo = " ".join(e.plain_text().split())
-        except Exception:
-            conteudo = str(e.dxf.get("text", "") or "")
+        if e.dxftype() == "ATTDEF":
+            # ATTDEF SOLTO no espaco de desenho: o AutoCAD mostra a TAG, nao
+            # o valor padrao. Comparar `plain_text()` (o valor) punia o
+            # importador por fazer a coisa certa — 413 etiquetas "X" num
+            # arquivo do Fernando Labes, que na verdade sao "1P/01" e afins.
+            conteudo = " ".join(str(e.dxf.get("tag", "") or "").split())
+        else:
+            try:
+                conteudo = " ".join(e.plain_text().split())
+            except Exception:
+                conteudo = str(e.dxf.get("text", "") or "")
         if not conteudo.strip():
             continue
         # ÂNCORA, não o ponto 10. Num TEXT centralizado ou à direita o ponto

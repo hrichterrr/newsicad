@@ -402,6 +402,38 @@ class AnnotationImporter:
         return name not in self.document.block_definitions
 
 
+def attdef_solto_como_texto(e, layer: str | None = None) -> "Text | None":
+    """ATTDEF que está SOLTO no espaço de desenho -> Text com a TAG.
+
+    Um ATTDEF dentro da definição de um bloco é molde: o que aparece no
+    desenho é o ATTRIB preenchido de cada inserção (ver `attdef_from_dxf`).
+    Mas um ATTDEF solto no modelspace — o que o AutoCAD cria com o comando
+    ATTDEF antes de você transformar aquilo num bloco — é desenho de
+    verdade, e o AutoCAD mostra a **TAG**, não o valor padrão.
+
+    Achado da varredura da base: o `282-PLANTA-EXE-R00` do Fernando Labes
+    tem **413 ATTDEF soltos** no modelspace, todos com tag de circuito
+    elétrico ("1P/01") e valor padrão "X". Eram descartados sem nem entrar
+    na conta de "não suportadas": o projetista abria a planta elétrica sem
+    nenhuma identificação de circuito. Mostrar o valor em vez da tag daria
+    413 letras "X" espalhadas, que é o que um renderizador que usa
+    `plain_text()` faz — e não é o que o cliente vê no AutoCAD dele.
+    """
+    tag = str(e.dxf.get("tag", "") or "").strip()
+    if not tag:
+        return None
+    altura = float(e.dxf.get("height", 0.0) or 0.0)
+    if altura <= TEXT_HEIGHT_MIN:
+        return None
+    texto = text_from_dxf_text(e, layer=layer)
+    if texto is None:
+        # `text_from_dxf_text` recusa valor vazio; a tag é o que desenha.
+        texto = _attrib_placeholder(e, layer or entity_layer(e))
+    texto.content = tag
+    texto.attrib_tag = tag
+    return texto
+
+
 def attdef_from_dxf(e) -> "AttributeDef | None":
     """ATTDEF -> `AttributeDef` (o molde do campo dentro da definição do
     bloco). Mesma leitura de posição/alinhamento do TEXT/ATTRIB: o ponto 10

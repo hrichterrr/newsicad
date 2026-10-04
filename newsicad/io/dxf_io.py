@@ -24,6 +24,7 @@ from newsicad.core.document import (
     dim_text_height,
 )
 from newsicad.io.dxf_annotations import (
+    attdef_solto_como_texto,
     texto_do_dxf,
     ATTACHMENT_TO_JUSTIFY as _ATTACHMENT_TO_JUSTIFY,
     impressao_do_bloco,
@@ -473,12 +474,20 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             continue
         entity = _from_dxf_entity(dxf_entity, units=document.units)
         if entity is None:
-            if dxf_entity.dxftype() != "ATTDEF" and not nada_a_desenhar(dxf_entity):
-                # ATTDEF é só o "molde" do atributo dentro da definição do
-                # bloco — o valor preenchido de verdade vem como ATTRIB
-                # pendurado em cada INSERT (lido logo abaixo). Contá-lo como
-                # "não suportado" era ruído puro no aviso de abertura, e o
-                # mesmo vale para texto que não desenha nada (ver
+            if dxf_entity.dxftype() == "ATTDEF":
+                # ATTDEF DENTRO de um bloco é só o "molde" do atributo — o
+                # valor preenchido vem como ATTRIB no INSERT (lido logo
+                # abaixo) e o molde é guardado em `_importar_definicao`.
+                # Aqui, porém, ele está SOLTO no espaço de desenho, e aí é
+                # desenho de verdade: o AutoCAD mostra a TAG dele (ver
+                # `attdef_solto_como_texto`).
+                solto = attdef_solto_como_texto(dxf_entity)
+                if solto is not None:
+                    _apply_dxf_color(solto, dxf_entity)
+                    _apply_dxf_traco(solto, dxf_entity)
+                    document.add_entity(solto)
+            elif not nada_a_desenhar(dxf_entity):
+                # Texto que não desenha nada também não é perda (ver
                 # `nada_a_desenhar`).
                 skipped_by_type[dxf_entity.dxftype()] += 1
             continue
@@ -533,7 +542,14 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 continue
             entity = _from_dxf_entity(dxf_entity, units=document.units)
             if entity is None:
-                if dxf_entity.dxftype() != "ATTDEF" and not nada_a_desenhar(dxf_entity):
+                if dxf_entity.dxftype() == "ATTDEF":
+                    # Solto na prancha = desenho (ver o loop do modelspace).
+                    solto = attdef_solto_como_texto(dxf_entity)
+                    if solto is not None:
+                        _apply_dxf_color(solto, dxf_entity)
+                        _apply_dxf_traco(solto, dxf_entity)
+                        _store_in_layout(solto)
+                elif not nada_a_desenhar(dxf_entity):
                     skipped_by_type[dxf_entity.dxftype()] += 1
                 continue
             _apply_dxf_color(entity, dxf_entity)
