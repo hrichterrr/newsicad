@@ -339,9 +339,17 @@ def segmentos(caminho: Path, espaco: str = "Model") -> tuple[list[tuple[str, lis
         except Exception:
             continue
         for prim in primitivas:
-            if prim.is_empty:
-                continue
+            # `is_empty` e `vertices()` ficam no MESMO try: o ezdxf calcula o
+            # caminho da primitiva SOB DEMANDA, então a exceção da spline
+            # defeituosa ("15 knot values required, got 13", gravada assim
+            # pelo dwg2dxf) estourava na linha do `is_empty`, fora da guarda
+            # que protegia só a criação da lista — e derrubava a auditoria do
+            # arquivo INTEIRO. Três arquivos da base (Helena & Pedro,
+            # Houssein e Fabi) apareciam como "não abre" e abrem sem
+            # reclamar no programa.
             try:
+                if prim.is_empty:
+                    continue
                 pontos = [(float(v.x), float(v.y)) for v in prim.vertices()]
             except Exception:
                 continue
