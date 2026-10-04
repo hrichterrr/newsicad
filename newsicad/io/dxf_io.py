@@ -395,14 +395,14 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     # inexistentes, um .dxf que o `ezdxf.audit` reprova. Com a lista de
     # exclusão, o próximo prefixo anônimo que a Autodesk inventar já entra.
     #
-    # As entidades são percorridas em `entities_in_redraw_order()` (a ordem
-    # de desenho do AutoCAD, tabela SORTENTS) — o canvas desenha na ordem do
+    # As entidades são percorridas em `ordem_de_desenho()` (a ordem de
+    # desenho do AutoCAD, tabela SORTENTS) — o canvas desenha na ordem do
     # dict, então é isso que faz um WIPEOUT cobrir só o que está atrás dele
     # e uma hachura sólida ficar por baixo das linhas do próprio ícone.
     def _importar_definicao(block) -> None:
         block_entities: list[Entity] = []
         attdefs: list[AttributeDef] = []
-        for dxf_entity in block.entities_in_redraw_order():
+        for dxf_entity in ordem_de_desenho(block):
             if _is_invisible(dxf_entity):
                 continue
             imported = importer.import_entity(dxf_entity)
@@ -462,7 +462,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             continue
         _importar_definicao(block)
 
-    for dxf_entity in dxf_doc.modelspace().entities_in_redraw_order():
+    for dxf_entity in ordem_de_desenho(dxf_doc.modelspace()):
         if _is_invisible(dxf_entity):
             continue
         imported = importer.import_entity(dxf_entity)
@@ -520,7 +520,7 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             document.add_layer(entity.layer)
             layout_entities[entity.id] = entity
 
-        for dxf_entity in layout.entities_in_redraw_order():
+        for dxf_entity in ordem_de_desenho(layout):
             if dxf_entity.dxftype() == "VIEWPORT":
                 continue
             if _is_invisible(dxf_entity):
@@ -706,6 +706,24 @@ def _apply_dxf_color(entity: Entity, e) -> None:
     função a cor por entidade nunca era lida de volta (bug real de
     auditoria, 2026-08-22)."""
     dxf_fills.apply_dxf_color(entity, e)
+
+
+def ordem_de_desenho(layout):
+    """Entidades do layout na ordem de desenho do AutoCAD (tabela SORTENTS),
+    caindo na ordem natural quando essa tabela está corrompida.
+
+    A tabela vem quebrada em arquivo real: o `NEWSI-CSA-03-PV1_R07` da Casa
+    Sanchez tem um bloco cuja SORTENTSTABLE o `dwg2dxf` grava com um item
+    pela metade, e o ezdxf levanta `ValueError: dictionary update sequence
+    element #0 has length 1` — subindo até o topo e derrubando a abertura do
+    arquivo INTEIRO. Ordem de desenho é acabamento (é o que faz o WIPEOUT
+    cobrir só o que está atrás); perder o acabamento de um bloco é
+    incomparavelmente melhor do que não abrir o projeto.
+    """
+    try:
+        return list(layout.entities_in_redraw_order())
+    except Exception:
+        return list(layout)
 
 
 #: Códigos do 3DFACE que marcam cada aresta como invisível (group code 70).

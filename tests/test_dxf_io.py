@@ -414,10 +414,14 @@ def test_load_dxf_skipped_count_has_per_type_breakdown():
         path = Path(tmp_dir) / "unsupported_entities.dxf"
         doc = ezdxf.new(setup=False)
         msp = doc.modelspace()
-        # 3DFACE (face de malha 3D) continua sem suporte — SOLID, que este
-        # teste usava antes, passou a ser lido como Hatch sólida em 2026-09.
-        msp.add_3dface([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], dxfattribs={"layer": "0"})
-        msp.add_3dface([(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)], dxfattribs={"layer": "0"})
+        # SHAPE (símbolo de arquivo .shx compilado) continua sem suporte. Este
+        # teste já trocou de cobaia duas vezes, e isso é bom sinal: usava
+        # SOLID, que virou Hatch sólida em 2026-09, e depois 3DFACE, que passou
+        # a ser lido como contorno em 03/10/2026 (72 deles num .dwg base real
+        # do Joe Lee sumiam da tela). O que o teste garante não é "este tipo
+        # não abre", é a contagem POR TIPO na mensagem de aviso.
+        msp.add_shape("simbolo", (0, 0), 1.0, dxfattribs={"layer": "0"})
+        msp.add_shape("simbolo", (2, 2), 1.0, dxfattribs={"layer": "0"})
         msp.add_line((0, 0), (1, 1), dxfattribs={"layer": "0"})
         doc.saveas(path)
 
@@ -426,7 +430,7 @@ def test_load_dxf_skipped_count_has_per_type_breakdown():
     assert skipped == 2
     assert skipped > 0
     assert f"{skipped} entidade(s)" == "2 entidade(s)"
-    assert skipped.by_type == {"3DFACE": 2}
+    assert skipped.by_type == {"SHAPE": 2}
     assert len(loaded.all_entities()) == 1
 
 
