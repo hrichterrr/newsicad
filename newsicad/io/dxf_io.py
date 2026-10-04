@@ -727,6 +727,59 @@ def ordem_de_desenho(layout):
         return list(layout)
 
 
+def _imagem(e, layer: str) -> Entity | None:
+    """IMAGE -> ImageReference.
+
+    Era descartada inteira. Na varredura da base, 19% dos arquivos têm
+    imagem e os três piores caem para 73,6%, 83,9% e 89,5% de cobertura por
+    causa disso — o luminotécnico da Mauro e Marcia tem 92 imagens numa
+    prancha só. Some da tela E do arquivo entregue ao cliente.
+
+    O .dxf guarda o tamanho em PIXELS e dois vetores que dizem quanto vale
+    um pixel no desenho; o tamanho em unidades é o produto dos dois. Rotação
+    não é modelada (o `ImageReference` não tem): imagem girada entra com a
+    caixa alinhada aos eixos, que é onde ela está em planta na prática.
+    """
+    try:
+        pixels = e.dxf.get("image_size", (0, 0, 0))
+        u = e.dxf.get("u_pixel", (1, 0, 0))
+        v = e.dxf.get("v_pixel", (0, 1, 0))
+        largura = abs(float(pixels[0])) * math.hypot(float(u[0]), float(u[1]))
+        altura = abs(float(pixels[1])) * math.hypot(float(v[0]), float(v[1]))
+    except Exception:
+        return None
+    if largura <= 0 or altura <= 0:
+        return None
+    try:
+        caminho = e.image_def.dxf.get("filename", "") or ""
+    except Exception:
+        caminho = ""
+
+    imagem = ImageReference(
+        layer=layer,
+        path=Path(caminho),
+        insertion_point=_point(e.dxf.get("insert", (0, 0, 0))),
+        width=largura,
+        height=altura,
+        pixel_size=(int(abs(float(pixels[0]))), int(abs(float(pixels[1])))),
+    )
+
+    # Recorte (CLIP): o .dxf dá o contorno em PIXELS a partir do canto, com
+    # meio pixel de folga; o nosso modelo quer unidades de desenho a partir
+    # do ponto de inserção.
+    try:
+        if e.dxf.get("clipping", 0) and len(e.boundary_path) > 2:
+            por_pixel_x = largura / max(float(pixels[0]), 1.0)
+            por_pixel_y = altura / max(float(pixels[1]), 1.0)
+            imagem.clip_boundary = [
+                Point((float(pt[0]) + 0.5) * por_pixel_x, (float(pt[1]) + 0.5) * por_pixel_y)
+                for pt in e.boundary_path
+            ]
+    except Exception:
+        pass
+    return imagem
+
+
 #: Códigos do 3DFACE que marcam cada aresta como invisível (group code 70).
 _ARESTA_INVISIVEL = (1, 2, 4, 8)
 
@@ -803,6 +856,9 @@ def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
 
     if dxftype == "3DFACE":
         return _face_3d(e, layer)
+
+    if dxftype == "IMAGE":
+        return _imagem(e, layer)
 
     # CIRCLE/ARC/LWPOLYLINE/ELLIPSE/INSERT passam por dxf_fills porque podem
     # estar definidos num OCS (extrusão (0,0,-1) = espelhados pelo MIRROR do
@@ -1189,6 +1245,47 @@ def _apply_color_attribs(dxfattribs: dict, entity: Entity) -> None:
         dxfattribs["color"] = aci
 
 
+def _escreve_imagem(msp, entity: ImageReference, attribs: dict) -> None:
+    """Devolve a IMAGE ao .dxf, com a IMAGEDEF que a define.
+
+    Até aqui a imagem era descartada ao gravar: o cliente recebia de volta um
+    arquivo com a planta de fundo faltando. O .dxf nunca carrega os pixels —
+    só o caminho —, então regravar é devolver a MESMA referência que veio.
+    Sem caminho não há o que referenciar, e aí não se grava nada em vez de
+    gravar uma referência quebrada.
+    """
+    # `Path("")` vira `Path(".")`, cujo texto NAO e vazio: sem tratar isso,
+    # imagem sem arquivo virava uma IMAGE apontando para o diretorio atual.
+    caminho = str(entity.path or "").strip()
+    if not caminho or caminho in (".", ".."):
+        return
+    documento = getattr(msp, "doc", None)
+    if documento is None:
+        return
+    pixels = entity.pixel_size if all(entity.pixel_size) else (1000, 1000)
+    try:
+        definicao = documento.add_image_def(filename=caminho, size_in_pixel=tuple(pixels))
+        imagem = msp.add_image(
+            definicao,
+            insert=(entity.insertion_point.x, entity.insertion_point.y),
+            size_in_units=(entity.width, entity.height),
+            dxfattribs=dict(attribs),
+        )
+    except Exception:
+        # Imagem é acabamento: não pode impedir a gravação do desenho.
+        return
+    if not entity.clip_boundary:
+        return
+    try:
+        por_pixel_x = entity.width / max(pixels[0], 1)
+        por_pixel_y = entity.height / max(pixels[1], 1)
+        imagem.set_boundary_path([
+            (p.x / por_pixel_x - 0.5, p.y / por_pixel_y - 0.5) for p in entity.clip_boundary
+        ])
+    except Exception:
+        pass
+
+
 def _apply_traco_attribs(dxfattribs: dict, entity: Entity, msp=None) -> None:
     """Tipo de linha, espessura e escala do traço no DXF gravado.
 
@@ -1435,9 +1532,7 @@ def _to_dxf_entity(
         return
 
     if isinstance(entity, ImageReference):
-        # Imagem raster não é gravada no .dxf (ver README) — silenciosamente
-        # ignorada em vez de levantar erro, pra não impedir salvar o resto
-        # do desenho.
+        _escreve_imagem(msp, entity, attribs)
         return
 
     if isinstance(entity, Text):

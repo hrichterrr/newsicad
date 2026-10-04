@@ -326,7 +326,13 @@ class BlockReference(Entity):
 @dataclass
 class ImageReference(Entity):
     """Referência a uma imagem raster (.png/.jpg) inserida no desenho
-    (comando IMAGEATTACH). Não sobrevive à gravação em .dxf — ver README."""
+    (comando IMAGEATTACH).
+
+    O .dxf guarda só o CAMINHO do arquivo, nunca os pixels — é assim no
+    AutoCAD também. O arquivo em si quase nunca vem junto com o .dwg do
+    cliente; nesse caso o canvas desenha a moldura tracejada no lugar certo
+    (é o que o AutoCAD faz) e a gravação devolve a referência intacta, para
+    que a imagem reapareça na máquina de quem tem o arquivo."""
 
     path: Path = field(default_factory=Path)
     insertion_point: Point = field(default_factory=lambda: Point(0, 0))
@@ -336,6 +342,11 @@ class ImageReference(Entity):
     #: `insertion_point` (ImageReference não tem rotação própria — ver
     #: acima). `None` = sem recorte.
     clip_boundary: list[Point] | None = None
+    #: Tamanho da imagem em PIXELS, como o .dxf declara. Guardado para
+    #: regravar a IMAGEDEF igual: sem ele, o arquivo entregue ao cliente
+    #: perderia a referência da imagem mesmo quando o .png está do lado.
+    #: (0, 0) = desconhecida (imagem inserida aqui pelo IMAGEATTACH).
+    pixel_size: tuple[int, int] = (0, 0)
 
 
 #: Códigos de justificação de MTEXT suportados pelo comando MTEXT (subconjunto
