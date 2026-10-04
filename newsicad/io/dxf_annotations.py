@@ -144,7 +144,15 @@ def texto_do_dxf(e) -> str:
 def remonta_acento(texto: str) -> str:
     """Junta os bytes que ficaram soltos na leitura (ver `texto_do_dxf`).
     Texto sem byte solto passa intacto e sem custo."""
-    if not any(0xDC80 <= ord(c) <= 0xDCFF for c in texto):
+    # A triagem é a própria codificação, não um laço caractere a caractere:
+    # byte solto é exatamente o que o UTF-8 NÃO consegue codificar, e o
+    # `encode` roda em C. Varrer `ord(c)` em cada caractere de cada texto de
+    # uma planta grande custa caro para quase nunca achar nada.
+    try:
+        texto.encode("utf-8")
+    except UnicodeEncodeError:
+        pass
+    else:
         return texto
     try:
         crus = texto.encode("utf-8", "surrogateescape")

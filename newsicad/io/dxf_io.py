@@ -729,13 +729,23 @@ def _apply_dxf_traco(entity: Entity, e) -> None:
     espessura própria, 75 % no pior caso. A perda é silenciosa: o desenho
     continua lá, só deixou de distinguir eixo de parede e projeção de corte.
     """
+    # Só ATRIBUI o que difere do padrão. Cada atribuição numa entidade passa
+    # por `Entity.__setattr__`, que carimba uma versão nova (é o que deixa o
+    # canvas saber o que mudou sem comparar tudo) — e a esmagadora maioria
+    # das entidades é ByLayer, sem espessura e sem escala própria. Atribuir
+    # os três sempre custava 3 carimbos por entidade: no perfil da Casa Pau
+    # Brasil, `__setattr__` era a função mais cara da leitura, com 2,5
+    # milhões de chamadas.
     linetype = e.dxf.get("linetype", "BYLAYER") or "BYLAYER"
-    # ByLayer guardado como "" deixa a resolução em `Document.linetype_of`
-    # com um caminho só (ver lá).
-    entity.linetype = "" if linetype.upper() == "BYLAYER" else linetype
-    entity.lineweight = int(e.dxf.get("lineweight", -1))
+    if linetype.upper() != "BYLAYER":
+        # ByLayer fica como "" (o padrão do campo), e a resolução tem um
+        # caminho só — ver `Document.linetype_of`.
+        entity.linetype = linetype
+    lineweight = int(e.dxf.get("lineweight", -1))
+    if lineweight != -1:
+        entity.lineweight = lineweight
     escala = float(e.dxf.get("ltscale", 1.0) or 1.0)
-    if escala > 0:
+    if escala > 0 and escala != 1.0:
         entity.linetype_scale = escala
 
 
