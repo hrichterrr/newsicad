@@ -501,7 +501,13 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
                  "mb": round(caminho.stat().st_size / 1024 / 1024, 2)}
     t0 = time.perf_counter()
     try:
-        with tempfile.TemporaryDirectory() as tmp:
+        # `ignore_cleanup_errors`: no Windows a pasta temporaria as vezes
+        # nao pode ser apagada na hora (antivirus ou o proprio leitor ainda
+        # com o arquivo aberto), e o erro de LIMPEZA derrubava a operacao
+        # INTEIRA depois dela ja ter dado certo — o projetista via
+        # "Acesso negado" num .dwg que abriu sem problema. O temporario e
+        # do sistema: sobrar uma pasta la e inofensivo perto disso.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             tmp = Path(tmp)
             # 1) verdade: o arquivo do cliente como DXF
             if caminho.suffix.lower() == ".dwg":

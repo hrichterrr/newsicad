@@ -94,7 +94,13 @@ def document_to_dwg(document: Document, path: str | Path) -> None:
     path = Path(path)
     headers = _headers()
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    # `ignore_cleanup_errors`: no Windows a pasta temporaria as vezes
+    # nao pode ser apagada na hora (antivirus ou o proprio leitor ainda
+    # com o arquivo aberto), e o erro de LIMPEZA derrubava a operacao
+    # INTEIRA depois dela ja ter dado certo — o projetista via
+    # "Acesso negado" num .dwg que abriu sem problema. O temporario e
+    # do sistema: sobrar uma pasta la e inofensivo perto disso.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         dxf_path = Path(tmp_dir) / "export.dxf"
         save_dxf(document, dxf_path)
 

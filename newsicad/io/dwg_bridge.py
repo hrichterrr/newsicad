@@ -354,7 +354,13 @@ def dwg_to_document(path: str | Path) -> tuple[Document, int]:
     um `SkippedCount` que soma as que o load_dxf não suporta com as que o
     próprio dwg2dxf avisou ter descartado na conversão, ex. ACAD_TABLE)."""
     tool = _tool_path("dwg2dxf")
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    # `ignore_cleanup_errors`: no Windows a pasta temporaria as vezes
+    # nao pode ser apagada na hora (antivirus ou o proprio leitor ainda
+    # com o arquivo aberto), e o erro de LIMPEZA derrubava a operacao
+    # INTEIRA depois dela ja ter dado certo — o projetista via
+    # "Acesso negado" num .dwg que abriu sem problema. O temporario e
+    # do sistema: sobrar uma pasta la e inofensivo perto disso.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
         tmp_dir = pasta_que_a_ferramenta_enxerga(Path(tmp_dir))
         dxf_path = tmp_dir / "converted.dxf"
         entrada = entrada_que_a_ferramenta_abre(Path(path), tmp_dir)
