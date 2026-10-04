@@ -182,6 +182,34 @@ def _read_text_flexible(path: Path) -> str:
         return raw.decode("latin-1")
 
 
+def linhas_do_dxf(text: str) -> list[str]:
+    """Quebra o DXF em linhas usando SÓ o fim de linha de verdade.
+
+    `str.splitlines()` quebra também em U+000B, U+000C, U+001C, U+001D,
+    U+001E, U+0085, U+2028 e U+2029 — nenhum deles separa linha num DXF, e
+    todos aparecem DENTRO de valor de texto quando o arquivo é lido como
+    latin-1. Caso real que custou caro: o texto `AFP-∅ 25 PPELO
+    ENTREFORRO` do NEWSI-CSA-02-TÉR_R07 da Casa Sanchez tem o caractere
+    "diâmetro", cujo terceiro byte em UTF-8 é 0x85 — lido como latin-1 vira
+    U+0085 (NEL), e o `splitlines()` partia o valor em dois.
+
+    O saneador então via um valor partido onde não havia, perdia o passo da
+    contagem código/valor e saía COLANDO linhas boas: nesse arquivo foram
+    208 mesclagens indevidas, produzindo tags como
+    `7hid-hidraulica-terreo$0$SIMPLEX`. O programa só não quebrava porque a
+    leitura tolerante do ezdxf ADIVINHAVA os valores ("recovered invalid
+    integer value ... as 7") — quer dizer: a gente corrompia o arquivo do
+    cliente e depois chutava o conteúdo.
+    """
+    linhas = text.replace("\r\n", "\n").split("\n")
+    # O arquivo termina com fim de linha, e `split` deixa um "" sobrando ali
+    # que o `splitlines()` não deixa — sem tirar, o saneador trataria essa
+    # linha vazia como continuação de valor e mesclaria uma vez a mais.
+    if linhas and linhas[-1] == "":
+        linhas.pop()
+    return linhas
+
+
 def sanitize_dxf_text(text: str) -> tuple[str, int]:
     """Corrige uma corrupção específica e recorrente do `dwg2dxf` em textos
     MTEXT longos com muita formatação embutida (`\\fFONTE|b0|i0|c0|p0;...`):
@@ -200,7 +228,7 @@ def sanitize_dxf_text(text: str) -> tuple[str, int]:
     ela só pode ser a continuação quebrada do valor anterior — colamos de
     volta (sem separador, já que a quebra caiu no meio de uma palavra) e
     tentamos de novo a próxima linha como código."""
-    lines = text.splitlines()
+    lines = linhas_do_dxf(text)
     out: list[str] = []
     merged = 0
     i, n = 0, len(lines)
@@ -279,7 +307,7 @@ def repara_seqend(text: str) -> tuple[str, int]:
     Repara inserindo o SEQEND que falta, na camada da entidade que abriu a
     sequência (é o que o formato pede), antes da entidade que a interrompeu.
     """
-    linhas = text.splitlines()
+    linhas = linhas_do_dxf(text)
     #: {índice da linha onde inserir: camada do pai}
     remendos: dict[int, str] = {}
     aberta: str | None = None       # camada da sequência aberta, None = nenhuma
