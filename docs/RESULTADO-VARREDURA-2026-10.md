@@ -9,7 +9,7 @@ Duas perguntas, duas medições independentes:
 | | ferramenta | cobre |
 |---|---|---|
 | o desenho chega inteiro? | `tools/auditoria_projeto.py` | 193 arquivos (os 25 maiores estouraram o limite de tempo **da auditoria**) |
-| está lento? | `tools/tempo_de_abertura.py` | 199 arquivos, incluindo os de 71 MB |
+| está lento? | `tools/tempo_de_abertura.py` | **os 218**, incluindo os de 79 MB, zero falhas |
 
 ---
 
@@ -57,13 +57,14 @@ sozinho tende a ser um pouco mais rápido.
 | 2–5 MB | 48 | 20,5 s | 44 s | 29 s | 116 s |
 | 5–10 MB | 42 | 41,0 s | 59 s | 83 s | 175 s |
 | 10–20 MB | 26 | 71,8 s | 140 s | 75 s | 319 s |
-| 20–40 MB | 15 | 144,6 s | 265 s | 338 s | 647 s |
-| 40–100 MB | 12 | **390 s** | 397 s | **1.048 s** | 1.097 s |
+| 20–40 MB | 15 | 144,6 s | 264 s | 338 s | 647 s |
+| 40–100 MB | 31 | **390 s** | 449 s | **1.066 s** | 1.124 s |
 
-- mediana geral de abertura: **26,5 s**; 30% abrem em menos de 10 s; **22%
-  passam de 1 minuto**
-- **gravar custa 2,2× o que custa abrir** (somando a base: 54 min
-  convertendo, 144 min lendo, **428 min gravando**)
+- **os 218 arquivos abrem**, nenhuma falha
+- mediana geral de abertura: **32,1 s**; 27% abrem em menos de 10 s; **29%
+  passam de 1 minuto**; o pior leva 7,5 min
+- **gravar custa 2,4× o que custa abrir** (somando a base: 88 min
+  convertendo, 227 min lendo, **744 min gravando**)
 
 ### Onde está o custo — não é o número de entidades
 
@@ -73,6 +74,31 @@ entidades no model space — e 1.800 a 1.880 definições de bloco**. Abrem em
 
 > O gargalo dos projetos grandes é a **tabela de blocos**, não o desenho.
 > É onde uma otimização teria efeito real, e é a próxima frente natural.
+
+---
+
+## 2b. A leva de consertos custou velocidade? (rotina da Casa Pau Brasil)
+
+A/B na mesma máquina, duas a três rodadas de cada lado, com o disco já
+aquecido — porque medir "depois" com o disco frio e "antes" com ele quente
+inverteria o resultado.
+
+| Casa Pau Brasil R01, 7,9 MB, 42.978 entidades | antes da leva | com a leva | depois de otimizar |
+|---|---|---|---|
+| abrir (converter + ler) | 39,1 s | 46,4 s | **42,4 s** |
+| montar a cena | 6,0 s | 7,2 s | **6,7 s** |
+| mover o mouse | 9,6 ms | 10,5 ms | **10,3 ms** |
+| arrastar a tela | 18,8 ms | 19,1 ms | **17,9 ms** |
+
+A leva custou 19% na abertura. O perfil mostrou a causa sem deixar dúvida:
+`Entity.__setattr__` era a função mais cara da leitura, com **2,5 milhões de
+chamadas** — cada atribuição carimba a entidade com uma versão nova, e a
+leitura do traço passou a atribuir três campos em TODA entidade, sendo que a
+esmagadora maioria é ByLayer sem espessura própria. Atribuindo só o que
+difere do padrão (e trocando a triagem de acento por `encode`, que roda em
+C), sobra **+8% na abertura e +11% na montagem da cena**.
+
+**A interação — que é o que faz o programa parecer lento — não mudou.**
 
 ---
 
