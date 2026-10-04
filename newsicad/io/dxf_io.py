@@ -194,11 +194,13 @@ def _paleta_aci() -> tuple[tuple[int, tuple[int, int, int]], ...]:
 @functools.lru_cache(maxsize=4096)
 def _hex_to_aci(hex_color: str | None) -> int | None:
     """Cor hex (#RRGGBB) -> ACI (AutoCAD Color Index, 1-255) mais próxima na
-    paleta fixa de 255 cores. `DXF_VERSION` aqui é R2000, que não suporta
-    true color (grupo 420, só a partir do R2004) — ACI é o único jeito de
-    gravar cor de camada/entidade de verdade nesse formato. Sem nenhum
-    mapeamento de cor (o estado antes deste conserto), cor de camada e cor
-    por entidade eram descartadas silenciosamente ao salvar.
+    paleta fixa de 255 cores. O `DXF_VERSION` de hoje é R2018 e grava a cor
+    exata no true color (grupo 420) — o ACI vai junto para quem só lê a
+    paleta antiga, e é por isso que esta conversão continua existindo. (O
+    comentário aqui dizia "R2000, que não suporta true color"; ficou para
+    trás quando a versão de gravação subiu.) Sem nenhum mapeamento de cor
+    (o estado antes deste conserto), cor de camada e cor por entidade eram
+    descartadas silenciosamente ao salvar.
 
     Memorizada: um desenho usa um punhado de cores distintas, mas a função
     era chamada uma vez por entidade gravada. No perfil da gravação do
