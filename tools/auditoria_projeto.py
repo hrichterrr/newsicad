@@ -274,6 +274,40 @@ def _entidades_do_espaco(doc, espaco: str):
         return []
 
 
+#: Quantos lados um círculo inteiro ganha ao ser achatado. 400 dá ~44 lados,
+#: muito acima do que uma grade de 256 células consegue distinguir.
+_LADOS_DE_CIRCULO = 400.0
+
+
+def _tolerancia(e) -> float | None:
+    """Distância de achatamento PROPORCIONAL ao tamanho da entidade.
+
+    A do ezdxf é absoluta (0,01 unidade de desenho), o que num arco de raio
+    grande vira um número absurdo de pontos: o `2412_AP_102_DEM` da Ricardo e
+    Gabriela tem 1.287 arcos na camada "Painéis cortina" com MÉDIA de 30.625
+    pontos cada — oito deles com quase um milhão — e o arquivo inteiro gerava
+    39,4 milhões de pontos. Era isso que fazia cada processo da varredura
+    chegar a 7 GB de RAM e 95 s só para achatar um arquivo de 0,57 MB (e não
+    o programa: o NewSIcad abre esse mesmo arquivo em 5,2 s).
+
+    Precisão fina aqui não compra nada: a comparação é numa grade de 256x256
+    sobre a prancha, e os dois lados são achatados pela MESMA regra, então a
+    medida continua maçã com maçã. `None` deixa o padrão do ezdxf para os
+    tipos sem tamanho óbvio.
+    """
+    tipo = e.dxftype()
+    try:
+        if tipo in ("ARC", "CIRCLE"):
+            return max(float(e.dxf.radius) / _LADOS_DE_CIRCULO, 1e-9)
+        if tipo == "ELLIPSE":
+            eixo = e.dxf.major_axis
+            raio = math.hypot(float(eixo[0]), float(eixo[1]))
+            return max(raio / _LADOS_DE_CIRCULO, 1e-9)
+    except Exception:
+        pass
+    return None
+
+
 def segmentos(caminho: Path, espaco: str = "Model") -> tuple[list[tuple[str, list[tuple[float, float]]]], tuple]:
     """[(camada, [(x, y), ...]), ...] + extensão (minx, miny, maxx, maxy).
 
@@ -294,7 +328,7 @@ def segmentos(caminho: Path, espaco: str = "Model") -> tuple[list[tuple[str, lis
             # em toda etiqueta.
             continue
         try:
-            primitivas = list(dis.to_primitives([entidade]))
+            primitivas = list(dis.to_primitives([entidade], _tolerancia(entidade)))
         except Exception:
             continue
         for prim in primitivas:
