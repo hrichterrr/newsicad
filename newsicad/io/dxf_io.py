@@ -474,6 +474,20 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
             continue
         entity = _from_dxf_entity(dxf_entity, units=document.units)
         if entity is None:
+            if dxf_entity.dxftype() == "INSERT":
+                # INSERT que não aponta para bloco nenhum (nome vazio) é
+                # arquivo malformado e não desenha geometria — mas o ATTRIB
+                # pendurado nele TEM conteúdo e posição, e some junto. Caso
+                # real: 42 etiquetas de corte ('S" 34 e 35', 'S"36') num
+                # arquivo da Patrícia e Fábio, 72 na base inteira.
+                #
+                # Continua contando como entidade perdida: a GEOMETRIA do
+                # símbolo some de verdade, e esconder isso do aviso seria
+                # dizer que nada se perdeu quando se perdeu.
+                for texto in attrib_texts(dxf_entity, dxf_entity.dxf.layer, _apply_dxf_color):
+                    document.add_entity(texto)
+                skipped_by_type["INSERT"] += 1
+                continue
             if dxf_entity.dxftype() == "ATTDEF":
                 # ATTDEF DENTRO de um bloco é só o "molde" do atributo — o
                 # valor preenchido vem como ATTRIB no INSERT (lido logo
@@ -542,6 +556,14 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
                 continue
             entity = _from_dxf_entity(dxf_entity, units=document.units)
             if entity is None:
+                if dxf_entity.dxftype() == "INSERT":
+                    # Ver o loop do modelspace: o bloco não existe, o texto
+                    # do atributo existe — e a geometria perdida continua
+                    # contando no aviso.
+                    for texto in attrib_texts(dxf_entity, dxf_entity.dxf.layer, _apply_dxf_color):
+                        _store_in_layout(texto)
+                    skipped_by_type["INSERT"] += 1
+                    continue
                 if dxf_entity.dxftype() == "ATTDEF":
                     # Solto na prancha = desenho (ver o loop do modelspace).
                     solto = attdef_solto_como_texto(dxf_entity)
