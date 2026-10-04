@@ -1469,7 +1469,11 @@ def _write_attribs(insert, ref: BlockReference) -> None:
             # exporia na prancha um dado que o arquivo escondia de
             # propósito. Segue ATTRIB, com as quebras viradas em espaço —
             # que num campo que nunca é desenhado não representam nada.
-            conteudo = " ".join(conteudo.splitlines())
+            #
+            # Quebra é só "\n": o `splitlines()` trocaria também U+0085 e
+            # companhia por espaço, alterando em silêncio um valor que o
+            # cliente escreveu (ver `linhas_do_dxf` em dwg_bridge.py).
+            conteudo = " ".join(conteudo.split("\n"))
         ponto = (texto.insertion_point.x, texto.insertion_point.y)
         dxfattribs = {
             "layer": texto.layer,
