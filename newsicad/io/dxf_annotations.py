@@ -1,15 +1,16 @@
 """Importação das anotações "prontas" do DXF — TEXT/ATTRIB com alinhamento,
 MTEXT com rotação/largura, MULTILEADER, LEADER, DIMENSION de outros
-programas e ACAD_TABLE — pro modelo do NewSIcad (newsicad/core/).
+programas, ACAD_TABLE e MLINE — pro modelo do NewSIcad (newsicad/core/).
 
 Módulo à parte de `newsicad/io/dxf_io.py` de propósito (WP-B 2026-09):
 `dxf_io.py` chama daqui em poucas linhas e continua dono do mapeamento
 entidade-a-entidade (`_from_dxf_entity`), da cor (`_apply_dxf_color`) e da
 gravação; aqui fica só o que é anotação.
 
-Princípio: MULTILEADER, LEADER, DIMENSION e ACAD_TABLE são entidades cuja
-aparência o próprio AutoCAD já calculou e gravou no arquivo (bloco anônimo
-`*D…`/`*T…` da cota/tabela, "context data" do leader). Em vez de tentar
+Princípio: MULTILEADER, LEADER, DIMENSION, ACAD_TABLE e MLINE são entidades
+cuja aparência o próprio AutoCAD já calculou e gravou no arquivo (bloco
+anônimo `*D…`/`*T…` da cota/tabela, "context data" do leader, vértices da
+multilinha já com escala e justificação aplicadas). Em vez de tentar
 reconstruir cada uma com o nosso DIMSTYLE fixo (o que dava cotas com texto
 20x maior que a planta em desenhos em metros, leaders ignorados e tabelas
 "explodidas"), usamos `ezdxf.virtual_entities()` — que materializa essa
@@ -22,6 +23,17 @@ selecionável/movível/apagável, como no AutoCAD, sem espalhar dezenas de
 linhas e textos soltos no desenho. A anotação importada é ESTÁTICA (não
 re-mede ao mover os pontos — ver README); só uma `Dimension` gravada pelo
 próprio NewSIcad (XDATA `NEWSICAD`) volta como cota nativa/editável.
+
+Exceção: a MLINE (a parede de linhas paralelas do arquiteto) entra como
+entidades SOLTAS, sem bloco. O bloco existe para não espalhar dezenas de
+peças de uma cota ou de uma tabela; a multilinha tem duas, três ou quatro
+linhas, e quem projeta em cima da planta precisa do OSNAP nelas — o ponto
+de snap de uma `BlockReference` é só o ponto de inserção, então embrulhada
+num bloco a parede deixava de oferecer canto, meio e interseção (medido:
+nenhum ponto de snap no canto da parede). Solta, ela é o que o EXPLODE do
+AutoCAD daria, é assim que o arquivo entregue ao cliente a leva, e é a mesma
+representação do comando MLINE do próprio programa (linhas paralelas soltas,
+ver `draw_commands.mline_command`).
 """
 
 from __future__ import annotations
@@ -33,7 +45,7 @@ from typing import Callable, Iterable, Iterator
 from ezdxf.enums import TextEntityAlignment
 
 from newsicad.core.document import Document
-from newsicad.core.entities import AttributeDef, BlockReference, Entity, Hatch, Point, Text
+from newsicad.core.entities import BYBLOCK, AttributeDef, BlockReference, Entity, Hatch, Point, Text
 
 # Altura abaixo da qual um TEXT/ATTRIB/MTEXT é descartado na leitura: não é
 # visível em nenhuma escala e só polui seleção/zoom extents (o canvas
@@ -87,6 +99,10 @@ ANNOTATION_BLOCK_PREFIX = {
     "DIMENSION": "*D_",
     "ACAD_TABLE": "*T_",
 }
+
+#: Tipos importados como entidades SOLTAS, no lugar da própria entidade, em vez
+#: de um bloco anônimo — ver a "Exceção" na docstring do módulo.
+_IMPORTADAS_SOLTAS = ("MLINE",)
 
 # Blocos de seta (`_CLOSEDFILLED`, `_DOT`, `_OBLIQUE`...) e blocos anônimos
 # não entram em `Document.block_definitions` (ver o filtro de nomes em
@@ -302,24 +318,29 @@ class AnnotationImporter:
         convert_entity: Callable[[object], Entity | None],
         apply_color: Callable[[Entity, object], None],
         native_appid: str,
+        apply_stroke: Callable[[Entity, object], None] | None = None,
     ) -> None:
         self.document = document
         self.convert_entity = convert_entity
         self.apply_color = apply_color
         self.native_appid = native_appid
+        #: Tipo de linha / espessura / escala do traço (`_apply_dxf_traco` de
+        #: dxf_io). Só a MLINE usa — ver `_convert_parts`.
+        self.apply_stroke = apply_stroke
         self.dimension_text_heights: list[float] = []
         self._fallback_counter = 0
 
     # ------------------------------------------------------------------ #
     def import_entity(self, e) -> list[Entity] | None:
         """Entidades a adicionar no lugar de `e` (a `BlockReference` do
-        bloco anônimo), ou None quando `e` não é anotação deste módulo — ou
-        é uma DIMENSION do próprio NewSIcad (XDATA) / uma anotação sem
-        geometria utilizável: nesses casos `dxf_io` segue o caminho normal
-        (`_from_dxf_entity`: Dimension nativa, ou contagem em "skipped")."""
+        bloco anônimo — ou, na MLINE, as próprias linhas soltas), ou None
+        quando `e` não é anotação deste módulo — ou é uma DIMENSION do
+        próprio NewSIcad (XDATA) / uma anotação sem geometria utilizável:
+        nesses casos `dxf_io` segue o caminho normal (`_from_dxf_entity`:
+        Dimension nativa, ou contagem em "skipped")."""
         dxftype = e.dxftype()
         prefix = ANNOTATION_BLOCK_PREFIX.get(dxftype)
-        if prefix is None:
+        if prefix is None and dxftype not in _IMPORTADAS_SOLTAS:
             return None
         if dxftype == "DIMENSION" and has_newsicad_xdata(e, self.native_appid):
             return None
@@ -330,6 +351,8 @@ class AnnotationImporter:
         parts = self._convert_parts(e, virtual)
         if not parts:
             return None
+        if prefix is None:
+            return parts
         if dxftype == "DIMENSION":
             self.dimension_text_heights.extend(
                 part.height for part in parts if isinstance(part, Text) and part.height > TEXT_HEIGHT_MIN
@@ -398,8 +421,25 @@ class AnnotationImporter:
             if not v.dxf.get("layer", "0") or v.dxf.get("layer", "0") == "0":
                 entity.layer = layer
             self.apply_color(entity, v)
+            if entity.color == BYBLOCK and parent.dxftype() == "MLINE":
+                # Os dois elementos do estilo de parede dos arquivos reais têm
+                # cor 0 ("por bloco"), e para o elemento de uma multilinha isso
+                # quer dizer "a cor da PRÓPRIA multilinha" — não a do bloco
+                # onde ela mora. Solta, a peça herdaria do INSERT de fora (o
+                # bloco PAREDES do Marianne, o bloco da base do H&M), então
+                # volta a "por camada" e cai na cor da MLINE logo abaixo,
+                # se ela tiver uma.
+                entity.color = None
             if entity.color is None:
                 self.apply_color(entity, parent)
+            if self.apply_stroke is not None and parent.dxftype() == "MLINE":
+                # Cada linha da multilinha tem o tipo de linha do ELEMENTO do
+                # estilo (a parede com eixo tracejado, por exemplo), e a
+                # espessura e a escala do traço vêm da própria MLINE — o
+                # ezdxf copia os três pra cada LINE que materializa. Só vale
+                # para a MLINE: nas demais anotações o traço das peças nunca
+                # foi lido e esta mudança não mexe nisso.
+                self.apply_stroke(entity, v)
             out.append(entity)
         return out
 

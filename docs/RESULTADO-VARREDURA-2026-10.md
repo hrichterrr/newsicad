@@ -39,10 +39,10 @@ dois lados do arquivo), e todos os 6 abrem no programa em ~6,5 min.
 | REGION | 14 | 92 | região ACIS, mesma família do 3DSOLID |
 | INSERT | 13 | 74 | bloco de nome vazio (a etiqueta já é recuperada) |
 | VIEWPORT | 17 | 17 | janela de prancha, não é desenho |
-| MLINE | 5 | 18 | multilinha (parede de linha dupla) |
 
-O mais espalhado é o **OLE2FRAME** (32 projetos); o mais incômodo em
-potencial é a **MLINE**, que é parede.
+O mais espalhado é o **OLE2FRAME** (32 projetos). A **MLINE** (multilinha,
+a parede de linha dupla; 5 arquivos, 18 entidades) saiu desta lista em
+04/10/2026 — ver "Desenho que sumia".
 
 ---
 
@@ -123,6 +123,7 @@ Treze defeitos, todos achados medindo e nenhum relatado pela equipe.
 | **Tipo de linha e espessura** | 6 de 7 projetos da amostra; Casa Sapucaia: **9.179 de 9.179** tracejados preservados |
 | **ATTDEF solto** | **413 etiquetas de circuito** do Fernando Labes |
 | 3DFACE do arquivo base | 72 no `BASE_XREF_LEE` do Joe Lee |
+| MLINE (multilinha) | 18 em 5 arquivos de 2 clientes: **0 -> 18 lidas**; só 6 estão em bloco que o desenho insere (os 3 arquivos do H&M, 2 cada); as 12 do Marianne moram no bloco `PAREDES`, que nenhum INSERT usa |
 | Etiqueta de INSERT órfão | 19 etiquetas de corte da Patrícia e Fábio |
 | Acento partido no meio dos bytes | nota de projeto do Joe Lee |
 
@@ -156,7 +157,6 @@ idêntico ao original, e o ezdxf lê as 76.017 entidades sem recuperação.
 - **Gravação dos projetos grandes** — 17,5 min num arquivo de 71 MB, com o
   custo na tabela de blocos. É a maior frente restante.
 - **OLE2FRAME** em 32 projetos; dava para desenhar ao menos a moldura.
-- **MLINE** (parede de linha dupla) em 5 projetos.
 - **REGION / 3DSOLID** — ACIS, fora do escopo de um editor 2D
   (ver [ESCOPO.md](ESCOPO.md)).
 - **ACAD_TABLE** continua sumindo, com os blocos `*T…` prontos no arquivo.
