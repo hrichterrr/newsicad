@@ -53,6 +53,7 @@ import tempfile
 from pathlib import Path
 
 from newsicad.core.document import Document
+from newsicad.io.dwg_tabelas import TabelaPerdida, acha_tabelas_no_dwg, blocos_das_tabelas
 from newsicad.io.dxf_io import SkippedCount, load_dxf
 
 
@@ -102,6 +103,9 @@ def _tool_path(name: str) -> str:
 # "Warning: Unhandled Class entity 579 ACAD_TABLE (0x401) 47946/0" — a
 # tabela de um projeto (JOAO E BRENDA) virou só um bloco "*T228" órfão,
 # sem a entidade ACAD_TABLE que o insere (achado acad-table, WP-B 2026-09).
+# A posição que faltava está no .dwg e é recuperada por `recupera_tabelas`
+# (ver dwg_tabelas.py): o que sobra neste aviso é só a tabela que ela não
+# conseguiu recuperar.
 _UNHANDLED_ENTITY_RE = re.compile(r"Unhandled Class entity\s+\d+\s+([A-Za-z0-9_]+)")
 
 
@@ -114,6 +118,49 @@ def count_unhandled_entities(stderr: str) -> dict[str, int]:
         key = f"{match.group(1)} (descartada pelo dwg2dxf)"
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+#: Chave de `count_unhandled_entities` para a tabela que o dwg2dxf descartou.
+_TABELA_DESCARTADA = "ACAD_TABLE (descartada pelo dwg2dxf)"
+
+#: Só os .dwg até este tamanho pagam a segunda volta, a com rastreio, que lê a
+#: posição das tabelas (ver dwg_tabelas.py). Num .dwg de 3,6 MB ela leva 6,0 s
+#: contra 2,5 s da conversão normal (nos 6 arquivos da base que a usam, a
+#: abertura ficou 4 a 10 s mais longa). Em arquivo grande o custo explode: o
+#: .dwg de 71 MB da Loja Casual levou 416 s no rastreio (máquina parada),
+#: contra 48 s da conversão normal — 8,7 vezes. Acima do limite a tabela
+#: continua sendo descartada e contada, como sempre foi: esperar minutos a mais
+#: para recuperá-la seria pior que o aviso.
+_TABELAS_MAX_BYTES = 25 * 1024 * 1024
+_TABELAS_LIMITE_S = 150.0
+
+
+def recupera_tabelas(
+    ferramenta: str, entrada: Path, dxf_path: Path, pasta_de_trabalho: Path, esperadas: int
+) -> list[TabelaPerdida]:
+    """Posição e bloco de cada ACAD_TABLE que a conversão avisou ter
+    descartado (`esperadas` = quantas), prontas para `load_dxf` inserir.
+
+    Devolve lista vazia — e a tabela segue contada como perdida — se o
+    arquivo é grande demais, se a segunda volta falha ou se nada foi lido.
+    Recuperar a tabela é um bônus: nada aqui pode impedir o arquivo de
+    abrir."""
+    if esperadas <= 0:
+        return []
+    try:
+        if entrada.stat().st_size > _TABELAS_MAX_BYTES:
+            return []
+        tabelas = acha_tabelas_no_dwg(
+            ferramenta, entrada, pasta_de_trabalho / "rastro.dxf", esperadas, _TABELAS_LIMITE_S
+        )
+        if not tabelas:
+            return []
+        blocos = blocos_das_tabelas(dxf_path.read_bytes())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return []
+    for tabela in tabelas:
+        tabela.bloco = blocos.get(tabela.handle, "")
+    return tabelas
 
 
 def pasta_que_a_ferramenta_enxerga(pasta: Path) -> Path:
@@ -368,16 +415,31 @@ def dwg_to_document(path: str | Path) -> tuple[Document, int]:
         if not dxf_path.exists():
             raise DwgBridgeError(f"dwg2dxf não gerou o arquivo DXF esperado para '{path}'.")
         _sanitize_dxf_file(dxf_path)
+        unhandled = count_unhandled_entities(stderr)
+        tabelas = recupera_tabelas(
+            tool, entrada, dxf_path, tmp_dir, unhandled.get(_TABELA_DESCARTADA, 0)
+        )
         try:
-            document, skipped = load_dxf(dxf_path)
+            document, skipped = load_dxf(dxf_path, tabelas)
         except Exception as exc:
             raise DwgBridgeError(
                 f"O .dwg foi convertido, mas o DXF resultante não pôde ser lido: {exc}"
             ) from exc
-    unhandled = count_unhandled_entities(stderr)
     if not unhandled:
         return document, skipped
+    notes = list(getattr(skipped, "notes", []))
+    # Tabela que voltou ao desenho deixa de ser perda: sai da conta de
+    # "descartadas" e ganha um aviso do que ela é agora.
+    recuperadas = sum(1 for t in tabelas if t.inserida)
+    if recuperadas:
+        unhandled[_TABELA_DESCARTADA] -= recuperadas
+        if unhandled[_TABELA_DESCARTADA] <= 0:
+            del unhandled[_TABELA_DESCARTADA]
+        notes.append(
+            f"Aviso: {recuperadas} tabela(s) (ACAD_TABLE) foram recuperadas do .dwg como "
+            "desenho fixo — aparecem no lugar certo, mas não são editáveis como tabela."
+        )
     by_type = dict(getattr(skipped, "by_type", {}))
     for key, count in unhandled.items():
         by_type[key] = by_type.get(key, 0) + count
-    return document, SkippedCount(int(skipped) + sum(unhandled.values()), by_type, getattr(skipped, "notes", []))
+    return document, SkippedCount(int(skipped) + sum(unhandled.values()), by_type, notes)

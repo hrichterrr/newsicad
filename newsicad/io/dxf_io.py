@@ -246,8 +246,13 @@ def _is_invisible(dxf_entity) -> bool:
     return bool(dxf_entity.dxf.get("invisible", 0))
 
 
-def load_dxf(path: str | Path) -> tuple[Document, int]:
-    """Lê um .dxf e retorna (Document, quantidade de entidades ignoradas)."""
+def load_dxf(path: str | Path, tabelas_perdidas=()) -> tuple[Document, int]:
+    """Lê um .dxf e retorna (Document, quantidade de entidades ignoradas).
+
+    `tabelas_perdidas`: as ACAD_TABLE que o `dwg2dxf` descartou e cuja
+    posição o chamador leu do .dwg (ver newsicad/io/dwg_tabelas.py). Só o
+    caminho .dwg tem o que passar aqui; um .dxf vindo do AutoCAD traz a
+    entidade ACAD_TABLE de verdade e entra por `AnnotationImporter`."""
     try:
         dxf_doc = ezdxf.readfile(str(path))
     except OSError as exc:
@@ -275,12 +280,12 @@ def load_dxf(path: str | Path) -> tuple[Document, int]:
     bulk = entities_module.bulk_load()
     bulk.__enter__()
     try:
-        return _load_dxf_body(dxf_doc, document)
+        return _load_dxf_body(dxf_doc, document, tabelas_perdidas)
     finally:
         bulk.__exit__(None, None, None)
 
 
-def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
+def _load_dxf_body(dxf_doc, document: Document, tabelas_perdidas=()) -> tuple[Document, int]:
     for layer in dxf_doc.layers:
         # Cor negativa no DXF = camada desligada (convenção do formato); o
         # valor absoluto é a cor ACI de verdade. Sem isso, cor/visibilidade/
@@ -609,6 +614,8 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         if layout_entities:
             document.layouts[layout.name] = layout_entities
 
+    _insere_tabelas_perdidas(dxf_doc, document, tabelas_perdidas)
+
     # Tamanho de texto/seta das cotas nativas proporcional ao arquivo (ver
     # read_dim_style) — antes era fixo em 2.0/0.6 unidades de desenho, o que
     # numa planta em metros dava cotas maiores que a própria planta.
@@ -648,6 +655,68 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         notes.append(orfas)
     skipped = SkippedCount(sum(skipped_by_type.values()), dict(skipped_by_type), notes)
     return document, skipped
+
+
+def _espaco_da_tabela(dxf_doc, dono: str):
+    """Layout do ezdxf que contém a tabela, ou None se não achar.
+
+    `dono` é o handle do BLOCK_RECORD do espaço, ou uma das duas palavras
+    que o .dwg usa quando a entidade nem guarda o dono (`entmode` 2 e 1: a
+    tabela da JOÃO E BRENDA é assim — modelspace sem handle nenhum)."""
+    if dono == "MODELO":
+        return dxf_doc.modelspace()
+    if dono == "PRANCHA":
+        # `*Paper_Space` sem número é a prancha "padrão" do arquivo.
+        for layout in dxf_doc.layouts:
+            if layout.name != "Model" and layout.block_record_name.lower() == "*paper_space":
+                return layout
+        return None
+    try:
+        return dxf_doc.layouts.get_layout_by_key(dono)
+    except (ezdxf.DXFKeyError, KeyError):
+        return None
+
+
+def _insere_tabelas_perdidas(dxf_doc, document: Document, tabelas) -> None:
+    """Insere, na posição do .dwg, o bloco `*T…` de cada ACAD_TABLE que o
+    `dwg2dxf` descartou.
+
+    Antes disto a tabela sumia da tela e do arquivo devolvido, e o bloco
+    `*T…` que o conversor escreve (as linhas, os fundos e os textos já
+    prontos) ficava no arquivo sem ninguém para inseri-lo. O bloco é local
+    ao canto superior esquerdo da tabela; a posição vem da entidade que o
+    conversor jogou fora (ver dwg_tabelas.py), e aqui só vira uma
+    `BlockReference` — estática, como toda anotação importada: desenha no
+    lugar certo, mas não é mais uma tabela editável.
+
+    Só entra o que está provado: posição lida, bloco ligado pelo BLKREFS,
+    espaço e definição existentes e a tabela sem escala nem rotação (o único
+    caso medido). Todo o resto continua perdido — e contado como perdido —
+    em vez de aparecer num lugar chutado, que seria pior que não aparecer:
+    uma tabela de 146 x 187 por cima da planta."""
+    for tabela in tabelas:
+        if tabela.invisivel or not tabela.plana or not tabela.bloco:
+            continue
+        if tabela.bloco not in document.block_definitions:
+            continue
+        espaco = _espaco_da_tabela(dxf_doc, tabela.dono)
+        if espaco is None:
+            continue
+        registro_da_camada = dxf_doc.entitydb.get(tabela.camada)
+        camada = "0"
+        if registro_da_camada is not None and registro_da_camada.dxftype() == "LAYER":
+            camada = registro_da_camada.dxf.name or "0"
+        ref = BlockReference(
+            layer=camada,
+            block_name=tabela.bloco,
+            insertion_point=Point(tabela.x, tabela.y),
+        )
+        document.add_layer(camada)
+        if espaco.name == "Model":
+            document.add_entity(ref)
+        else:
+            document.layouts.setdefault(espaco.name, {})[ref.id] = ref
+        tabela.inserida = True
 
 
 #: Blocos que o AutoCAD usa para as PRÓPRIAS tripas do arquivo e que não são

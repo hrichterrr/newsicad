@@ -159,7 +159,10 @@ idêntico ao original, e o ezdxf lê as 76.017 entidades sem recuperação.
 - **MLINE** (parede de linha dupla) em 5 projetos.
 - **REGION / 3DSOLID** — ACIS, fora do escopo de um editor 2D
   (ver [ESCOPO.md](ESCOPO.md)).
-- **ACAD_TABLE** continua sumindo, com os blocos `*T…` prontos no arquivo.
+- **ACAD_TABLE**: recuperada nos .dwg de até 25 MB (a posição vem do log de
+  rastreio do `dwg2dxf`; ver `newsicad/io/dwg_tabelas.py`). Continua sumindo
+  nos 19 arquivos da Loja Casual (71–79 MB; 76 das 85 tabelas da base), onde o
+  rastreio levou 416 s contra 48 s da conversão normal.
 - Texto de cota sobrescrito; EXPLODE não explode bloco; "arquivo modificado"
   fica ligado para sempre depois de mexer em camada.
 

@@ -42,7 +42,11 @@ from typing import Any
 # gravado VISÍVEL, expondo na prancha um dado que o arquivo escondia.
 # "9": Document ganhou `annotation_source` (01/10/2026) — sem ele, uma
 # entrada antiga regrava a cota do cliente como linha solta.
-CACHE_VERSION = "9"
+# "10": o .dwg com ACAD_TABLE passou a abrir COM a tabela (posição lida do
+# .dwg, 04/10/2026). O esquema não mudou, mas o conteúdo guardado sim: sem o
+# bump, quem já tinha aberto um dos 6 arquivos pequenos da base com tabela
+# continuaria vendo o desenho sem ela, vindo do cache, até o arquivo mudar.
+CACHE_VERSION = "10"
 MAX_ENTRIES = 20
 
 
