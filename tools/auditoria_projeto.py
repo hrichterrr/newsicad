@@ -86,7 +86,12 @@ _MAX_ANINHAMENTO = 6
 
 #: Tipos que viram geometria ao serem desenhados — a mesma lista que o
 #: importador expande (ver newsicad/io/dxf_annotations.py).
-_EXPANDIR = {"INSERT", "DIMENSION", "LEADER", "MULTILEADER", "ACAD_TABLE"}
+#:
+#: MLINE entrou em 04/10/2026. Sem ela aqui o `make_primitive` do ezdxf devolve
+#: uma primitiva VAZIA para a multilinha: uma parede desenhada com MLINE nunca
+#: entrava na referência, então o programa podia descartá-la e a cobertura
+#: seguia em 100%, sem alerta nenhum.
+_EXPANDIR = {"INSERT", "DIMENSION", "LEADER", "MULTILEADER", "ACAD_TABLE", "MLINE"}
 
 #: Texto fica FORA da comparação geométrica e é comparado à parte, por
 #: posição e conteúdo. Motivo: o ezdxf achata um texto como a CAIXA

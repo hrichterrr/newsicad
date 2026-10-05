@@ -378,13 +378,15 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
     skipped_by_type: dict[str, int] = collections.Counter()
 
     # MULTILEADER/LEADER/DIMENSION externa/ACAD_TABLE viram bloco anônimo +
-    # BlockReference (ver newsicad/io/dxf_annotations.py); `import_entity`
-    # devolve None pra tudo que não é anotação — aí segue `_from_dxf_entity`.
+    # BlockReference, e MLINE vira as linhas soltas (ver
+    # newsicad/io/dxf_annotations.py); `import_entity` devolve None pra tudo
+    # que não é anotação — aí segue `_from_dxf_entity`.
     importer = AnnotationImporter(
         document,
         lambda dxf_entity: _from_dxf_entity(dxf_entity, units=document.units),
         _apply_dxf_color,
         NEWSICAD_APPID,
+        apply_stroke=_apply_dxf_traco,
     )
 
     # Definições de bloco precisam existir ANTES de processar o modelspace,
@@ -1095,9 +1097,21 @@ def nada_a_desenhar(e) -> bool:
     Vale também para SOLID/TRACE/HATCH de ÁREA ZERO — ver
     `_preenchimento_sem_area`. Achado da varredura de 03/10/2026: 4.579
     SOLID e 1.229 HATCH da base caíam no aviso, e nenhum deles desenha nada.
+
+    E para MLINE sem nenhuma linha a desenhar (um vértice só, ou vértices
+    coincidentes) — ver o ramo da MLINE logo abaixo.
     """
     if e.dxftype() in ("SOLID", "TRACE", "HATCH"):
         return _preenchimento_sem_area(e)
+    if e.dxftype() == "MLINE":
+        # Multilinha de um vértice só, ou de vértices coincidentes: o ezdxf
+        # materializa ZERO linhas e o AutoCAD também não desenha nada. É
+        # diferente de a materialização levantar exceção (estilo quebrado),
+        # que é multilinha NÃO lida e continua contando como perda.
+        try:
+            return not list(e.virtual_entities())
+        except Exception:
+            return False
     if e.dxftype() not in ("TEXT", "MTEXT", "ATTRIB", "ATTDEF"):
         return False
     conteudo = texto_do_dxf(e)
