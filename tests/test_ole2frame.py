@@ -206,6 +206,12 @@ def test_le_o_ole_dentro_de_bloco_como_o_carimbo_do_h_e_m():
 # gravação
 # --------------------------------------------------------------------------- #
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_devolve_o_objeto_no_arquivo_entregue_com_os_mesmos_bytes():
     """O compromisso com o cliente: ele reabre o que a gente entregou e o
     objeto continua lá, byte a byte — e o arquivo é válido."""
@@ -227,6 +233,12 @@ def test_devolve_o_objeto_no_arquivo_entregue_com_os_mesmos_bytes():
     assert not list(entregue.audit().errors)
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_linhas_de_conteudo_cabem_no_limite_do_formato():
     """310 com o objeto inteiro numa linha só (13 MB num único valor) é DXF
     inválido; o AutoCAD grava 127 bytes por linha."""
@@ -241,6 +253,12 @@ def test_linhas_de_conteudo_cabem_no_limite_do_formato():
     assert comprimentos and max(comprimentos) <= 254
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_moldura_movida_leva_o_preambulo_junto():
     """O ODA obedece ao preâmbulo do conteúdo, não aos grupos 10/11: movida só
     em 10/11, a moldura voltava ao lugar antigo (medido passando o .dxf
@@ -269,6 +287,12 @@ def test_moldura_movida_leva_o_preambulo_junto():
     assert len(gravado) == len(objeto)
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_quadro_sem_moldura_movida_regrava_os_bytes_intactos():
     """Sem mexer, nem um byte do preâmbulo muda (a conta dos cantos não pode
     introduzir ruído de ponto flutuante)."""
@@ -282,6 +306,12 @@ def test_quadro_sem_moldura_movida_regrava_os_bytes_intactos():
     assert ole.binary_data() == objeto
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_ole_em_prancha_e_em_bloco_volta_para_o_mesmo_lugar():
     objeto = _conteudo_ole(tamanho=8_000)
     doc = ezdxf.new("R2010")
@@ -329,6 +359,12 @@ def test_desfazer_nao_fotografa_o_objeto():
     assert len(foto) < 20_000, f"a foto do desfazer tem {len(foto)} bytes — o objeto vazou para a entidade"
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_cache_de_abertura_preserva_o_objeto():
     """O cache guarda o Document em pickle; uma abertura vinda do cache tem de
     gravar o objeto igual à que veio do arquivo."""
@@ -374,6 +410,12 @@ def test_canvas_desenha_a_moldura_e_ela_e_selecionavel():
     assert window.canvas._hit_test(Point(X0 - 500, Y0 - 500)) is None
 
 
+@pytest.mark.skip(
+    reason="gravação do binário OLE desligada por decisão de tamanho em "
+           "04/10/2026 — o arquivo entregue ia de 1,0 MB para 78,3 MB. "
+           "O teste fica aqui, dormente, para voltar junto se a decisão "
+           "mudar; ver `_escreve_ole` em dxf_io.py."
+)
 def test_abrir_e_salvar_pela_janela_devolve_o_objeto():
     """O caminho de verdade do projetista: File > Open e File > Save As. A
     janela copia o Document lido para a aba — se `ole_dados` não for copiado
@@ -402,3 +444,42 @@ def test_abrir_e_salvar_pela_janela_devolve_o_objeto():
         entregue = ezdxf.readfile(destino)
 
     assert [o.binary_data() for o in _ole_do_arquivo(entregue)] == [objeto, objeto]
+
+
+def test_o_arquivo_entregue_nao_engorda_com_o_binario_do_ole():
+    """A decisão de 04/10/2026, virada em teste.
+
+    O objeto OLE vem como binário dentro do .dxf, que o formato guarda em
+    hexadecimal — preservá-lo levava o arquivo entregue do Escritório H&M de
+    1,0 MB para 78,3 MB (um Excel de 13 MB dentro do carimbo) e o do Joe Lee
+    de 3,3 MB para 20,3 MB. A MOLDURA continua sendo lida e aparece na tela
+    no lugar certo; o conteúdo não volta ao arquivo, exatamente como era
+    antes deste trabalho.
+
+    Se alguém religar a gravação sem rever a decisão, este teste cai.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from newsicad.core.document import Document
+    from newsicad.core.entities import OleFrame, Point
+    from newsicad.io.dxf_io import save_dxf
+
+    documento = Document()
+    documento.add_entity(
+        OleFrame(insertion_point=Point(0, 0), width=10, height=5, ole_key="k")
+    )
+    documento.ole_dados["k"] = type(
+        "Fake", (), {"dados": b"X" * 2_000_000, "tipo": 2, "modo": 0}
+    )()
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        caminho = Path(tmp) / "entregue.dxf"
+        save_dxf(documento, caminho)
+        tamanho = caminho.stat().st_size
+        texto = caminho.read_text(encoding="utf-8", errors="replace")
+
+    assert "OLE2FRAME" not in texto, "o binário do OLE não pode voltar ao arquivo"
+    assert tamanho < 200_000, (
+        f"o arquivo entregue ficou com {tamanho} bytes — os 2 MB de binário vazaram"
+    )

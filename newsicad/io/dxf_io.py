@@ -1611,7 +1611,29 @@ def _escreve_ole(layout, entity: OleFrame, attribs: dict, document: Document | N
     vazia no arquivo do cliente seria pior que nenhuma.
 
     Os grupos seguem o que o ODA File Converter grava, e o grupo 3 fica de
-    fora: o `dwg2dxf` põe nele o literal "OLE", que não é o nome do objeto."""
+    fora: o `dwg2dxf` põe nele o literal "OLE", que não é o nome do objeto.
+
+    DESLIGADO POR DECISÃO DO HAMILTON (04/10/2026), e a decisão foi tomada
+    com o número na mesa: o objeto OLE vem como binário dentro do .dxf, que
+    o formato guarda em hexadecimal — e o arquivo ENTREGUE ao cliente
+    explodia. Medido na base real:
+
+        Escritório H&M FLE04      1,0 MB  ->  78,3 MB   (um Excel de 13 MB
+                                                         dentro do carimbo)
+        Joe Lee 4.0_ELÉTRICA      3,3 MB  ->  20,3 MB
+
+    78x o tamanho do arquivo para preservar um anexo que o projetista não
+    edita aqui não paga. A MOLDURA continua sendo lida e aparece na tela no
+    lugar certo (que é o ganho real: o projetista vê que existe um objeto
+    ali); o que não volta ao arquivo é o conteúdo, exatamente como era antes
+    deste trabalho — não há regressão.
+
+    Para religar, basta apagar o `return` abaixo: todo o resto está pronto e
+    coberto por teste, inclusive o acerto do retângulo no preâmbulo quando a
+    moldura é movida. Se um dia valer, o caminho natural é um teto de
+    tamanho (preservar o que for pequeno, declarar perda no que for grande).
+    """
+    return
     objeto = document.ole_dados.get(entity.ole_key) if document is not None else None
     if objeto is None or not objeto.dados:
         return
