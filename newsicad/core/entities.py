@@ -349,6 +349,52 @@ class ImageReference(Entity):
     pixel_size: tuple[int, int] = (0, 0)
 
 
+@dataclass(frozen=True)
+class OleObjeto:
+    """O que o .dxf guarda de um objeto OLE incorporado (OLE2FRAME) e que o
+    NewSIcad não interpreta — só devolve ao gravar.
+
+    `dados` é o arquivo composto do Windows (a planilha do Excel, a imagem
+    colada de outro programa), até 13 MB cada. Mora em `Document.ole_dados`,
+    FORA da entidade: o desfazer fotografa todas as entidades a cada comando,
+    e carregar megabytes dentro delas multiplicaria a memória pela
+    profundidade da pilha. Os campos pequenos são os grupos escalares do
+    DXF, guardados como vieram."""
+
+    dados: bytes = field(default=b"", repr=False)
+    #: Grupo 70 — versão do OLE.
+    versao: int = 2
+    #: Grupo 71 — 1 = vinculado, 2 = incorporado, 3 = estático. `None` = o
+    #: arquivo de origem não trazia (o ODA não grava).
+    tipo: int | None = None
+    #: Grupo 72 — descritor de espaço (0 = model, 1 = paper).
+    espaco: int = 1
+    #: Grupo 73 — qualidade de saída (impressão) do objeto.
+    qualidade: int = 2
+
+
+@dataclass
+class OleFrame(ImageReference):
+    """OLE2FRAME: objeto OLE incorporado — planilha ou imagem colada de outro
+    programa. É a MOLDURA no lugar e no tamanho certos, nada mais.
+
+    Renderizar o conteúdo (um arquivo composto binário do Windows) está fora
+    de escopo; o AutoCAD também mostra só a moldura quando o objeto não está
+    disponível. Herda de `ImageReference` de propósito: o retângulo
+    tracejado, a seleção, o MOVE/SCALE/MIRROR e o hit-test são exatamente os
+    da imagem sem arquivo, e não precisam ser reescritos. O que muda é a
+    GRAVAÇÃO — ver `dxf_io._escreve_ole`."""
+
+    #: Chave em `Document.ole_dados` (SHA-1 do conteúdo + campos). Vários
+    #: quadros com o mesmo objeto — 20 num arquivo do Joe Lee — dividem UMA
+    #: cópia dos bytes.
+    ole_key: str = ""
+    #: Transitório: o bruto que a LEITURA acabou de ler, até
+    #: `dxf_io._recolhe_ole` mandá-lo para `Document.ole_dados` e zerar. Fora
+    #: do repr e do == (as impressões digitais do canvas usam o repr).
+    bruto: OleObjeto | None = field(default=None, repr=False, compare=False)
+
+
 #: Códigos de justificação de MTEXT suportados pelo comando MTEXT (subconjunto
 #: dos 9 attachment points do MTEXT de verdade do AutoCAD — mesmos códigos
 #: usados em `newsicad/io/dxf_io.py` para o group code 71/`attachment_point`).

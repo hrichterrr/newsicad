@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from newsicad.core.entities import AttributeDef, BlockReference, Dimension, Entity
+from newsicad.core.entities import AttributeDef, BlockReference, Dimension, Entity, OleObjeto
 
 DEFAULT_LAYER_COLOR = "#FFFFFF"
 
@@ -156,6 +156,13 @@ class Document:
         # editável — 37 cotas num arquivo do Town Houses, 46 num do
         # Pegasus (varredura da base, 01/10/2026).
         self.annotation_source: dict[str, dict] = {}
+        # Objetos OLE incorporados (OLE2FRAME): chave = `OleFrame.ole_key`,
+        # valor = o conteúdo binário e os campos que o DXF pede de volta.
+        # Ficam FORA das entidades de propósito (ver OleObjeto): o desfazer
+        # fotografa as entidades a cada comando, e a leitura divide a mesma
+        # cópia entre os quadros idênticos. Não entra no undo — o conteúdo
+        # nunca muda, só o quadro que o referencia.
+        self.ole_dados: dict[str, OleObjeto] = {}
         # Revisão GLOBAL das definições de bloco: bumpada sempre que qualquer
         # definição muda (define_block — BEDIT/BLOCK/XREF reload — ou PURGE).
         # Consumidores que fazem cache de algo derivado do CONTEÚDO das
@@ -319,6 +326,7 @@ class Document:
         self.block_definitions.clear()
         self.block_attdefs.clear()
         self.annotation_source.clear()
+        self.ole_dados.clear()
 
     def define_block(self, name: str, entities: list[Entity]) -> None:
         self.block_definitions[name] = entities

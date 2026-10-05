@@ -42,7 +42,10 @@ from typing import Any
 # gravado VISÍVEL, expondo na prancha um dado que o arquivo escondia.
 # "9": Document ganhou `annotation_source` (01/10/2026) — sem ele, uma
 # entrada antiga regrava a cota do cliente como linha solta.
-CACHE_VERSION = "9"
+# "10": Document ganhou `ole_dados` e nasceu o `OleFrame` (04/10/2026) — uma
+# entrada antiga volta sem o campo e sem o quadro do objeto OLE, e o cliente
+# receberia o arquivo de volta sem as planilhas do carimbo dele.
+CACHE_VERSION = "10"
 MAX_ENTRIES = 20
 
 
