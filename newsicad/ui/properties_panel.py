@@ -40,6 +40,7 @@ from newsicad.core.entities import (
     Entity,
     Hatch,
     ImageReference,
+    OleFrame,
     Line,
     LWPolyline,
     PointEntity,
@@ -145,6 +146,8 @@ def _geometry_fields(entity: Entity) -> list[tuple[str, str]]:
             ("Bloco", entity.block_name), *scale_rows,
             ("Rotação", f"{math.degrees(entity.rotation):.1f}°"),
         ]
+    if isinstance(entity, OleFrame):
+        return [("Objeto", "OLE (só a moldura)"), ("Largura", _fmt(entity.width)), ("Altura", _fmt(entity.height))]
     if isinstance(entity, ImageReference):
         return [("Arquivo", entity.path.name), ("Largura", _fmt(entity.width)), ("Altura", _fmt(entity.height))]
     return []

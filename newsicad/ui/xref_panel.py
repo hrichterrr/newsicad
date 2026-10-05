@@ -98,6 +98,7 @@ class XrefPanel(QDialog):
             return
 
         self.main_window.document.define_block(ref.block_name, loaded.all_entities())
+        self.main_window.document.ole_dados.update(loaded.ole_dados)
         self.main_window.canvas.refresh_entities()
         self.main_window.canvas.viewport().update()
         QMessageBox.information(self, "Reload", f'Referência "{ref.block_name}" recarregada.')

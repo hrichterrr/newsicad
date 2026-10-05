@@ -1141,6 +1141,9 @@ class MainWindow(QMainWindow):
         safe_stem = re.sub(r"[^A-Za-z0-9_-]", "_", path.stem)
         block_name = f"XREF_{safe_stem}"
         self.document.define_block(block_name, loaded.all_entities())
+        # O objeto OLE de um quadro da xref mora no Document dela: sem trazê-lo,
+        # a moldura aparece mas some do arquivo entregue.
+        self.document.ole_dados.update(loaded.ole_dados)
         if skipped > 0:
             self.interpreter.log.append(_skipped_warning(skipped, "da xref"))
 
@@ -1411,6 +1414,7 @@ class MainWindow(QMainWindow):
             document.define_block(name, entities)
         document.block_attdefs = dict(loaded.block_attdefs)
         document.annotation_source = dict(loaded.annotation_source)
+        document.ole_dados = dict(getattr(loaded, "ole_dados", {}))
         for entity in loaded.all_entities():
             document.add_entity(entity)
         # Configurações do DESENHO lidas do arquivo. Sem isto elas eram lidas

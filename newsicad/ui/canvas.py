@@ -56,6 +56,7 @@ from newsicad.core.entities import (
     Entity,
     Hatch,
     ImageReference,
+    OleFrame,
     Line,
     LWPolyline,
     Point,
@@ -1879,7 +1880,9 @@ class CanvasView(QGraphicsView):
     def _create_image_item(self, entity: ImageReference) -> QGraphicsItem:
         """ImageReference: insertion_point é o canto inferior-esquerdo (em
         coordenadas CAD, Y para cima) do retângulo width x height."""
-        pixmap = QPixmap(str(entity.path))
+        # OleFrame não tem arquivo: é sempre a moldura, e `QPixmap(".")` iria
+        # procurar uma imagem na pasta atual a cada vez que o item é criado.
+        pixmap = QPixmap() if isinstance(entity, OleFrame) else QPixmap(str(entity.path))
         top_left_cad = Point(entity.insertion_point.x, entity.insertion_point.y + entity.height)
         pos = cad_to_scene(top_left_cad)
 

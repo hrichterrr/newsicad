@@ -6,14 +6,18 @@ from __future__ import annotations
 
 import collections
 import functools
+import hashlib
 import math
 import re
+import struct
 from pathlib import Path
 
 import ezdxf
 import ezdxf.colors
 import ezdxf.recover
 from ezdxf.enums import TextEntityAlignment
+from ezdxf.lldxf.tags import Tags
+from ezdxf.lldxf.types import DXFBinaryTag, DXFTag, DXFVertex
 
 import newsicad.core.entities as entities_module
 from newsicad.core.document import (
@@ -51,6 +55,8 @@ from newsicad.core.entities import (
     ImageReference,
     Line,
     LWPolyline,
+    OleFrame,
+    OleObjeto,
     Point,
     PointEntity,
     Ray,
@@ -642,6 +648,8 @@ def _load_dxf_body(dxf_doc, document: Document) -> tuple[Document, int]:
         for nome in pendentes:
             _importar_definicao(dxf_doc.blocks.get(nome))
 
+    _recolhe_ole(document)
+
     notes = _file_notes(dxf_doc)
     orfas = _orphan_reference_note(document)
     if orfas:
@@ -852,6 +860,149 @@ def _imagem(e, layer: str) -> Entity | None:
     return imagem
 
 
+#: Retângulo FIXO que o `dwg2dxf` (LibreDWG) grava nos grupos 10/11 de TODO
+#: OLE2FRAME, seja qual for o objeto: o mesmo par de cantos, com 14 casas
+#: decimais iguais, em 9 arquivos de 8 projetos — blobs de 9 KB a 13 MB, todos
+#: com o "mesmo" retângulo de 5,1 x 3,4. Não é geometria, é valor padrão.
+_CANTOS_FIXOS_DWG2DXF = (
+    (30.13602472538446, -18.98882829402869),
+    (35.27188116753285, -22.39344715050545),
+)
+
+#: Os 4 cantos do retângulo (12 doubles) começam no byte 2 do conteúdo binário
+#: do OLE2FRAME; o arquivo composto do Windows (assinatura D0CF11E0A1B11AE1)
+#: vem logo depois, no byte 128.
+_OLE_CANTOS_OFFSET = 2
+_OLE_ASSINATURA = bytes.fromhex("d0cf11e0a1b11ae1")
+
+
+def _retangulo_do_preambulo_ole(dados: bytes) -> tuple[float, float, float, float] | None:
+    """(xmin, ymin, xmax, ymax) lido do PREÂMBULO do conteúdo do OLE2FRAME.
+
+    O AutoCAD não guarda o retângulo do objeto OLE em campo próprio: ele vem
+    nos primeiros 98 bytes do conteúdo binário — dois bytes de cabeçalho e
+    os quatro cantos (esquerda-cima, direita-cima, direita-baixo,
+    esquerda-baixo) como x, y, z em double. Foi o jeito de saber o lugar
+    certo, porque os grupos 10/11 que o `dwg2dxf` grava são um valor fixo
+    (`_CANTOS_FIXOS_DWG2DXF`). Conferido contra o ODA File Converter, que
+    decodifica o .dwg por conta própria: 51 de 51 OLE2FRAME de 9 arquivos
+    reais coincidem com os grupos 10/11 do ODA, até a última casa decimal.
+
+    Só confia no que tem a forma medida: doubles finitos, z = 0 e o arquivo
+    composto do Windows logo depois. Qualquer outra coisa devolve None.
+    """
+    if len(dados) < _OLE_CANTOS_OFFSET + 96:
+        return None
+    if _OLE_ASSINATURA not in dados[:256]:
+        return None
+    valores = struct.unpack_from("<12d", dados, _OLE_CANTOS_OFFSET)
+    if not all(math.isfinite(v) and abs(v) < 1e12 for v in valores):
+        return None
+    if any(valores[i] != 0.0 for i in (2, 5, 8, 11)):
+        return None
+    xs = (valores[0], valores[3], valores[6], valores[9])
+    ys = (valores[1], valores[4], valores[7], valores[10])
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _ole2frame(e, layer: str) -> Entity | None:
+    """OLE2FRAME -> OleFrame: a MOLDURA do objeto OLE, no lugar e no tamanho.
+
+    É o tipo não lido mais espalhado da base: 143 entidades em 32 arquivos
+    (11 pastas de projeto). Objeto incorporado — planilha do Excel, imagem
+    colada de outro programa — e some da tela E do arquivo entregue ao
+    cliente. Renderizar o conteúdo está fora de escopo (o AutoCAD também só
+    mostra a moldura quando o objeto não está disponível); o conteúdo é
+    guardado para voltar ao arquivo na gravação (`_escreve_ole`).
+
+    O retângulo vem do preâmbulo do conteúdo (`_retangulo_do_preambulo_ole`),
+    não dos grupos 10/11: os do `dwg2dxf` são sempre o mesmo valor. Só se o
+    preâmbulo não for legível é que valem os grupos 10/11 — num .dxf do
+    AutoCAD ou do ODA eles estão certos — e o valor fixo do `dwg2dxf` é
+    recusado em vez de virar uma moldura mentirosa no canto errado.
+    """
+    tags = getattr(e, "acdb_ole2frame", None)
+    if tags is None:
+        return None
+    try:
+        dados = e.binary_data()
+    except Exception:
+        dados = b""
+    retangulo = _retangulo_do_preambulo_ole(dados)
+    if retangulo is None:
+        c10 = tags.get_first_value(10, None)
+        c11 = tags.get_first_value(11, None)
+        if c10 is None or c11 is None:
+            return None
+        try:
+            cantos = ((float(c10[0]), float(c10[1])), (float(c11[0]), float(c11[1])))
+        except Exception:
+            return None
+        if all(
+            abs(a - b) < 1e-9
+            for canto, fixo in zip(cantos, _CANTOS_FIXOS_DWG2DXF)
+            for a, b in zip(canto, fixo)
+        ):
+            return None
+        retangulo = (
+            min(cantos[0][0], cantos[1][0]), min(cantos[0][1], cantos[1][1]),
+            max(cantos[0][0], cantos[1][0]), max(cantos[0][1], cantos[1][1]),
+        )
+    xmin, ymin, xmax, ymax = retangulo
+    if xmax - xmin <= 0 or ymax - ymin <= 0:
+        return None
+
+    def escalar(grupo: int, padrao):
+        try:
+            valor = tags.get_first_value(grupo, None)
+            return padrao if valor is None else int(valor)
+        except Exception:
+            return padrao
+
+    quadro = OleFrame(
+        layer=layer,
+        insertion_point=Point(xmin, ymin),
+        width=xmax - xmin,
+        height=ymax - ymin,
+    )
+    if dados:
+        quadro.bruto = OleObjeto(
+            dados=dados,
+            versao=escalar(70, 2),
+            tipo=escalar(71, None),
+            espaco=escalar(72, 1),
+            qualidade=escalar(73, 2),
+        )
+    return quadro
+
+
+def _recolhe_ole(document: Document) -> None:
+    """Passa o conteúdo binário de cada OleFrame para `Document.ole_dados`.
+
+    A leitura (`_ole2frame`) não conhece o documento, então devolve o quadro
+    com o conteúdo pendurado em `bruto`. Aqui ele vai para o dicionário do
+    documento, chaveado pelo SHA-1, e o quadro fica só com a chave: os 20
+    OLE2FRAME do arquivo do Joe Lee são o MESMO objeto de 411 KB e passam a
+    ocupar uma cópia. Percorre o desenho, as pranchas e as definições de
+    bloco — o carimbo do H&M, com as três planilhas, está dentro de um bloco."""
+    def passa(entidades) -> None:
+        for entidade in entidades:
+            if not isinstance(entidade, OleFrame) or entidade.bruto is None:
+                continue
+            objeto = entidade.bruto
+            ficha = f"{objeto.versao}|{objeto.tipo}|{objeto.espaco}|{objeto.qualidade}".encode()
+            chave = hashlib.sha1(objeto.dados + ficha).hexdigest()
+            document.ole_dados.setdefault(chave, objeto)
+            entidade.ole_key = chave
+            entidade.bruto = None
+
+    passa(document.entities.values())
+    for entidades in document.layouts.values():
+        passa(entidades.values())
+    for entidades in document.block_definitions.values():
+        passa(entidades)
+
+
 #: Códigos do 3DFACE que marcam cada aresta como invisível (group code 70).
 _ARESTA_INVISIVEL = (1, 2, 4, 8)
 
@@ -931,6 +1082,9 @@ def _from_dxf_entity(e, units: str = "mm") -> Entity | None:
 
     if dxftype == "IMAGE":
         return _imagem(e, layer)
+
+    if dxftype == "OLE2FRAME":
+        return _ole2frame(e, layer)
 
     # CIRCLE/ARC/LWPOLYLINE/ELLIPSE/INSERT passam por dxf_fills porque podem
     # estar definidos num OCS (extrusão (0,0,-1) = espelhados pelo MIRROR do
@@ -1396,6 +1550,82 @@ def _escreve_imagem(msp, entity: ImageReference, attribs: dict) -> None:
         pass
 
 
+#: Quantos bytes cada linha 310 leva — o que o AutoCAD grava: 127 bytes viram
+#: 254 caracteres hexadecimais, abaixo do limite de linha do formato.
+_OLE_BYTES_POR_LINHA = 127
+
+
+def _dados_ole_com_retangulo(dados: bytes, retangulo: tuple[float, float, float, float]) -> bytes:
+    """O conteúdo do OLE com o preâmbulo acertado para o retângulo ATUAL.
+
+    O lugar do objeto mora em dois sítios — os grupos 10/11 e o preâmbulo do
+    conteúdo (ver `_retangulo_do_preambulo_ole`). Se o projetista move ou
+    escala a moldura no NewSIcad e só os grupos 10/11 acompanham, o arquivo
+    entregue diz duas coisas diferentes e quem manda no AutoCAD é um chute.
+    Sem mudança, devolve os bytes originais intactos; só reescreve um
+    preâmbulo na forma canônica medida (esquerda-cima, direita-cima,
+    direita-baixo, esquerda-baixo)."""
+    atual = _retangulo_do_preambulo_ole(dados)
+    if atual is None or all(
+        math.isclose(a, b, rel_tol=1e-12, abs_tol=1e-9) for a, b in zip(atual, retangulo)
+    ):
+        return dados
+    v = struct.unpack_from("<12d", dados, _OLE_CANTOS_OFFSET)
+    canonico = (
+        v[0] == v[9] and v[3] == v[6] and v[1] == v[4] and v[7] == v[10]
+        and v[0] < v[3] and v[1] > v[7]
+    )
+    if not canonico:
+        return dados
+    x0, y0, x1, y1 = retangulo
+    novo = bytearray(dados)
+    struct.pack_into(
+        "<12d", novo, _OLE_CANTOS_OFFSET,
+        x0, y1, 0.0, x1, y1, 0.0, x1, y0, 0.0, x0, y0, 0.0,
+    )
+    return bytes(novo)
+
+
+def _escreve_ole(layout, entity: OleFrame, attribs: dict, document: Document | None) -> None:
+    """Devolve o OLE2FRAME ao .dxf, com o objeto dentro.
+
+    Até aqui o objeto era descartado ao gravar: o cliente recebia de volta o
+    carimbo sem as planilhas e a prancha sem a imagem colada. Aqui o NewSIcad
+    devolve os MESMOS bytes que leu — não interpreta nem recodifica nada —,
+    com o retângulo atual da moldura. Sem o conteúdo (quadro colado de outro
+    desenho, onde `ole_dados` não veio junto) não se grava nada: uma moldura
+    vazia no arquivo do cliente seria pior que nenhuma.
+
+    Os grupos seguem o que o ODA File Converter grava, e o grupo 3 fica de
+    fora: o `dwg2dxf` põe nele o literal "OLE", que não é o nome do objeto."""
+    objeto = document.ole_dados.get(entity.ole_key) if document is not None else None
+    if objeto is None or not objeto.dados:
+        return
+    x0, y0 = entity.insertion_point.x, entity.insertion_point.y
+    x1, y1 = x0 + entity.width, y0 + entity.height
+    dados = _dados_ole_com_retangulo(objeto.dados, (x0, y0, x1, y1))
+    try:
+        quadro = layout.new_entity("OLE2FRAME", dxfattribs=dict(attribs))
+        marcas = [
+            DXFTag(100, "AcDbOle2Frame"),
+            DXFTag(70, objeto.versao),
+            DXFVertex(10, (x0, y1, 0.0)),
+            DXFVertex(11, (x1, y0, 0.0)),
+        ]
+        if objeto.tipo is not None:
+            marcas.append(DXFTag(71, objeto.tipo))
+        marcas += [DXFTag(72, objeto.espaco), DXFTag(73, objeto.qualidade), DXFTag(90, len(dados))]
+        marcas += [
+            DXFBinaryTag(310, dados[i:i + _OLE_BYTES_POR_LINHA])
+            for i in range(0, len(dados), _OLE_BYTES_POR_LINHA)
+        ]
+        marcas.append(DXFTag(1, "OLE"))
+        quadro.acdb_ole2frame = Tags(marcas)
+    except Exception:
+        # O objeto é acabamento: não pode impedir a gravação do desenho.
+        return
+
+
 def _apply_traco_attribs(dxfattribs: dict, entity: Entity, msp=None) -> None:
     """Tipo de linha, espessura e escala do traço no DXF gravado.
 
@@ -1643,6 +1873,11 @@ def _to_dxf_entity(
         )
         if entity.attributes:
             _write_attribs(insert, entity)
+        return
+
+    # OleFrame é uma ImageReference: o teste dele TEM de vir antes.
+    if isinstance(entity, OleFrame):
+        _escreve_ole(msp, entity, attribs, document)
         return
 
     if isinstance(entity, ImageReference):
