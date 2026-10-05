@@ -116,6 +116,13 @@ def _invisivel(e) -> bool:
         return False
 
 
+#: dxftype -> quantas vezes o ezdxf falhou ao expandir. Zerado por espaco
+#: medido; vira alerta no registro do arquivo (ver `_visiveis`).
+_NAO_EXPANDIRAM: collections.Counter = collections.Counter()
+#: (arquivo, espaco) -> o que nao expandiu naquele espaco.
+_FALHAS_DE_EXPANSAO: dict[tuple[str, str], dict] = {}
+
+
 def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
     """(entidade, camada efetiva) do que o AutoCAD de fato desenha.
 
@@ -155,6 +162,16 @@ def _visiveis(entidades, profundidade: int = 0, camada_pai: str = ""):
             try:
                 filhos = list(e.virtual_entities())
             except Exception:
+                # NAO engolir em silencio. Quando o ezdxf nao consegue
+                # expandir um INSERT, tudo que esta dentro dele some da
+                # MEDICAO — e se o INSERT for o da base do projeto inteiro,
+                # um modelspace inteiro passa a ser medido como vazio sem
+                # ninguem notar. Caso real achado em 04/10/2026: nos tres
+                # arquivos 6644-FLE do Escritorio H&M o Model e UM INSERT da
+                # base com 4.220 entidades, e o `virtual_entities` quebra com
+                # ZeroDivisionError em 430 MULTILEADER. A auditoria media
+                # esses Model como vazios e nao dizia nada.
+                _NAO_EXPANDIRAM[e.dxftype()] += 1
                 continue
             yield from _visiveis(filhos, profundidade + 1, camada)
             continue
@@ -174,7 +191,9 @@ def achatado(caminho: Path, espaco: str = "Model") -> list:
     chave = (str(caminho), espaco)
     pronto = _ACHATADO.get(chave)
     if pronto is None:
+        _NAO_EXPANDIRAM.clear()
         pronto = list(_visiveis(_entidades_do_espaco(abre(caminho), espaco)))
+        _FALHAS_DE_EXPANSAO[chave] = dict(_NAO_EXPANDIRAM)
         if len(_ACHATADO) >= 4:   # Model + prancha, dos dois lados
             _ACHATADO.pop(next(iter(_ACHATADO)))
         _ACHATADO[chave] = pronto
@@ -594,6 +613,17 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
             return reg
 
         reg["espacos"] = por_espaco
+        # O que o ezdxf não conseguiu expandir some da MEDIÇÃO, não do
+        # desenho — e isso precisa ficar visível, não engolido. Nos três
+        # arquivos 6644-FLE do Escritório H&M o Model inteiro é UM INSERT da
+        # base, e a auditoria media esse Model como vazio sem dizer nada.
+        nao_expandiu: collections.Counter = collections.Counter()
+        for (arquivo, _espaco), falhas in _FALHAS_DE_EXPANSAO.items():
+            if arquivo == str(ref_dxf):
+                nao_expandiu.update(falhas)
+        if nao_expandiu:
+            reg["nao_expandiram"] = dict(nao_expandiu)
+
         pior = min(por_espaco, key=lambda x: x["cobertura"])
         reg["cobertura"] = pior["cobertura"]
         reg["espaco_pior"] = pior["espaco"]
@@ -610,6 +640,12 @@ def audita(caminho: Path, pasta_mapas: Path | None) -> dict:
         reg["degradacao_de_tipo"] = deg
         reg["pranchas_perdidas"] = pranchas_perdidas
         alertas = []
+        if reg.get("nao_expandiram"):
+            quantos = sum(reg["nao_expandiram"].values())
+            alertas.append(
+                f"MEDICAO INCOMPLETA: {quantos} entidade(s) que o ezdxf nao expandiu "
+                f"({reg['nao_expandiram']}) — o que esta dentro delas nao foi medido"
+            )
         if pranchas_perdidas:
             alertas.append(f"PRANCHA PERDIDA AO GRAVAR: {pranchas_perdidas}")
         txt = reg["textos"]
